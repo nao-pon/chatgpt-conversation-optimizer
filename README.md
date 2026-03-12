@@ -1,5 +1,8 @@
 # Conversation Optimizer for ChatGPT
 
+![Chrome Extension](https://img.shields.io/badge/chrome-extension-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+
 Improve performance in long ChatGPT conversations by optimizing off-screen messages.
 
 This browser extension reduces rendering load in large ChatGPT threads, helping keep scrolling and interaction smooth even when conversations contain many messages, code blocks, or images.
