@@ -64,6 +64,8 @@ This extension:
 * does **not** use external servers
 * runs entirely inside the browser
 
+See [Privacy Policy](./PRIVACY.md)
+
 ---
 
 ## License
