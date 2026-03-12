@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <rect x="0" y="0" width="128" height="128" rx="26" fill="#1f1f28"/>
+  
+  <!-- chat bubble -->
+  <path d="M28 36
+           Q28 24 40 24
+           L88 24
+           Q100 24 100 36
+           L100 70
+           Q100 82 88 82
+           L54 82
+           L36 96
+           L40 82
+           Q28 82 28 70
+           Z"
+        fill="#2f2f3a"/>
+
+  <!-- lightning -->
+  <path d="M70 38
+           L52 64
+           L64 64
+           L58 88
+           L82 56
+           L68 56
+           Z"
+        fill="#f5b942"/>
+</svg>

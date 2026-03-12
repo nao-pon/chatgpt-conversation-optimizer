@@ -1,0 +1,21 @@
+{
+  "extName": { "message": "Conversation Optimizer for ChatGPT" },
+  "optimizer": { "message": "オプティマイザー" },
+  "off": { "message": "オフ" },
+  "weak": { "message": "弱" },
+  "medium": { "message": "中" },
+  "strong": { "message": "強" },
+  "autoOn": { "message": "オート: オン" },
+  "autoOff": { "message": "オート: オフ" },
+  "intensity": { "message": "強度" },
+  "autoArrow": { "message": "オート → $MODE$",
+    "placeholders": { "mode": { "content": "$1" } }
+  },
+  "countsLine": {
+    "message": "メッセージ: $COUNT$ / 最適化中: $OPTIMIZED$",
+    "placeholders": {
+      "count": { "content": "$1" },
+      "optimized": { "content": "$2" }
+    }
+  }
+}
