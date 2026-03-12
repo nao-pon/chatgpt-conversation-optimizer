@@ -12,5 +12,8 @@
   "optimized": { "message": "Optimized" },
   "autoArrow": { "message": "Auto → $MODE$",
     "placeholders": { "mode": { "content": "$1" } }
-  }
+  },
+  "debugOn": { "message": "Debug: On" },
+  "debugOff": { "message": "Debug: Off" },
+  "selector": { "message": "Selector" }
 }

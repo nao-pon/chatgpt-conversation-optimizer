@@ -15,6 +15,7 @@
     mode: 'auto',
     panelCollapsed: true,
     autoEnabled: true,
+    debug: false,
   };
 
   let settings = { ...DEFAULT_SETTINGS };
@@ -23,11 +24,19 @@
   let listRoot = null;
   let statusEl = null;
   let countEl = null;
+  let debugEl = null;
   let modeButtons = new Map();
   let autoToggle = null;
+  let debugToggle = null;
   let optimizeScheduled = false;
   let toggleEl = null;
   let titleEl = null;
+
+  let contentObserver = null;
+  let retargetObserver = null;
+  let observedTarget = null;
+  let lastSelectorUsed = 'none';
+  let lastMutationOptimize = 0;
 
   function t(key, substitutions) {
     try {
@@ -37,9 +46,25 @@
     }
   }
 
+  function scheduleOptimizeFromMutation() {
+    const now = performance.now();
+    if (now - lastMutationOptimize < 120) return;
+    lastMutationOptimize = now;
+    scheduleOptimize();
+  }
+
+  function debugLog(...args) {
+    if (!settings.debug) return;
+    console.log('[Conversation Optimizer]', ...args);
+  }
+
   function getConversationNodes() {
     const main = document.querySelector('main');
-    if (!main) return [];
+    if (!main) {
+      lastSelectorUsed = 'main:not-found';
+      debugLog('main not found');
+      return [];
+    }
 
     const selectors = [
       'main article',
@@ -49,11 +74,18 @@
     ];
 
     for (const selector of selectors) {
-      const nodes = Array.from(main.querySelectorAll(selector)).filter(isUsableMessageNode);
-      if (nodes.length >= 4) return dedupeNested(nodes);
+      const raw = Array.from(main.querySelectorAll(selector));
+      const nodes = raw.filter(isUsableMessageNode);
+      debugLog('selector', selector, 'raw', raw.length, 'usable', nodes.length);
+      if (nodes.length >= 4) {
+        lastSelectorUsed = selector;
+        return dedupeNested(nodes);
+      }
     }
 
     const blocks = Array.from(main.children).filter(isUsableMessageNode);
+    lastSelectorUsed = 'main.children';
+    debugLog('fallback main.children', 'usable', blocks.length);
     return dedupeNested(blocks);
   }
 
@@ -89,8 +121,16 @@
 
   function applyOptimization() {
     optimizeScheduled = false;
+
     const nodes = getConversationNodes();
     const count = nodes.length;
+
+    if (count < 4) {
+      debugLog('too few nodes, skip optimize', count);
+      updatePanel(count, 0);
+      return;
+    }
+
     effectiveMode = getCurrentMode(count);
     const cfg = MODE_CONFIG[effectiveMode];
 
@@ -117,6 +157,7 @@
       }
     }
 
+    debugLog('mode', settings.mode, 'effective', effectiveMode, 'count', count, 'optimized', optimized, 'selector', lastSelectorUsed);
     updatePanel(count, optimized);
   }
 
@@ -132,7 +173,6 @@
   function clearOptimization(el) {
     el.style.contentVisibility = 'visible';
     el.style.contain = '';
-    // retain containIntrinsicSize to reduce layout thrash when toggling
   }
 
   function scheduleOptimize() {
@@ -153,6 +193,14 @@
     scheduleOptimize();
   }
 
+  function toggleDebug() {
+    settings.debug = !settings.debug;
+    saveSettings();
+    renderDebugState();
+    debugLog('debug enabled', 'version', chrome.runtime.getManifest().version);
+    scheduleOptimize();
+  }
+
   function refreshModeButtons() {
     for (const [mode, btn] of modeButtons.entries()) {
       const active = settings.mode === mode;
@@ -165,11 +213,19 @@
     }
   }
 
+  function renderDebugState() {
+    if (debugEl) {
+      debugEl.style.display = settings.debug ? 'block' : 'none';
+    }
+    if (!debugToggle) return;
+    debugToggle.textContent = settings.debug ? t('debugOn') : t('debugOff');
+    debugToggle.style.opacity = settings.debug ? '1' : '0.75';
+  }
+
   function updatePanel(count, optimized) {
     if (!statusEl || !countEl) return;
 
     const effectiveLabel = t(`${effectiveMode}`);
-
     const modeLabel =
       settings.mode === 'auto'
         ? t('autoArrow', [effectiveLabel])
@@ -177,6 +233,11 @@
 
     statusEl.textContent = `${t('intensity')}: ${modeLabel}`;
     countEl.textContent = t('countsLine', [String(count), String(optimized)]);
+
+    if (debugEl) {
+      debugEl.style.display = settings.debug ? 'block' : 'none';
+      debugEl.textContent = `${t('selector')}: ${lastSelectorUsed}`;
+    }
   }
 
   function togglePanel() {
@@ -295,21 +356,32 @@
 
     statusEl = document.createElement('div');
     statusEl.style.cssText = 'font-size:12px;opacity:0.9;';
+
     countEl = document.createElement('div');
     countEl.style.cssText = 'font-size:11px;opacity:0.75;margin-top:4px;';
+
+    debugEl = document.createElement('div');
+    debugEl.style.cssText = 'font-size:11px;opacity:0.75;margin-top:4px;display:none;word-break:break-word;';
 
     autoToggle = document.createElement('button');
     autoToggle.type = 'button';
     autoToggle.style.cssText = buttonCss();
     autoToggle.addEventListener('click', () => setMode(settings.mode === 'auto' ? 'medium' : 'auto'));
 
+    debugToggle = document.createElement('button');
+    debugToggle.type = 'button';
+    debugToggle.style.cssText = buttonCss();
+    debugToggle.addEventListener('click', toggleDebug);
+
     listRoot.appendChild(statusEl);
     listRoot.appendChild(countEl);
+    listRoot.appendChild(debugEl);
     listRoot.appendChild(autoToggle);
     listRoot.appendChild(makeButton(t('off'), 'off'));
     listRoot.appendChild(makeButton(t('weak'), 'weak'));
     listRoot.appendChild(makeButton(t('medium'), 'medium'));
     listRoot.appendChild(makeButton(t('strong'), 'strong'));
+    listRoot.appendChild(debugToggle);
 
     box.appendChild(header);
     box.appendChild(listRoot);
@@ -318,15 +390,48 @@
 
     renderPanelState();
     refreshModeButtons();
+    renderDebugState();
+  }
+
+  function attachContentObserver() {
+    const nextTarget = document.querySelector('main') || document.documentElement;
+
+    if (nextTarget === observedTarget) return;
+
+    if (contentObserver) {
+      contentObserver.disconnect();
+    }
+
+    observedTarget = nextTarget;
+    contentObserver = new MutationObserver(() => {
+      scheduleOptimizeFromMutation();
+    });
+    contentObserver.observe(observedTarget, { childList: true, subtree: true });
+
+    debugLog('observer attached to', observedTarget.tagName.toLowerCase());
+    scheduleOptimize();
   }
 
   function installObservers() {
-    const target = document.querySelector('main') || document.documentElement;
+    let lastScrollOptimize = 0;
 
-    const observer = new MutationObserver(() => scheduleOptimize());
-    observer.observe(target, { childList: true, subtree: true });
+    attachContentObserver();
 
-    window.addEventListener('scroll', scheduleOptimize, { passive: true });
+    retargetObserver = new MutationObserver(() => {
+      attachContentObserver();
+      setTimeout(scheduleOptimizeFromMutation, 0);
+    });
+    retargetObserver.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+    });
+
+    window.addEventListener('scroll', () => {
+      const now = performance.now();
+      if (now - lastScrollOptimize < 80) return;
+      lastScrollOptimize = now;
+      scheduleOptimize();
+    }, { passive: true });
     window.addEventListener('resize', scheduleOptimize, { passive: true });
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) scheduleOptimize();

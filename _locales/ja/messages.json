@@ -17,5 +17,8 @@
       "count": { "content": "$1" },
       "optimized": { "content": "$2" }
     }
-  }
+  },
+  "debugOn": { "message": "デバッグ: オン" },
+  "debugOff": { "message": "デバッグ: オフ" },
+  "selector": { "message": "セレクター" }
 }
