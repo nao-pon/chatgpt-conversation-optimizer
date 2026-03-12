@@ -1,6 +1,8 @@
 (() => {
-  if (window.__chatgptOptimizerLoaded) return;
-  window.__chatgptOptimizerLoaded = true;
+  const LOADED_KEY = Symbol.for('chatgpt.optimizer.loaded');
+
+  if (window[LOADED_KEY]) return;
+  window[LOADED_KEY] = true;
 
   const MODE_CONFIG = {
     off:    { buffer: null },
@@ -319,8 +321,10 @@
   }
 
   function installObservers() {
+    const target = document.querySelector('main') || document.documentElement;
+
     const observer = new MutationObserver(() => scheduleOptimize());
-    observer.observe(document.documentElement, { childList: true, subtree: true });
+    observer.observe(target, { childList: true, subtree: true });
 
     window.addEventListener('scroll', scheduleOptimize, { passive: true });
     window.addEventListener('resize', scheduleOptimize, { passive: true });
