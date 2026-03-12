@@ -3,11 +3,19 @@
   "name": "Conversation Optimizer for ChatGPT",
   "version": "1.0.0",
   "description": "Improve performance in long ChatGPT conversations by optimizing off-screen messages.",
+  "minimum_chrome_version": "88",
   "permissions": ["storage"],
   "default_locale": "en",
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*"
+  ],
   "content_scripts": [
     {
-      "matches": ["https://chatgpt.com/*"],
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
       "js": ["content.js"],
       "run_at": "document_idle"
     }
