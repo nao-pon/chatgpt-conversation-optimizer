@@ -8,10 +8,15 @@
   "autoOn": { "message": "Auto: On" },
   "autoOff": { "message": "Auto: Off" },
   "intensity": { "message": "Intensity" },
-  "messages": { "message": "Messages" },
-  "optimized": { "message": "Optimized" },
   "autoArrow": { "message": "Auto → $MODE$",
     "placeholders": { "mode": { "content": "$1" } }
+  },
+  "countsLine": {
+    "message": "Messages: $COUNT$ / Optimized: $OPTIMIZED$",
+    "placeholders": {
+      "count": { "content": "$1" },
+      "optimized": { "content": "$2" }
+    }
   },
   "debugOn": { "message": "Debug: On" },
   "debugOff": { "message": "Debug: Off" },
