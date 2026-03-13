@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Conversation Optimizer for ChatGPT",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Improve performance in long ChatGPT conversations by optimizing off-screen messages.",
   "minimum_chrome_version": "88",
   "permissions": ["storage"],
