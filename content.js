@@ -67,26 +67,31 @@
     }
 
     const selectors = [
-      'main article',
-      'main [data-message-author-role]',
-      'main div[data-message-id]',
-      'main div.group.w-full',
+      'article',
+      '[data-message-author-role]',
+      'div[data-message-id]',
+      'div.group.w-full',
     ];
 
     for (const selector of selectors) {
       const raw = Array.from(main.querySelectorAll(selector));
-      const nodes = raw.filter(isUsableMessageNode);
+      const nodes = dedupeNested(raw.filter(isUsableMessageNode));
+
       debugLog('selector', selector, 'raw', raw.length, 'usable', nodes.length);
+
       if (nodes.length >= 4) {
         lastSelectorUsed = selector;
-        return dedupeNested(nodes);
+        return nodes;
       }
     }
 
-    const blocks = Array.from(main.children).filter(isUsableMessageNode);
+    const blocks = dedupeNested(
+      Array.from(main.children).filter(isUsableMessageNode)
+    );
+
     lastSelectorUsed = 'main.children';
     debugLog('fallback main.children', 'usable', blocks.length);
-    return dedupeNested(blocks);
+    return blocks;
   }
 
   function isUsableMessageNode(node) {
