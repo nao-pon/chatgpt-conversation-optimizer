@@ -181,8 +181,29 @@
     requestAnimationFrame(applyOptimization);
   }
 
+  function isExtensionContextAlive() {
+    try {
+      return !!(chrome?.runtime?.id && chrome?.storage?.local);
+    } catch {
+      return false;
+    }
+  }
+
   function saveSettings() {
-    chrome.storage.local.set({ chatgptOptimizerSettings: settings });
+    if (!isExtensionContextAlive()) {
+      console.warn('[Conversation Optimizer] Extension context invalidated');
+      return;
+    }
+
+    try {
+      chrome.storage.local.set({ chatgptOptimizerSettings: settings }, () => {
+        if (chrome.runtime.lastError) {
+          console.warn('[Conversation Optimizer] Storage error:', chrome.runtime.lastError.message);
+        }
+      });
+    } catch (e) {
+      console.warn('[Conversation Optimizer] Failed to save settings:', e);
+    }
   }
 
   function setMode(mode) {
