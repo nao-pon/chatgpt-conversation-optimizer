@@ -38,6 +38,9 @@
   let lastSelectorUsed = 'none';
   let lastMutationOptimize = 0;
 
+  let pendingOptimizeAfterStream = false;
+  let lastStreamingState = false;
+
   function t(key, substitutions) {
     try {
       return chrome.i18n.getMessage(key, substitutions) || key;
@@ -47,10 +50,51 @@
   }
 
   function scheduleOptimizeFromMutation() {
+    const streaming = isAssistantStreaming();
+
+    if (streaming) {
+      pendingOptimizeAfterStream = true;
+
+      if (!lastStreamingState) {
+        debugLog('streaming started');
+      }
+      lastStreamingState = true;
+      return;
+    }
+
+    if (lastStreamingState) {
+      debugLog('streaming ended');
+      lastStreamingState = false;
+    }
+
     const now = performance.now();
     if (now - lastMutationOptimize < 120) return;
     lastMutationOptimize = now;
     scheduleOptimize();
+  }
+
+  function flushPendingOptimizeAfterStream() {
+    if (!pendingOptimizeAfterStream) return;
+    if (isAssistantStreaming()) return;
+
+    pendingOptimizeAfterStream = false;
+    debugLog('flush optimize after streaming');
+    scheduleOptimize();
+  }
+
+  function isAssistantStreaming() {
+    // Stop button is usually shown while ChatGPT is generating
+    const buttons = Array.from(document.querySelectorAll('button'));
+    const stopButton = buttons.find((btn) => {
+      const text = (btn.textContent || '').trim().toLowerCase();
+      return text === 'stop' || text.includes('stop generating');
+    });
+    if (stopButton) return true;
+
+    // Generic busy indicator fallback
+    if (document.querySelector('[aria-busy="true"]')) return true;
+
+    return false;
   }
 
   function debugLog(...args) {
@@ -431,6 +475,7 @@
     observedTarget = nextTarget;
     contentObserver = new MutationObserver(() => {
       scheduleOptimizeFromMutation();
+      flushPendingOptimizeAfterStream();
     });
     contentObserver.observe(observedTarget, { childList: true, subtree: true });
 
@@ -445,7 +490,10 @@
 
     retargetObserver = new MutationObserver(() => {
       attachContentObserver();
-      setTimeout(scheduleOptimizeFromMutation, 0);
+      setTimeout(() => {
+        scheduleOptimizeFromMutation();
+        flushPendingOptimizeAfterStream();
+      }, 0);
     });
     retargetObserver.observe(document.documentElement, {
       childList: true,
