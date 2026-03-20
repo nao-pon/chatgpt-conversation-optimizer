@@ -1,24 +1,158 @@
 {
-  "extName": { "message": "Conversation Optimizer for ChatGPT" },
-  "optimizer": { "message": "Optimizer" },
-  "off": { "message": "OFF" },
-  "weak": { "message": "Weak" },
-  "medium": { "message": "Medium" },
-  "strong": { "message": "Strong" },
-  "autoOn": { "message": "Auto: On" },
-  "autoOff": { "message": "Auto: Off" },
-  "intensity": { "message": "Intensity" },
-  "autoArrow": { "message": "Auto → $MODE$",
-    "placeholders": { "mode": { "content": "$1" } }
+  "role_user": {
+    "message": "User"
   },
-  "countsLine": {
-    "message": "Messages: $COUNT$ / Optimized: $OPTIMIZED$",
-    "placeholders": {
-      "count": { "content": "$1" },
-      "optimized": { "content": "$2" }
-    }
+  "role_assistant": {
+    "message": "Assistant"
   },
-  "debugOn": { "message": "Debug: On" },
-  "debugOff": { "message": "Debug: Off" },
-  "selector": { "message": "Selector" }
+  "attachments": {
+    "message": "Attachments"
+  },
+  "image_hint_label": {
+    "message": "Image reference hint"
+  },
+  "image_prompt_label": {
+    "message": "Image prompt"
+  },
+  "image_hint_fallback": {
+    "message": "Image exists (URL unavailable)"
+  },
+  "image_generation": {
+    "message": "Image generation"
+  },
+  "generated_image": {
+    "message": "Generated image"
+  },
+  "image_unavailable_label": {
+    "message": "An image was present but could not be embedded"
+  },
+  "generated_image_present_label": {
+    "message": "Image data present"
+  },
+  "conversation_id": {
+    "message": "Conversation ID"
+  },
+  "download_button": {
+    "message": "Download"
+  },
+  "open_new_tab_button": {
+    "message": "Open light page"
+  },
+  "exported_at": {
+    "message": "Exported"
+  },
+  "export_failed": {
+    "message": "HTML export failed"
+  },
+  "export_resolving_progress": {
+    "message": "Resolving image URLs... ($1/$2)"
+  },
+  "exporting": {
+    "message": "Exporting..."
+  },
+  "export_progress": {
+    "message": "Exporting...($1/$2)"
+  },
+  "export_retry": {
+    "message": "Retry"
+  },
+  "zip_download_button": {
+    "message": "Save as ZIP"
+  },
+  "export_zip_progress": {
+    "message": "Building ZIP... ($1/$2)"
+  },
+  "image_source_link_label": {
+    "message": "Open source image"
+  },
+  "attachment_unknown_name": {
+    "message": "Unnamed attachment"
+  },
+  "attachment_open_link": {
+    "message": "Open source link"
+  },
+  "attachment_open_local_link": {
+    "message": "Open file in ZIP"
+  },
+  "attachment_not_embedded_label": {
+    "message": "Not included in HTML"
+  },
+  "attachment_kind_archive": {
+    "message": "Archive"
+  },
+  "attachment_kind_pdf": {
+    "message": "PDF"
+  },
+  "attachment_kind_text": {
+    "message": "Text"
+  },
+  "attachment_kind_attachment": {
+    "message": "Attachment"
+  },
+  "export_resolving_attachments_progress": {
+    "message": "Resolving attachment URLs... ($1/$2)"
+  },
+  "export_zip_attachments_progress": {
+    "message": "Saving attachments... ($1/$2)"
+  },
+  "attachment_kind_image": {
+    "message": "Image"
+  },
+  "attachment_kind_code": {
+    "message": "Code"
+  },
+  "attachment_sandbox_artifact_label": {
+    "message": "Generated file artifact"
+  },
+  "attachment_skip_too_large": {
+    "message": "Not included in ZIP (file too large, maxium: $1)"
+  },
+  "attachment_skip_unresolved": {
+    "message": "Not included (could not resolve URL)"
+  },
+  "attachment_skip_sandbox": {
+    "message": "Not included (temporary generated file)"
+  },
+  "attachment_skip_unsupported_media": {
+    "message": "Not included in ZIP (unsupported media type)"
+  },
+  "attachment_skip_auth": {
+    "message": "Not included in ZIP (authentication failed)"
+  },
+  "attachment_skip_server": {
+    "message": "Not included in ZIP (server error)"
+  },
+  "attachment_skip_network": {
+    "message": "Not included in ZIP (network error)"
+  },
+  "attachment_skip_not_found": {
+    "message": "Not included in ZIP (file not found)"
+  },
+  "image_skip_unresolved": {
+    "message": "Could not display because the URL could not be resolved"
+  },
+  "image_skip_unsupported_media": {
+    "message": "Could not display because the media type is not supported as an image"
+  },
+  "image_skip_auth": {
+    "message": "Could not display because authentication failed"
+  },
+  "image_skip_server": {
+    "message": "Could not display because of a server error"
+  },
+  "image_skip_network": {
+    "message": "Could not display because of a network error"
+  },
+  "image_skip_not_found": {
+    "message": "Could not display because the image was not found"
+  },
+  "copy_button": {
+    "message": "Copy"
+  },
+  "expand_code_button": {
+    "message": "Expand"
+  },
+  "collapse_code_button": {
+    "message": "Collapse"
+  }
 }

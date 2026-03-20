@@ -1,24 +1,158 @@
 {
-  "extName": { "message": "Conversation Optimizer for ChatGPT" },
-  "optimizer": { "message": "オプティマイザー" },
-  "off": { "message": "オフ" },
-  "weak": { "message": "弱" },
-  "medium": { "message": "中" },
-  "strong": { "message": "強" },
-  "autoOn": { "message": "オート: オン" },
-  "autoOff": { "message": "オート: オフ" },
-  "intensity": { "message": "強度" },
-  "autoArrow": { "message": "オート → $MODE$",
-    "placeholders": { "mode": { "content": "$1" } }
+  "role_user": {
+    "message": "ユーザー"
   },
-  "countsLine": {
-    "message": "メッセージ: $COUNT$ / 最適化中: $OPTIMIZED$",
-    "placeholders": {
-      "count": { "content": "$1" },
-      "optimized": { "content": "$2" }
-    }
+  "role_assistant": {
+    "message": "アシスタント"
   },
-  "debugOn": { "message": "デバッグ: オン" },
-  "debugOff": { "message": "デバッグ: オフ" },
-  "selector": { "message": "セレクター" }
+  "attachments": {
+    "message": "添付ファイル"
+  },
+  "image_hint_label": {
+    "message": "画像参照ヒント"
+  },
+  "image_prompt_label": {
+    "message": "画像生成プロンプト"
+  },
+  "image_hint_fallback": {
+    "message": "画像あり（URL取得不可）"
+  },
+  "image_generation": {
+    "message": "画像生成"
+  },
+  "generated_image": {
+    "message": "生成された画像"
+  },
+  "image_unavailable_label": {
+    "message": "画像はありましたが埋め込みできませんでした"
+  },
+  "generated_image_present_label": {
+    "message": "画像データあり"
+  },
+  "conversation_id": {
+    "message": "会話 ID"
+  },
+  "download_button": {
+    "message": "HTMLでダウンロード"
+  },
+  "open_new_tab_button": {
+    "message": "軽量ページを開く"
+  },
+  "exported_at": {
+    "message": "エクスポート完了"
+  },
+  "export_failed": {
+    "message": "エクスポート失敗"
+  },
+  "export_resolving_progress": {
+    "message": "画像URLを解決中... ($1/$2)"
+  },
+  "exporting": {
+    "message": "エクスポート中..."
+  },
+  "export_progress": {
+    "message": "エクスポート中...($1/$2)"
+  },
+  "export_retry": {
+    "message": "リトライ"
+  },
+  "zip_download_button": {
+    "message": "ZIPで保存"
+  },
+  "export_zip_progress": {
+    "message": "ZIPを作成中... ($1/$2)"
+  },
+  "image_source_link_label": {
+    "message": "元画像を開く"
+  },
+  "attachment_unknown_name": {
+    "message": "名称不明の添付ファイル"
+  },
+  "attachment_open_link": {
+    "message": "元リンクを開く"
+  },
+  "attachment_open_local_link": {
+    "message": "ZIP内ファイルを開く"
+  },
+  "attachment_not_embedded_label": {
+    "message": "HTMLには含めていません"
+  },
+  "attachment_kind_archive": {
+    "message": "アーカイブ"
+  },
+  "attachment_kind_pdf": {
+    "message": "PDF"
+  },
+  "attachment_kind_text": {
+    "message": "テキスト"
+  },
+  "attachment_kind_attachment": {
+    "message": "添付ファイル"
+  },
+  "export_resolving_attachments_progress": {
+    "message": "添付URLを解決中... ($1/$2)"
+  },
+  "export_zip_attachments_progress": {
+    "message": "添付ファイルを保存中... ($1/$2)"
+  },
+  "attachment_kind_image": {
+    "message": "画像"
+  },
+  "attachment_kind_code": {
+    "message": "コード"
+  },
+  "attachment_sandbox_artifact_label": {
+    "message": "生成されたファイルの痕跡"
+  },
+  "attachment_skip_too_large": {
+    "message": "サイズが大きすぎるためZIPに含めていません (最大: $1)"
+  },
+  "attachment_skip_unresolved": {
+    "message": "URLを解決できなかったため含めていません"
+  },
+  "attachment_skip_sandbox": {
+    "message": "一時生成ファイルのため含めていません"
+  },
+  "attachment_skip_unsupported_media": {
+    "message": "取得できましたが対応外の形式だったためZIPに含めていません"
+  },
+  "attachment_skip_auth": {
+    "message": "認証エラーのためZIPに含めていません"
+  },
+  "attachment_skip_server": {
+    "message": "サーバーエラーのためZIPに含めていません"
+  },
+  "attachment_skip_network": {
+    "message": "通信エラーのためZIPに含めていません"
+  },
+  "attachment_skip_not_found": {
+    "message": "ファイルが見つからなかったためZIPに含めていません"
+  },
+  "image_skip_unresolved": {
+    "message": "URLを解決できなかったため表示できません"
+  },
+  "image_skip_unsupported_media": {
+    "message": "画像として扱えない形式だったため表示できません"
+  },
+  "image_skip_auth": {
+    "message": "認証エラーのため表示できません"
+  },
+  "image_skip_server": {
+    "message": "サーバーエラーのため表示できません"
+  },
+  "image_skip_network": {
+    "message": "通信エラーのため表示できません"
+  },
+  "image_skip_not_found": {
+    "message": "画像が見つからなかったため表示できません"
+  },
+  "copy_button": {
+    "message": "コピー"
+  },
+  "expand_code_button": {
+    "message": "展開"
+  },
+  "collapse_code_button": {
+    "message": "折りたたむ"
+  }
 }
