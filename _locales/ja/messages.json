@@ -23,6 +23,9 @@
   "generated_image": {
     "message": "生成された画像"
   },
+  "image_not_include_label": {
+    "message": "画像は軽量版には含まれません"
+  },
   "image_unavailable_label": {
     "message": "画像はありましたが埋め込みできませんでした"
   },
@@ -114,19 +117,25 @@
     "message": "一時生成ファイルのため含めていません"
   },
   "attachment_skip_unsupported_media": {
-    "message": "取得できましたが対応外の形式だったためZIPに含めていません"
+    "message": "URL取得できましたが対応外の形式でダウンロードできませんでした"
   },
   "attachment_skip_auth": {
-    "message": "認証エラーのためZIPに含めていません"
+    "message": "認証エラーのためダウンロードできません"
   },
   "attachment_skip_server": {
-    "message": "サーバーエラーのためZIPに含めていません"
+    "message": "サーバーエラーのためダウンロードできませんでした"
   },
   "attachment_skip_network": {
-    "message": "通信エラーのためZIPに含めていません"
+    "message": "通信エラーのためダウンロードできませんでした"
   },
   "attachment_skip_not_found": {
-    "message": "ファイルが見つからなかったためZIPに含めていません"
+    "message": "ファイルが見つかりませんでした"
+  },
+  "attachment_skip_expired": {
+    "message": "ファイルの有効期限切れのためダウンロードできませんでした"
+  },
+  "image_skip_setting": {
+    "message": "設定 \"HTMLダウンロードでイメージを埋め込む\" が OFF のため表示できません"
   },
   "image_skip_unresolved": {
     "message": "URLを解決できなかったため表示できません"
@@ -154,5 +163,95 @@
   },
   "collapse_code_button": {
     "message": "折りたたむ"
+  },
+  "settings_button": {
+    "message": "ChatGPT Optimaizer 設定"
+  },
+  "keep_dom_messages_label": {
+    "message": "ブラウザに表示するメッセージ数"
+  },
+  "auto_adjust_disabled_label": {
+    "message": "メッセージ数の自動調整"
+  },
+  "auto_adjust_enabled_label": {
+    "message": "メッセージ数の自動調整 (自動調整値: $1)"
+  },
+  "html_include_images_label": {
+    "message": "HTMLダウンロードでイメージを埋め込む"
+  },
+  "save_button": {
+    "message": "保存"
+  },
+  "cancel_button": {
+    "message": "キャンセル"
+  },
+  "hide_button": {
+    "message": "無視する"
+  },
+  "project_guide_title_level1": {
+    "message": "会話が少し長くなってきました"
+  },
+  "project_guide_body_level1": {
+    "message": "関連する内容はプロジェクトで整理すると分かりやすくなります。"
+  },
+  "project_guide_title_level2": {
+    "message": "この会話はかなり長くなっています"
+  },
+  "project_guide_body_level2": {
+    "message": "プロジェクトを使うと、関連する会話を整理しやすくなります。"
+  },
+  "project_guide_title_level3": {
+    "message": "この会話は非常に長くなっています"
+  },
+  "project_guide_body_level3": {
+    "message": "この会話を保存してから、プロジェクトで整理することをおすすめします。"
+  },
+  "project_guide_title_project_level1": {
+    "message": "プロジェクト内の会話が長くなってきました"
+  },
+  "project_guide_body_project_level1": {
+    "message": "「$1」内で新しい会話を作ると、整理しやすくなります。"
+  },
+  "project_guide_title_project_level2": {
+    "message": "プロジェクト内の会話が長くなっています"
+  },
+  "project_guide_body_project_level2": {
+    "message": "「$1」内で新しい会話に分けると、整理しやすくなります。"
+  },
+  "project_guide_title_project_level3": {
+    "message": "プロジェクト内の会話が非常に長くなっています"
+  },
+  "project_guide_body_project_level3": {
+    "message": "この会話を保存してから、「$1」内で新しい会話に分けることをおすすめします。"
+  },
+  "project_guide_alert_button": {
+    "message": "非常に長い会話"
+  },
+  "project_guide_alert_tooltip": {
+    "message": "この会話は非常に長くなっています。クリックして案内を再表示します。"
+  },
+  "thoughts_toggle_label": {
+    "message": "思考データを表示"
+  },
+  "thought_item_fallback": {
+    "message": "思考 $1"
+  },
+  "thought_finished_label": {
+    "message": "完了"
+  },
+  "close_button": {
+    "message": "閉じる"
+  },
+  "untitled_conversation": {
+    "message": "無題の会話"
+  },
+  "copy_markdown_button": {
+    "message": "Markdownをコピー"
+  },
+  "copied_button": {
+    "message": "コピー済み"
+  },
+  "copy_failed_button": {
+    "message": "失敗"
   }
 }

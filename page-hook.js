@@ -12,16 +12,23 @@
   window.__CGO_MAIN_HOOK_INSTALLED__ = true;
 
   const CONFIG = {
-    turnCount: 20,
+    turnCount: 40,
     enablePrune: true,
     debug: true,
     rootNodeId: "client-created-root",
     targetPathFragment: "/backend-api/conversation/",
   };
 
-  const EXPORT_CACHE = new Map();
+  const EXPORT_CACHE = new Map(); // full
+  const STREAM_CACHE = new Map(); // draft
   const STREAM_STATE = new Map();
   const FILE_DOWNLOAD_CACHE = new Map();
+  const PROJECT_NAME_BY_GIZMO_ID = new Map();
+  const PROJECT_NAME_BY_CONVERSATION_ID = new Map();
+  const STREAM_TOPIC_TO_CONVERSATION = new Map();
+  const STREAM_TURN_EXCHANGE_TO_CONVERSATION = new Map();
+  const WS_STREAM_PARSER_STATE = new Map();
+
   let LAST_STREAM_CONVERSATION_ID = null;
 
   // =========================================================
@@ -46,6 +53,17 @@
         type: "analysis",
         url,
         summary,
+      },
+      "*"
+    );
+  }
+
+  function postStreamNotify(message) {
+    window.postMessage(
+      {
+        source: "cgo-prune-runtime",
+        type: "streamNotify",
+        message
       },
       "*"
     );
@@ -81,6 +99,51 @@
         },
         "*"
       );
+      return;
+    }
+
+    if (data.type === "CGO_INIT_SETTINGS") {
+      const settings = data.settings || {};
+      const keepDomMessages = Number(settings.keepDomMessages);
+
+      if (Number.isFinite(keepDomMessages)) {
+        CONFIG.turnCount = Math.max(1, Math.round(keepDomMessages));
+      }
+
+      CONFIG.autoAdjustEnabled = !!settings.autoAdjustEnabled;
+
+      window.postMessage(
+        {
+          source: "CGO_PAGE",
+          type: "CGO_INIT_SETTINGS_ACK",
+          version: PAGE_HOOK_VERSION,
+          mainHook: true,
+          applied: {
+            turnCount: CONFIG.turnCount,
+            autoAdjustEnabled: CONFIG.autoAdjustEnabled,
+          },
+        },
+        "*"
+      );
+      return;
+    }
+
+    if (data.type === "CGO_UPDATE_SETTINGS") {
+      const settings = data.settings || {};
+      const keepDomMessages = Number(settings.keepDomMessages);
+
+      if (Number.isFinite(keepDomMessages)) {
+        CONFIG.turnCount = Math.max(1, Math.round(keepDomMessages));
+      }
+
+      if (typeof settings.autoAdjustEnabled === "boolean") {
+        CONFIG.autoAdjustEnabled = settings.autoAdjustEnabled;
+      }
+
+      log("page-hook settings updated", {
+        turnCount: CONFIG.turnCount,
+        autoAdjustEnabled: CONFIG.autoAdjustEnabled,
+      });
     }
   });
 
@@ -109,6 +172,14 @@
     return parts.filter((v) => typeof v === "string").join("\n").length;
   }
 
+  function getResponseContentType(response) {
+    return String(response?.headers?.get("content-type") || "");
+  }
+
+  function isEventStreamResponse(response) {
+    return /\btext\/event-stream\b/i.test(getResponseContentType(response));
+  }
+
   function isMeaningfulConversationNode(node) {
     if (!hasMessage(node)) return false;
 
@@ -119,16 +190,13 @@
     return false;
   }
 
-  function getRequestUrl(input) {
-    if (typeof input === "string") return input;
-    if (input instanceof Request) return input.url;
-    return String(input || "");
-  }
-
   function isTargetConversationRequest(url) {
     try {
       const u = new URL(url, location.origin);
-      return /^\/backend-api\/conversation\/[a-z0-9-]+$/i.test(u.pathname);
+      return (
+        /^\/backend-api\/conversation\/[a-z0-9:_-]+$/i.test(u.pathname) ||
+        u.pathname === "/backend-api/conversation/new_branch"
+      );
     } catch {
       return false;
     }
@@ -143,16 +211,18 @@
     }
   }
 
-  function isFullConversationPayload(data) {
-    return !!(
-      data &&
-      typeof data === "object" &&
-      data.conversation_id &&
-      data.current_node &&
-      data.mapping &&
-      typeof data.mapping === "object"
-    );
+  function isSnorlaxSidebarRequest(url) {
+    try {
+      const u = new URL(url, location.origin);
+      return u.pathname === "/backend-api/gizmos/snorlax/sidebar";
+    } catch {
+      return false;
+    }
   }
+
+  /*  function isFullConversationPayload(data) {
+      return !!normalizeConversationPayload(data);
+    }*/
 
   function buildResponseFromJson(originalResponse, jsonData) {
     const headers = new Headers(originalResponse.headers);
@@ -174,7 +244,7 @@
   function isFileDownloadRequest(url) {
     try {
       const u = new URL(url, location.origin);
-      return /^\/backend-api\/files\/download\/file_[A-Za-z0-9]+$/i.test(u.pathname);
+      return /^\/backend-api\/(files\/download\/file_[A-Za-z0-9]+|conversation\/[A-Za-z0-9-]+\/interpreter\/download)$/i.test(u.pathname);
     } catch {
       return false;
     }
@@ -183,11 +253,25 @@
   function extractFileIdAndConversationIdFromDownloadUrl(url) {
     try {
       const u = new URL(url, location.origin);
-      const match = u.pathname.match(/\/backend-api\/files\/download\/(file_[A-Za-z0-9]+)/i);
-      return {
-        fileId: match ? match[1] : "",
-        conversationId: u.searchParams.get("conversation_id") || "",
-      };
+      const matchFiles = u.pathname.match(/\/backend-api\/files\/download\/(file_[A-Za-z0-9]+)/i);
+      if (matchFiles) {
+        return {
+          fileId: matchFiles[1],
+          conversationId: u.searchParams.get("conversation_id") || "",
+        };
+      } else {
+        const matchInterpreter = u.pathname.match(/\/backend-api\/conversation\/([A-Za-z0-9-]+)\/interpreter\/download/i);
+        const messageId = u.searchParams.get("message_id") || "";
+        const rawSandboxPath = u.searchParams.get("sandbox_path") || "";
+        const sandboxPath = rawSandboxPath.startsWith("sandbox:")
+          ? rawSandboxPath
+          : "sandbox:" + rawSandboxPath;
+
+        return {
+          fileId: buildSandboxFileId(messageId, sandboxPath),
+          conversationId: matchInterpreter ? matchInterpreter[1] : "",
+        };
+      }
     } catch {
       return {
         fileId: "",
@@ -196,9 +280,132 @@
     }
   }
 
+  // content/data.js に同名関数あり、変更時は合わせて変更
+  function buildSandboxFileId(messageId, sandboxPath) {
+    if (!messageId || !sandboxPath) return "";
+    return "sandbox:" + hash(`${messageId}:${sandboxPath}`);
+  }
+
+  // content/config.js に同名関数あり、変更時は合わせて変更
+  function hash(str) {
+    let h = 0;
+    for (let i = 0; i < str.length; i++) {
+      h = (h << 5) - h + str.charCodeAt(i);
+      h |= 0;
+    }
+    return (h >>> 0).toString(36);
+  }
+
+
+  function normalizeConversationPayload(data) {
+    if (!data || typeof data !== "object") return null;
+
+    // 通常会話レスポンス
+    if (
+      data.conversation_id &&
+      data.current_node &&
+      data.mapping &&
+      typeof data.mapping === "object"
+    ) {
+      return data;
+    }
+
+    // branch 初期レスポンス
+    const conv = data.conversation;
+    if (
+      conv &&
+      typeof conv === "object" &&
+      conv.current_node &&
+      conv.mapping &&
+      typeof conv.mapping === "object"
+    ) {
+      return conv;
+    }
+
+    return null;
+  }
+
   // =========================================================
   // ANALYZE / PRUNE HELPERS
   // =========================================================
+  function buildConversationStats(data) {
+    const mapping = getMapping(data);
+
+    let turnCount = 0;
+    let textLength = 0;
+    let imageCount = 0;
+    let attachmentCount = 0;
+
+    for (const node of Object.values(mapping)) {
+      if (!hasMessage(node)) continue;
+
+      const role = getRole(node);
+      if (role !== "user" && role !== "assistant") continue;
+
+      turnCount += 1;
+      textLength += getTextLength(node);
+
+      const parts = node?.message?.content?.parts;
+      if (Array.isArray(parts)) {
+        for (const part of parts) {
+          if (part && typeof part === "object") {
+            if (part.content_type === "image_asset_pointer") {
+              imageCount += 1;
+            } else if (
+              part.content_type === "file_asset_pointer" ||
+              part.content_type === "attachment_asset_pointer"
+            ) {
+              attachmentCount += 1;
+            }
+          }
+        }
+      }
+
+      const metadataAttachments = node?.message?.metadata?.attachments;
+      if (Array.isArray(metadataAttachments)) {
+        attachmentCount += metadataAttachments.length;
+      }
+    }
+
+    return {
+      turnCount,
+      textLength,
+      imageCount,
+      attachmentCount,
+    };
+  }
+
+  function getRecommendedKeepDomMessages(baseKeepDomMessages, stats) {
+    const base = Math.max(1, Number(baseKeepDomMessages || CONFIG.turnCount || 15));
+
+    const score =
+      Number(stats?.turnCount || 0) * 3 +
+      Number(stats?.textLength || 0) / 2000 +
+      Number(stats?.imageCount || 0) * 8 +
+      Number(stats?.attachmentCount || 0) * 4;
+
+    if (score >= 220) return Math.max(8, Math.min(base, 10));
+    if (score >= 140) return Math.max(10, Math.min(base, 15));
+    if (score >= 80) return Math.max(12, Math.min(base, 25));
+
+    return base;
+  }
+
+  function postAutoAdjustResult(conversationId, projectName, baseKeepDomMessages, effectiveKeepDomMessages, stats) {
+    window.postMessage(
+      {
+        source: "cgo-prune-runtime",
+        type: "autoAdjustResult",
+        conversationId,
+        projectName,
+        baseKeepDomMessages,
+        effectiveKeepDomMessages,
+        stats,
+      },
+      "*"
+    );
+  }
+
   function buildLinearChain(mapping, currentNode) {
     const chain = [];
     const seen = new Set();
@@ -243,7 +450,7 @@
       }
     }
 
-    const keepConversationIndexes = conversationalIndexes.slice(-turnCount * 2);
+    const keepConversationIndexes = conversationalIndexes.slice(-turnCount);
 
     if (keepConversationIndexes.length === 0) {
       return new Set(chain.slice(-1));
@@ -301,6 +508,117 @@
     };
   }
 
+  function isNodeConnectedToTarget(mapping, startId, targetId) {
+    if (!startId || !targetId) return false;
+
+    const seen = new Set();
+    let cursor = startId;
+
+    while (cursor && mapping[cursor] && !seen.has(cursor)) {
+      if (cursor === targetId) return true;
+      seen.add(cursor);
+      cursor = mapping[cursor]?.parent || null;
+    }
+
+    return false;
+  }
+
+  function anchorStreamRootsToFullTail(full, stream, merged) {
+    const fullTail = full?.current_node || null;
+    if (!fullTail || !merged.mapping[fullTail]) return false;
+
+    const streamCurrent = stream?.current_node || null;
+    if (!streamCurrent || !merged.mapping[streamCurrent]) return false;
+
+    if (isNodeConnectedToTarget(merged.mapping, streamCurrent, fullTail)) {
+      return true;
+    }
+
+    const streamMapping = stream.mapping || {};
+    const streamIds = new Set(Object.keys(streamMapping));
+
+    let rootId = streamCurrent;
+    const seen = new Set();
+
+    while (rootId && streamIds.has(rootId) && !seen.has(rootId)) {
+      seen.add(rootId);
+
+      const parentId = merged.mapping[rootId]?.parent || null;
+
+      // 親がない、または親が stream 外なら、ここが stream 側の先頭
+      if (!parentId || !streamIds.has(parentId)) {
+        break;
+      }
+
+      rootId = parentId;
+    }
+
+    if (!rootId || !merged.mapping[rootId]) return false;
+
+    merged.mapping[rootId].parent = fullTail;
+
+    const fullTailChildren = Array.isArray(merged.mapping[fullTail].children)
+      ? merged.mapping[fullTail].children
+      : [];
+
+    if (!fullTailChildren.includes(rootId)) {
+      fullTailChildren.push(rootId);
+    }
+    merged.mapping[fullTail].children = fullTailChildren;
+
+    return isNodeConnectedToTarget(merged.mapping, streamCurrent, fullTail);
+  }
+
+  function mergeCaches(full, stream) {
+    const merged = structuredClone(full);
+
+    for (const [id, node] of Object.entries(stream.mapping || {})) {
+      if (!merged.mapping[id]) {
+        merged.mapping[id] = structuredClone(node);
+      } else {
+        const existing = merged.mapping[id];
+        const incoming = node;
+
+        const nextContent =
+          incoming.message?.content &&
+            Array.isArray(incoming.message.content.parts) &&
+            incoming.message.content.parts.some((p) => p)
+            ? incoming.message.content
+            : existing.message?.content;
+
+        merged.mapping[id] = {
+          ...existing,
+          ...incoming,
+          message: {
+            ...(existing.message || {}),
+            ...(incoming.message || {}),
+            content: nextContent,
+          },
+        };
+      }
+    }
+
+    rebuildChildren(merged.mapping);
+
+    anchorStreamRootsToFullTail(full, stream, merged);
+    rebuildChildren(merged.mapping);
+
+    const streamCurrent = stream.current_node || null;
+    const fullCurrent = full.current_node || null;
+
+    if (
+      streamCurrent &&
+      merged.mapping[streamCurrent] &&
+      isNodeConnectedToTarget(merged.mapping, streamCurrent, fullCurrent)
+    ) {
+      merged.current_node = streamCurrent;
+    } else {
+      merged.current_node = fullCurrent || streamCurrent || null;
+    }
+
+    return merged;
+  }
+
   function analyzeConversation(data, turnCount = CONFIG.turnCount) {
     const mapping = getMapping(data);
     const currentNode = getCurrentNode(data);
@@ -318,7 +636,7 @@
 
     const chain = buildLinearChain(mapping, currentNode);
     const conversationalIds = getConversationalIds(mapping, chain);
-    const recentConversationIds = conversationalIds.slice(-turnCount * 2);
+    const recentConversationIds = conversationalIds.slice(-turnCount);
     const keepSet = expandKeepSetWithChildren(mapping, pickRecentSuffixKeepSet(mapping, chain, turnCount));
     const keepSummary = summarizeKeepSet(mapping, keepSet);
 
@@ -359,7 +677,7 @@
     if (!chainLength) return true;
 
     const keepRatio = keepNodeCount / chainLength;
-    if (keepRatio > 0.8) return true;
+    if (keepRatio > 0.9) return true;
 
     return false;
   }
@@ -385,35 +703,71 @@
     );
 
     const prunedMapping = {};
+
+    // 1) keep する node だけコピーし、children は keepSet 内に限定
     for (const id of keepSet) {
-      if (mapping[id]) {
-        prunedMapping[id] = lightenNode(mapping[id]);
-      }
+      const node = mapping[id];
+      if (!node) continue;
+
+      const light = lightenNode(node);
+
+      prunedMapping[id] = {
+        ...light,
+        children: Array.isArray(light.children)
+          ? light.children.filter((childId) => keepSet.has(childId))
+          : [],
+      };
     }
 
+    // 2) root は必ず残す
+    const rootId = CONFIG.rootNodeId;
+    const rootNode = mapping[rootId];
+
+    if (rootNode) {
+      prunedMapping[rootId] = {
+        ...lightenNode(rootNode),
+        children: [],
+      };
+    }
+
+    // 3) 先頭 keep node を root 直下につなぎ直す
     const keptChain = chain.filter((id) => keepSet.has(id));
     const firstKeptId = keptChain[0];
 
-    if (firstKeptId && firstKeptId !== CONFIG.rootNodeId) {
-      if (mapping[CONFIG.rootNodeId]) {
-        prunedMapping[CONFIG.rootNodeId] = structuredClone(mapping[CONFIG.rootNodeId]);
-        prunedMapping[firstKeptId] = {
-          ...prunedMapping[firstKeptId],
-          parent: CONFIG.rootNodeId,
-        };
-      } else {
-        prunedMapping[firstKeptId] = {
-          ...prunedMapping[firstKeptId],
-          parent: null,
+    if (firstKeptId && prunedMapping[firstKeptId] && prunedMapping[rootId]) {
+      prunedMapping[firstKeptId] = {
+        ...prunedMapping[firstKeptId],
+        parent: rootId,
+      };
+
+      prunedMapping[rootId].children = [firstKeptId];
+    }
+
+    // 4) parent が消えてしまった node は root か kept 親へ補正
+    for (const [id, node] of Object.entries(prunedMapping)) {
+      if (id === rootId) continue;
+
+      const parentId = node?.parent;
+      if (!parentId || !prunedMapping[parentId]) {
+        prunedMapping[id] = {
+          ...node,
+          parent: id === firstKeptId ? (rootNode ? rootId : null) : node.parent,
         };
       }
     }
 
-    rebuildChildren(prunedMapping);
+    log("prune mapping integrity", {
+      originalCount: Object.keys(mapping).length,
+      prunedCount: Object.keys(prunedMapping).length,
+      rootChildren: prunedMapping[rootId]?.children || [],
+      firstKeptId,
+      currentNode,
+    });
 
     return {
       ...data,
       mapping: prunedMapping,
+      current_node: currentNode,
     };
   }
 
@@ -448,31 +802,369 @@
     }
   }
 
+  function getTopicIdFromPayload(payload) {
+    if (!payload || typeof payload !== "object") return "";
+    return (
+      payload.topic_id ||
+      payload?.v?.topic_id ||
+      payload?.data?.topic_id ||
+      payload?.payload?.topic_id ||
+      payload?.body?.topic_id ||
+      ""
+    );
+  }
+
+  function getTurnExchangeIdFromPayload(payload) {
+    if (!payload || typeof payload !== "object") return "";
+    return (
+      payload.turn_exchange_id ||
+      payload?.v?.turn_exchange_id ||
+      payload?.data?.turn_exchange_id ||
+      payload?.payload?.turn_exchange_id ||
+      payload?.body?.turn_exchange_id ||
+      ""
+    );
+  }
+
+  function registerConversationTopicContext(payload, conversationId) {
+    if (!conversationId || !payload || typeof payload !== "object") return;
+
+    const topicId = getTopicIdFromPayload(payload);
+    if (topicId) {
+      STREAM_TOPIC_TO_CONVERSATION.set(topicId, conversationId);
+    }
+
+    const turnExchangeId = getTurnExchangeIdFromPayload(payload);
+    if (turnExchangeId) {
+      STREAM_TURN_EXCHANGE_TO_CONVERSATION.set(turnExchangeId, conversationId);
+    }
+  }
+
+  function getConversationIdFromTopicContext(payload) {
+    const topicId = getTopicIdFromPayload(payload);
+    if (topicId && STREAM_TOPIC_TO_CONVERSATION.has(topicId)) {
+      return STREAM_TOPIC_TO_CONVERSATION.get(topicId) || "";
+    }
+
+    const turnExchangeId = getTurnExchangeIdFromPayload(payload);
+    if (turnExchangeId && STREAM_TURN_EXCHANGE_TO_CONVERSATION.has(turnExchangeId)) {
+      return STREAM_TURN_EXCHANGE_TO_CONVERSATION.get(turnExchangeId) || "";
+    }
+
+    return "";
+  }
+
+  function parseJsonStringSafe(value) {
+    if (typeof value !== "string") return null;
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+
+  function visitPossibleStreamPayloads(value, visitor) {
+    const queue = [value];
+    const seen = new Set();
+
+    while (queue.length) {
+      const current = queue.shift();
+      if (!current || typeof current !== "object" || seen.has(current)) continue;
+      seen.add(current);
+
+      if (Array.isArray(current)) {
+        for (const item of current) {
+          if (!item) continue;
+
+          if (typeof item === "string") {
+            const parsed = parseJsonStringSafe(item);
+            if (parsed) queue.push(parsed);
+            continue;
+          }
+
+          if (typeof item === "object") {
+            queue.push(item);
+          }
+        }
+        continue;
+      }
+
+      visitor(current);
+
+      const nestedCandidates = [
+        current.data,
+        current.payload,
+        current.body,
+        current.event,
+        current.message,
+        current.v,
+        current.ops,
+        current.delta,
+        current.items,
+        current.messages,
+      ];
+
+      for (const candidate of nestedCandidates) {
+        if (!candidate) continue;
+
+        if (typeof candidate === "string") {
+          const parsed = parseJsonStringSafe(candidate);
+          if (parsed) queue.push(parsed);
+          continue;
+        }
+
+        if (typeof candidate === "object") {
+          queue.push(candidate);
+        }
+      }
+
+      for (const value of Object.values(current)) {
+        if (!value) continue;
+
+        if (typeof value === "string") {
+          const parsed = parseJsonStringSafe(value);
+          if (parsed) queue.push(parsed);
+          continue;
+        }
+
+        if (typeof value === "object") {
+          queue.push(value);
+        }
+      }
+    }
+  }
+
+  function getWsDataTypeName(data) {
+    return Object.prototype.toString.call(data);
+  }
+
+  async function decodeWebSocketData(data) {
+    if (typeof data === "string") return data;
+
+    if (data instanceof Blob) {
+      return await data.text();
+    }
+
+    if (data instanceof ArrayBuffer) {
+      return new TextDecoder().decode(new Uint8Array(data));
+    }
+
+    if (ArrayBuffer.isView(data)) {
+      return new TextDecoder().decode(data);
+    }
+
+    return "";
+  }
+
+  async function handleWebSocketFrame(rawData, source = "ws") {
+    const text = await decodeWebSocketData(rawData);
+    if (!text) {
+      log("ws frame skipped: empty/unsupported", {
+        source,
+        dataType: getWsDataTypeName(rawData),
+      });
+      return;
+    }
+
+    const root = parseJsonStringSafe(text);
+    if (!root) {
+      log("ws frame non-json", {
+        source,
+        preview: text.slice(0, 300),
+      });
+      return;
+    }
+
+    visitPossibleStreamPayloads(root, (payload) => {
+      if (
+        payload?.type === "conversation-turn-stream" &&
+        payload?.payload?.type === "stream-item" &&
+        typeof payload?.payload?.encoded_item === "string"
+      ) {
+        const topicId =
+          payload?.turn_id ||
+          payload?.payload?.turn_id ||
+          payload?.topic_id ||
+          "encoded_item";
+
+        const conversationId = payload?.payload?.conversation_id || "";
+        if (conversationId) {
+          LAST_STREAM_CONVERSATION_ID = conversationId;
+          registerConversationTopicContext(payload, conversationId);
+          registerConversationTopicContext(payload.payload, conversationId);
+        }
+
+        processSseBlock(
+          payload.payload.encoded_item,
+          handleSseEvent,
+          getWsStreamParserState(topicId),
+          { url: `ws:${topicId}`, topicId }
+        );
+        return;
+      }
+
+      handleSseEvent("message", payload);
+    });
+  }
+
+  function patchWebSocket() {
+    const NativeWebSocket = window.WebSocket;
+    if (!NativeWebSocket || window.__CGO_WEBSOCKET_PATCHED__) return;
+
+    window.__CGO_ORIGINAL_WEBSOCKET__ =
+      window.__CGO_ORIGINAL_WEBSOCKET__ || NativeWebSocket;
+
+    function CGOWebSocket(url, protocols) {
+      const ws =
+        protocols === undefined
+          ? new NativeWebSocket(url)
+          : new NativeWebSocket(url, protocols);
+
+      try {
+        const originalSend = ws.send;
+        ws.send = function send(data) {
+          handleWebSocketFrame(data, "ws-send").catch((error) => {
+            log("ws send parse failed", String(error));
+          });
+          return originalSend.call(this, data);
+        };
+
+        ws.addEventListener("message", (event) => {
+          handleWebSocketFrame(event.data, "ws-message").catch((error) => {
+            log("ws message parse failed", String(error));
+          });
+        });
+      } catch (error) {
+        log("websocket patch failed", String(error));
+      }
+
+      return ws;
+    }
+
+    CGOWebSocket.prototype = NativeWebSocket.prototype;
+    Object.setPrototypeOf(CGOWebSocket, NativeWebSocket);
+
+    window.WebSocket = CGOWebSocket;
+    window.__CGO_WEBSOCKET_PATCHED__ = true;
+  }
+
+  function getWsStreamParserState(topicId) {
+    let state = WS_STREAM_PARSER_STATE.get(topicId);
+    if (!state) {
+      state = { currentEventName: "message" };
+      WS_STREAM_PARSER_STATE.set(topicId, state);
+    }
+    return state;
+  }
+
   // =========================================================
   // CACHE HELPERS
   // =========================================================
+  function normalizeProjectName(value) {
+    return typeof value === "string" ? value.trim() : "";
+  }
+
+  function cacheProjectSidebarPayload(data) {
+    const items = Array.isArray(data?.items) ? data.items : [];
+    for (const item of items) {
+      const gizmo = item?.gizmo?.gizmo;
+      const gizmoId = gizmo?.id || "";
+      const projectName = normalizeProjectName(gizmo?.display?.name);
+
+      if (gizmoId && projectName) {
+        PROJECT_NAME_BY_GIZMO_ID.set(gizmoId, projectName);
+      }
+
+      const conversations = Array.isArray(item?.conversations?.items)
+        ? item.conversations.items
+        : [];
+
+      for (const conv of conversations) {
+        const conversationId = conv?.id || "";
+        const convGizmoId =
+          conv?.gizmo_id ||
+          conv?.conversation_template_id ||
+          gizmoId ||
+          "";
+
+        const effectiveProjectName =
+          projectName ||
+          PROJECT_NAME_BY_GIZMO_ID.get(convGizmoId) ||
+          "";
+
+        if (convGizmoId && effectiveProjectName) {
+          PROJECT_NAME_BY_GIZMO_ID.set(convGizmoId, effectiveProjectName);
+        }
+
+        if (conversationId && effectiveProjectName) {
+          PROJECT_NAME_BY_CONVERSATION_ID.set(conversationId, effectiveProjectName);
+        }
+      }
+    }
+  }
+
+  function applyProjectNameToConversation(data) {
+    if (!data || typeof data !== "object") return data;
+
+    const conversationId = data.conversation_id || "";
+    const gizmoId =
+      data.gizmo_id ||
+      data.conversation_template_id ||
+      "";
+
+    const projectName =
+      PROJECT_NAME_BY_CONVERSATION_ID.get(conversationId) ||
+      PROJECT_NAME_BY_GIZMO_ID.get(gizmoId) ||
+      "";
+
+    if (projectName) {
+      data.project_name = projectName;
+    }
+
+    return data;
+  }
+
   function saveFullConversationToCache(data) {
     const conversationId = data?.conversation_id;
     if (!conversationId) return;
+
+    applyProjectNameToConversation(data);
 
     EXPORT_CACHE.set(conversationId, structuredClone(data));
     window.__CGO_EXPORT_CACHE = true;
   }
 
   function ensureConversationCache(conversationId) {
-    let data = EXPORT_CACHE.get(conversationId);
+    let data = STREAM_CACHE.get(conversationId);
+    if (data) return data;
 
-    if (!data) {
-      data = {
+    const full = EXPORT_CACHE.get(conversationId);
+
+    data = full
+      ? structuredClone(full)
+      : {
         conversation_id: conversationId,
         title: "",
         current_node: null,
         mapping: {},
+        project_name: PROJECT_NAME_BY_CONVERSATION_ID.get(conversationId) || "",
       };
-      EXPORT_CACHE.set(conversationId, data);
-    }
 
+    STREAM_CACHE.set(conversationId, data);
     return data;
+  }
+
+  function shouldUseAsPatchedTarget(message) {
+    if (!message || typeof message !== "object") return false;
+    return message?.author?.role === "assistant";
+  }
+
+  function flushPendingOps(cache, streamState) {
+    if (!streamState?.currentPatchedMessageId) return;
+    if (!Array.isArray(streamState.pendingOps) || !streamState.pendingOps.length) return;
+
+    const ops = streamState.pendingOps.splice(0, streamState.pendingOps.length);
+    applyDeltaOpsToMessage(cache, streamState.currentPatchedMessageId, ops);
   }
 
   function upsertMessageNode(cache, message, parentId) {
@@ -512,11 +1204,21 @@
     cache.current_node = message.id;
   }
 
-  function ensureStreamState(conversationId) {
-    let streamState = STREAM_STATE.get(conversationId);
+  function getStreamStateKey(conversationId, topicId = "") {
+    return topicId ? `${conversationId}::${topicId}` : conversationId;
+  }
+
+  function ensureStreamState(conversationId, topicId = "") {
+    const key = getStreamStateKey(conversationId, topicId);
+    let streamState = STREAM_STATE.get(key);
     if (!streamState) {
-      streamState = { currentPatchedMessageId: null };
-      STREAM_STATE.set(conversationId, streamState);
+      streamState = {
+        currentPatchedMessageId: null,
+        pendingOps: [],
+      };
+      STREAM_STATE.set(key, streamState);
+    } else if (!Array.isArray(streamState.pendingOps)) {
+      streamState.pendingOps = [];
     }
     return streamState;
   }
@@ -536,9 +1238,16 @@
       msg.content.parts = [""];
     }
 
+    ops = normalizeOps(ops);
+
     for (const op of ops) {
       if (op.p === "/message/content/parts/0" && op.o === "append") {
         msg.content.parts[0] = (msg.content.parts[0] || "") + String(op.v || "");
+      } else if (
+        op.p === "/message/content/parts/0" &&
+        (op.o === "replace" || op.o === "add")
+      ) {
+        msg.content.parts[0] = String(op.v || "");
       } else if (op.p === "/message/status" && op.o === "replace") {
         msg.status = op.v;
       } else if (op.p === "/message/end_turn" && op.o === "replace") {
@@ -547,6 +1256,10 @@
         msg.metadata = msg.metadata || {};
         msg.metadata.token_count = op.v;
       }
+    }
+
+    if (msg.end_turn) {
+      postStreamNotify(msg);
     }
   }
 
@@ -565,7 +1278,27 @@
   // =========================================================
   // STREAM HELPERS
   // =========================================================
-  function processSseBlock(block, onEvent, streamParserState) {
+  function normalizeOps(ops) {
+    const out = [];
+
+    for (const op of ops || []) {
+      if (!op || typeof op !== "object") continue;
+
+      if (
+        op.o === "patch" &&
+        Array.isArray(op.v)
+      ) {
+        out.push(...normalizeOps(op.v));
+        continue;
+      }
+
+      out.push(op);
+    }
+
+    return out;
+  }
+
+  function processSseBlock(block, onEvent, streamParserState, meta = {}) {
     const lines = block.split("\n").filter(Boolean);
     if (!lines.length) return;
 
@@ -586,7 +1319,7 @@
       if (!raw || raw === "[DONE]") continue;
 
       try {
-        onEvent(eventName, JSON.parse(raw));
+        onEvent(eventName, JSON.parse(raw), meta);
       } catch {
         // JSON 以外は無視
       }
@@ -598,26 +1331,78 @@
       payload?.conversation_id ||
       payload?.v?.conversation_id ||
       payload?.input_message?.conversation_id ||
+      payload?.payload?.conversation_id ||
+      payload?.payload?.payload?.conversation_id ||
+      getConversationIdFromTopicContext(payload) ||
       null
     );
   }
 
-  function handleSseEvent(eventName, payload) {
+  function handleSseEvent(eventName, payload, meta = {}) {
+
+    function applyOrQueueDeltaOps(cache, streamState, ops) {
+      const normalized = normalizeOps(ops);
+      if (!normalized.length) return;
+
+      if (streamState.currentPatchedMessageId) {
+        applyDeltaOpsToMessage(cache, streamState.currentPatchedMessageId, normalized);
+      } else {
+        streamState.pendingOps.push(...normalized);
+      }
+    }
+
     const detectedConversationId = getConversationIdFromSsePayload(payload);
     if (detectedConversationId) {
       LAST_STREAM_CONVERSATION_ID = detectedConversationId;
+      registerConversationTopicContext(payload, detectedConversationId);
+      registerConversationTopicContext(payload?.payload, detectedConversationId);
+      registerConversationTopicContext(payload?.v, detectedConversationId);
     }
 
     const conversationId = detectedConversationId || LAST_STREAM_CONVERSATION_ID;
     if (!conversationId) return;
 
-    const cache = ensureConversationCache(conversationId);
-    const streamState = ensureStreamState(conversationId);
+    const topicId =
+      meta.topicId ||
+      getTopicIdFromPayload(payload) ||
+      "";
 
-    if (payload.type === "input_message" && payload.input_message) {
+    const cache = ensureConversationCache(conversationId);
+    const streamState = ensureStreamState(conversationId, topicId);
+
+    if (payload?.type === "resume_conversation_token") {
+      const topicIdFromPayload = getTopicIdFromPayload(payload);
+      if (topicIdFromPayload) {
+        STREAM_TOPIC_TO_CONVERSATION.set(topicIdFromPayload, conversationId);
+      }
+      return;
+    }
+
+    if (payload?.type === "stream_handoff") {
+      const turnExchangeId = getTurnExchangeIdFromPayload(payload);
+      if (turnExchangeId) {
+        STREAM_TURN_EXCHANGE_TO_CONVERSATION.set(turnExchangeId, conversationId);
+      }
+
+      const options = Array.isArray(payload?.options) ? payload.options : [];
+      for (const option of options) {
+        const optionTopicId = option?.topic_id || "";
+        if (optionTopicId) {
+          STREAM_TOPIC_TO_CONVERSATION.set(optionTopicId, conversationId);
+        }
+      }
+      return;
+    }
+
+    if (payload?.type === "input_message" && payload?.input_message) {
       const msg = payload.input_message;
       const parentId = msg?.metadata?.parent_id || null;
       upsertMessageNode(cache, msg, parentId);
+
+      if (msg?.author?.role === "assistant") {
+        streamState.currentPatchedMessageId = msg.id;
+        flushPendingOps(cache, streamState);
+      }
       return;
     }
 
@@ -628,6 +1413,7 @@
 
       if (msg?.author?.role === "assistant") {
         streamState.currentPatchedMessageId = msg.id;
+        flushPendingOps(cache, streamState);
       }
       return;
     }
@@ -639,21 +1425,55 @@
 
       if (msg?.author?.role === "assistant") {
         streamState.currentPatchedMessageId = msg.id;
+        flushPendingOps(cache, streamState);
       }
       return;
     }
 
+    if (payload?.message?.id) {
+      const msg = payload.message;
+      const parentId = msg?.metadata?.parent_id || null;
+      upsertMessageNode(cache, msg, parentId);
+
+      if (shouldUseAsPatchedTarget(msg)) {
+        streamState.currentPatchedMessageId = msg.id;
+        flushPendingOps(cache, streamState);
+      }
+    }
+
+    if (
+      eventName === "delta" &&
+      payload &&
+      typeof payload === "object" &&
+      typeof payload.p === "string" &&
+      typeof payload.o === "string"
+    ) {
+      applyOrQueueDeltaOps(cache, streamState, [payload]);
+      return;
+    }
+
     if (eventName === "delta" && Array.isArray(payload?.v)) {
-      applyDeltaOpsToMessage(cache, streamState.currentPatchedMessageId, payload.v);
+      applyOrQueueDeltaOps(cache, streamState, payload.v);
       return;
     }
 
     if (eventName === "delta" && Array.isArray(payload)) {
-      applyDeltaOpsToMessage(cache, streamState.currentPatchedMessageId, payload);
+      applyOrQueueDeltaOps(cache, streamState, payload);
+      return;
+    }
+
+    if (Array.isArray(payload?.ops)) {
+      applyOrQueueDeltaOps(cache, streamState, payload.ops);
+      return;
+    }
+
+    if (Array.isArray(payload?.delta)) {
+      applyOrQueueDeltaOps(cache, streamState, payload.delta);
+      return;
     }
   }
 
-  async function consumeConversationStream(response) {
+  async function consumeConversationStream(response, meta = {}) {
     if (!response.body) {
       try {
         const text = await response.text();
@@ -661,7 +1481,7 @@
         const blocks = text.split(/\n\n+/);
 
         for (const block of blocks) {
-          processSseBlock(block, handleSseEvent, streamParserState);
+          processSseBlock(block, handleSseEvent, streamParserState, meta);
         }
       } catch (error) {
         log("stream parse failed (no body)", String(error));
@@ -672,7 +1492,6 @@
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     const streamParserState = { currentEventName: "message" };
-
     let buffer = "";
 
     try {
@@ -686,135 +1505,237 @@
         buffer = blocks.pop() ?? "";
 
         for (const block of blocks) {
-          processSseBlock(block, handleSseEvent, streamParserState);
+          processSseBlock(block, handleSseEvent, streamParserState, meta);
         }
       }
 
       buffer += decoder.decode();
     } catch (error) {
-      if (error?.name !== "AbortError") {
+      if (String(error?.name || "") !== "AbortError") {
         log("stream parse failed", String(error));
         return;
       }
 
-      log("stream aborted after partial read");
+      log("stream aborted after partial read", { url: meta.url || "" });
     }
 
     if (buffer.trim()) {
-      processSseBlock(buffer, handleSseEvent, streamParserState);
+      processSseBlock(buffer, handleSseEvent, streamParserState, meta);
     }
   }
 
   // =========================================================
   // FETCH HOOK
   // =========================================================
-  const originalFetch =
-    window.__CGO_ORIGINAL_FETCH__ ||
-    window.fetch;
+  async function handleFetchResponse({ args, response, url }) {
+    const orgResponse = response;
+    const shouldObserveEventStream =
+      isStreamingConversationRequest(url) || isEventStreamResponse(orgResponse);
 
-  if (!window.__CGO_ORIGINAL_FETCH__) {
-    window.__CGO_ORIGINAL_FETCH__ = originalFetch;
-  }
+    if (
+      !isFileDownloadRequest(url) &&
+      !shouldObserveEventStream &&
+      !isTargetConversationRequest(url) &&
+      !isSnorlaxSidebarRequest(url)
+    ) {
+      return orgResponse;
+    }
 
-  log("window.fetch patched");
-  window.fetch = async (...args) => {
-    const orgResponse = await originalFetch.apply(window, args);
-
-    let response;
+    let clonedResponse = null;
     try {
-      response = orgResponse.clone();
+      clonedResponse = orgResponse.clone();
     } catch {
       return orgResponse;
     }
 
-    try {
-      const url = getRequestUrl(args[0]);
-
-      const auth = getAuthorizationFromFetchArgs(args);
-      if (auth) {
-        window.__CGO_LAST_AUTHORIZATION__ = auth;
-      }
-
-      if (isFileDownloadRequest(url)) {
-        const cloned = response.clone();
-        cloned.json().then((data) => {
-          const { fileId, conversationId } = extractFileIdAndConversationIdFromDownloadUrl(url);
-          if (fileId && conversationId && data?.download_url) {
-            saveFileDownloadResultToCache(fileId, conversationId, data);
-            log("cached file download url", { fileId, conversationId });
-          }
-        }).catch((error) => {
-          log("failed to cache file download response", String(error));
-        });
-
-        return response;
-      }
-
-      if (isStreamingConversationRequest(url)) {
-        const clonedStream = response.clone();
-
-        consumeConversationStream(clonedStream).catch((error) => {
-          log("stream parse failed", String(error));
-        });
-
-        return response;
-      }
-
-      if (!isTargetConversationRequest(url)) {
-        return response;
-      }
-
-      const cloned = response.clone();
-      const contentType = cloned.headers.get("content-type") || "";
-
-      if (!contentType.includes("application/json")) {
-        return response;
-      }
-
-      const data = await cloned.json();
-
-      if (!isFullConversationPayload(data)) {
-        return response;
-      }
-
-      saveFullConversationToCache(data);
-
-      const summary = analyzeConversation(data, CONFIG.turnCount);
-      postAnalysis(url, summary);
-
-      if (!CONFIG.enablePrune) {
-        return response;
-      }
-
-      if (summary?.error) {
-        log("skip prune: summary error", summary.error);
-        return response;
-      }
-
-      if (shouldSkipPrune(summary)) {
-        log("skip prune: low benefit", {
-          chainLength: summary.original?.chainLength,
-          keepNodeCount: summary.prunePlan?.keepNodeCount,
-        });
-        return response;
-      }
-
-      const pruned = pruneConversationData(data, CONFIG.turnCount);
-
-      log("pruned conversation response", {
-        url,
-        originalMappingCount: summary.original?.mappingCount,
-        prunedMappingCount: Object.keys(pruned.mapping || {}).length,
-        currentNode: pruned.current_node,
-        title: pruned.title,
+    if (shouldObserveEventStream) {
+      consumeConversationStream(clonedResponse, { url }).catch((error) => {
+        log("stream parse failed", String(error));
       });
 
-      return buildResponseFromJson(response, pruned);
-    } catch (error) {
-      postError(error);
-      return response;
+      return orgResponse;
     }
+
+    const auth = getAuthorizationFromFetchArgs(args);
+    if (auth) {
+      window.__CGO_LAST_AUTHORIZATION__ = auth;
+    }
+
+    let rawData;
+    try {
+      rawData = await clonedResponse.json();
+    } catch {
+      return orgResponse;
+    }
+
+    if (isSnorlaxSidebarRequest(url)) {
+      try {
+        cacheProjectSidebarPayload(rawData);
+      } catch (error) {
+        log("failed to cache snorlax sidebar response", String(error));
+      }
+
+      return orgResponse;
+    }
+
+    // download API cache
+    if (isFileDownloadRequest(url)) {
+      try {
+        const { fileId, conversationId } =
+          extractFileIdAndConversationIdFromDownloadUrl(url);
+
+        if (fileId && conversationId && rawData?.download_url) {
+          saveFileDownloadResultToCache(fileId, conversationId, rawData);
+          log("cached file download url", { fileId, conversationId });
+        }
+      } catch (error) {
+        log("failed to cache file download response", String(error));
+      }
+
+      return orgResponse;
+    }
+
+    // full conversation / new_branch
+    const data = normalizeConversationPayload(rawData);
+    if (!data) {
+      return orgResponse;
+    }
+
+    saveFullConversationToCache(data);
+
+    const stats = buildConversationStats(data);
+    const baseKeepDomMessages = CONFIG.turnCount;
+
+    const effectiveKeepDomMessages =
+      CONFIG.autoAdjustEnabled && baseKeepDomMessages > 10
+        ? getRecommendedKeepDomMessages(baseKeepDomMessages, stats)
+        : baseKeepDomMessages;
+
+    const summary = analyzeConversation(data, effectiveKeepDomMessages);
+    const projectName = PROJECT_NAME_BY_CONVERSATION_ID.get(data?.conversation_id || "") ||
+      PROJECT_NAME_BY_GIZMO_ID.get(
+        data?.gizmo_id || data?.conversation_template_id || ""
+      ) || "";
+
+    postAnalysis(url, summary);
+
+    Object.assign(stats, summary.original);
+    postAutoAdjustResult(
+      data.conversation_id || "",
+      projectName,
+      baseKeepDomMessages,
+      effectiveKeepDomMessages,
+      stats
+    );
+
+    if (!CONFIG.enablePrune) {
+      return orgResponse;
+    }
+
+    if (summary?.error) {
+      log("skip prune: summary error", summary.error);
+      return orgResponse;
+    }
+
+    if (shouldSkipPrune(summary)) {
+      log("skip prune: low benefit", {
+        chainLength: summary.original?.chainLength,
+        keepNodeCount: summary.prunePlan?.keepNodeCount,
+      });
+      return orgResponse;
+    }
+
+    const pruned = pruneConversationData(data, effectiveKeepDomMessages);
+
+    log("pruned conversation response", {
+      url,
+      originalMappingCount: Object.keys(data.mapping || {}).length,
+      prunedMappingCount: Object.keys(pruned.mapping || {}).length,
+      currentNode: pruned.current_node,
+      title: pruned.title,
+    });
+
+    // new_branch など conversation ラッパー付きレスポンス
+    const isWrapped = rawData && typeof rawData === "object" && "conversation" in rawData;
+    if (isWrapped) {
+      return buildResponseFromJson(clonedResponse, {
+        ...rawData,
+        conversation: pruned,
+      });
+    }
+    // 通常会話レスポンス
+    return buildResponseFromJson(clonedResponse, pruned);
+  }
+
+  window.__CGO_MAIN_HOOK_API__ = {
+    handleFetchResponse,
   };
+
+  patchWebSocket();
+  patchEventSource();
+
+  window.__CGO_MAIN_HOOK_READY__ = true;
+  window.postMessage(
+    {
+      source: "CGO_PAGE",
+      type: "CGO_MAIN_HOOK_READY",
+      version: PAGE_HOOK_VERSION,
+      mainHook: true,
+    },
+    "*"
+  );
+
+  function patchEventSource() {
+    const NativeEventSource = window.EventSource;
+    if (!NativeEventSource || window.__CGO_EVENTSOURCE_PATCHED__) return;
+
+    window.__CGO_ORIGINAL_EVENTSOURCE__ =
+      window.__CGO_ORIGINAL_EVENTSOURCE__ || NativeEventSource;
+
+    function CGOEventSource(url, config) {
+      const es =
+        config === undefined
+          ? new NativeEventSource(url)
+          : new NativeEventSource(url, config);
+
+      try {
+        es.addEventListener("message", (event) => {
+          const raw = typeof event.data === "string" ? event.data : "";
+          const parsed = parseJsonStringSafe(raw);
+          if (parsed) {
+            handleSseEvent(event.type || "message", parsed);
+          }
+        });
+
+        const originalAddEventListener = es.addEventListener;
+        es.addEventListener = function (type, listener, options) {
+          if (type !== "message") {
+            const wrapped = function (event) {
+              const raw = typeof event.data === "string" ? event.data : "";
+              const parsed = parseJsonStringSafe(raw);
+              if (parsed) {
+                handleSseEvent(type, parsed);
+              }
+
+              return listener.call(this, event);
+            };
+            return originalAddEventListener.call(this, type, wrapped, options);
+          }
+          return originalAddEventListener.call(this, type, listener, options);
+        };
+      } catch (error) {
+        log("eventsource patch failed", String(error));
+      }
+
+      return es;
+    }
+
+    CGOEventSource.prototype = NativeEventSource.prototype;
+    Object.setPrototypeOf(CGOEventSource, NativeEventSource);
+
+    window.EventSource = CGOEventSource;
+    window.__CGO_EVENTSOURCE_PATCHED__ = true;
+  }
 
   // =========================================================
   // EXPORT CACHE BRIDGE
@@ -827,7 +1748,16 @@
     if (data.type === "CGO_EXPORT_CACHE_REQUEST") {
       const conversationId = data.conversationId;
       const requestId = data.requestId;
-      const cached = EXPORT_CACHE.get(conversationId);
+
+      const full = EXPORT_CACHE.get(conversationId) || null;
+      const stream = STREAM_CACHE.get(conversationId) || null;
+
+      let cached = null;
+      if (full && stream) {
+        cached = mergeCaches(full, stream);
+      } else {
+        cached = stream || full || null;
+      }
 
       window.postMessage(
         {
@@ -865,6 +1795,5 @@
       );
     }
   });
-
   log("main hook initialized");
 })();
