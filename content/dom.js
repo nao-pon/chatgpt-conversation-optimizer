@@ -97,6 +97,8 @@
                 conversationId,
                 effective,
               });
+              SETTINGS.keepDomMessages = effective;
+              scheduleDomTrim(0);
             })
             .catch((e) => {
               log("[warn] saveConversationOverride failed", String(e));

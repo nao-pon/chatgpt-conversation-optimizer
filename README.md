@@ -7,14 +7,14 @@
 
 **Keep long ChatGPT conversations usable — and worth keeping.**
 
-> Chat is meant to flow.  
-> Useful in the moment, and not always meant to remain on the screen forever.  
->  
-> But some conversations carry things worth keeping.  
-> Decisions, context, experiments, and ideas that may matter again later.  
->  
-> CGO lives somewhere in between:  
-> letting conversation stay light,  
+> Chat is meant to flow.
+> Useful in the moment, and not always meant to remain on the screen forever.
+>
+> But some conversations carry things worth keeping.
+> Decisions, context, experiments, and ideas that may matter again later.
+>
+> CGO lives somewhere in between:
+> letting conversation stay light,
 > while giving important words a way to remain.
 
 Conversation Optimizer for ChatGPT is a Chrome extension designed to keep long conversations usable by reducing live UI weight and focusing on practical export.
@@ -161,4 +161,3 @@ Version 2 is designed around two goals:
 2. making older conversation content easier to preserve and revisit
 
 It is not only a performance tool, but also a workflow tool for people who rely on long ChatGPT sessions.
-

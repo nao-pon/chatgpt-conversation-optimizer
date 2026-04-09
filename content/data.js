@@ -43,6 +43,7 @@
             type: "CGO_EXPORT_CACHE_REQUEST",
             requestId,
             conversationId,
+            secret: window.__CGO_BRIDGE_SECRET__ || "",
           },
           "*"
         );
@@ -100,6 +101,22 @@
 
       const parts = message?.content?.parts;
       if (!Array.isArray(parts)) return false;
+
+      // Check for asset pointers (attachments/uploads)
+      const hasAssetPointer = parts.some((part) => {
+        if (!part || typeof part !== "object") return false;
+        const contentType = part.content_type || "";
+        return (
+          contentType === "image_asset_pointer" ||
+          contentType === "file_asset_pointer" ||
+          contentType === "attachment_asset_pointer" ||
+          !!part.asset_pointer
+        );
+      });
+
+      if (hasAssetPointer) {
+        return true;
+      }
 
       const text = parts
         .filter((v) => typeof v === "string")
@@ -787,7 +804,7 @@
     CGO.normalizeInlineAssetName = function normalizeInlineAssetName(value) {
       return String(value || "")
         .toLowerCase()
-        .replace(/\.[a-z0-9]+$/i, (m) => m)
+        .replace(/\.[a-z0-9]+$/i, "")
         .replace(/[\s　]+/g, "")
         .replace(/[()（）\[\]［］{}｛｝]/g, "")
         .trim();

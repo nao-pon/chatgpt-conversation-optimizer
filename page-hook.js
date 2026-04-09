@@ -5,11 +5,13 @@
   // INSTALL GUARD / CONSTANTS / CONFIG / STATE
   // =========================================================
   const PAGE_HOOK_VERSION = "2";
+  const PAGE_BRIDGE_SECRET = "CGO_BRIDGE_" + Math.random().toString(36).slice(2, 15);
 
   if (window.__CGO_MAIN_HOOK_INSTALLED__) {
     return;
   }
   window.__CGO_MAIN_HOOK_INSTALLED__ = true;
+  window.__CGO_BRIDGE_SECRET__ = PAGE_BRIDGE_SECRET;
 
   const CONFIG = {
     turnCount: 40,
@@ -111,7 +113,8 @@
           source: "CGO_PAGE",
           type: "CGO_PONG",
           version: PAGE_HOOK_VERSION,
-          mainHook: true
+          mainHook: true,
+          secret: PAGE_BRIDGE_SECRET
         },
         "*"
       );
@@ -134,6 +137,7 @@
           type: "CGO_INIT_SETTINGS_ACK",
           version: PAGE_HOOK_VERSION,
           mainHook: true,
+          secret: PAGE_BRIDGE_SECRET,
           applied: {
             turnCount: CONFIG.turnCount,
             autoAdjustEnabled: CONFIG.autoAdjustEnabled,
@@ -2238,6 +2242,11 @@
 
     if (!data) return;
     if (data.type === "CGO_EXPORT_CACHE_REQUEST") {
+      // Authenticate request
+      if (data.secret !== PAGE_BRIDGE_SECRET) {
+        return; // Ignore unauthenticated requests
+      }
+
       const conversationId = data.conversationId;
       const requestId = data.requestId;
 
@@ -2261,6 +2270,11 @@
         "*"
       );
     } else if (data.type === "CGO_LAST_AUTHORIZATION_REQUEST") {
+      // Authenticate request
+      if (data.secret !== PAGE_BRIDGE_SECRET) {
+        return; // Ignore unauthenticated requests
+      }
+
       const { requestId } = data;
       window.postMessage(
         {
@@ -2271,6 +2285,11 @@
         "*"
       );
     } else if (data.type === "CGO_FILE_DOWNLOAD_CACHE_REQUEST") {
+      // Authenticate request
+      if (data.secret !== PAGE_BRIDGE_SECRET) {
+        return; // Ignore unauthenticated requests
+      }
+
       const { fileId, conversationId, requestId } = data;
       const key = getFileDownloadCacheKey(fileId, conversationId);
       const cached = key ? FILE_DOWNLOAD_CACHE.get(key) : null;

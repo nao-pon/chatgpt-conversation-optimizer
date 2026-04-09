@@ -165,7 +165,7 @@
     "message": "折りたたむ"
   },
   "settings_button": {
-    "message": "ChatGPT Optimaizer 設定"
+    "message": "ChatGPT Optimizer 設定"
   },
   "keep_dom_messages_label": {
     "message": "ブラウザに表示するメッセージ数"

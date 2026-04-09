@@ -861,7 +861,7 @@
     }
 
     CGO.getCurrentVisibleMessageId = function getCurrentVisibleMessageId() {
-      const turns = Array.from(document.querySelectorAll("section"));
+      const turns = Array.from(document.querySelectorAll('article[data-testid^="conversation-turn-"]'));
       if (turns.length === 0) return "";
 
       const viewportCenter = window.innerHeight / 2;
@@ -879,7 +879,17 @@
         }
       }
 
-      return bestEl ? bestEl.dataset.turnId || "" : "";
+      if (!bestEl) return "";
+
+      // Parse turn id from data-testid attribute
+      const testId = bestEl.getAttribute('data-testid') || "";
+      const match = testId.match(/^conversation-turn-(.+)$/);
+      if (match) {
+        return match[1];
+      }
+
+      // Fallback to dataset.turnId
+      return bestEl.dataset.turnId || "";
     }
 
     CGO.exportCurrentConversationAsHtml = async function exportCurrentConversationAsHtml(button, action = "download") {

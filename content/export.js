@@ -1,8 +1,8 @@
 (() => {
   if (globalThis.__CGO_SKIP__) return;
   const CGO = (globalThis.__CGO ||= {});
-  with (CGO) {
-    CGO.extractProjectNameFromDocumentTitle = function extractProjectNameFromDocumentTitle(
+
+  CGO.extractProjectNameFromDocumentTitle = function extractProjectNameFromDocumentTitle(
       docTitle,
       conversationTitle
     ) {
@@ -63,6 +63,7 @@
           {
             type: "CGO_LAST_AUTHORIZATION_REQUEST",
             requestId,
+            secret: window.__CGO_BRIDGE_SECRET__ || "",
           },
           "*"
         );
@@ -86,7 +87,7 @@
       concurrency = 3
     ) {
       const imagesNeedingResolution = [];
-      const includeImages = SETTINGS.htmlDownloadIncludeImages !== false;
+      const includeImages = CGO.SETTINGS.htmlDownloadIncludeImages !== false;
 
       for (const message of messages || []) {
         for (const image of message.images || []) {
@@ -109,12 +110,12 @@
       const total = imagesNeedingResolution.length;
       let done = 0;
 
-      await runWithConcurrency(
+      await CGO.runWithConcurrency(
         imagesNeedingResolution,
         async (image) => {
           try {
             // 1) まず cache
-            const cached = await getFileDownloadCacheEntry(image.fileId, conversationId);
+            const cached = await CGO.getFileDownloadCacheEntry(image.fileId, conversationId);
 
             if (cached?.downloadUrl) {
               image.url = cached.downloadUrl;
@@ -125,7 +126,7 @@
               image.mimeType = image.mimeType || cached.mimeType || "";
             } else {
               // 2) 無ければ API
-              const downloadUrl = includeImages ? await resolveDownloadUrlFromFileId(
+              const downloadUrl = includeImages ? await CGO.resolveDownloadUrlFromFileId(
                 image.fileId,
                 conversationId,
                 authorization
@@ -140,7 +141,7 @@
               }
             }
           } catch (error) {
-            log("[warn] export resolveImageUrlsWithDownloadApi failed", {
+            CGO.log("[warn] export resolveImageUrlsWithDownloadApi failed", {
               fileId: image.fileId,
               error: String(error),
             });
@@ -182,30 +183,30 @@
       const total = attachmentsNeedingResolution.length;
       let done = 0;
 
-      await runWithConcurrency(
+      await CGO.runWithConcurrency(
         attachmentsNeedingResolution,
         async (attachment) => {
           try {
-            const cached = await getFileDownloadCacheEntry(attachment.fileId, conversationId);
+            const cached = await CGO.getFileDownloadCacheEntry(attachment.fileId, conversationId);
 
             if (cached?.downloadUrl) {
               attachment.url = cached.downloadUrl;
               attachment.unresolved = false;
               attachment.name = attachment.name || cached.fileName || "";
               attachment.fileSizeBytes = attachment.fileSizeBytes || cached.fileSizeBytes || 0;
-              attachment.kind = guessAttachmentKind(attachment.name, attachment.mimeType);
+              attachment.kind = CGO.guessAttachmentKind(attachment.name, attachment.mimeType);
               attachment.source = `${attachment.source || "file-id"}+download-cache`;
             } else {
               let downloadUrl = "";
               if (attachment.isSandboxArtifact && attachment.sandboxPath) {
-                downloadUrl = await resolveSandboxDownloadUrl(
+                downloadUrl = await CGO.resolveSandboxDownloadUrl(
                   conversationId,
                   attachment.messageId,
                   attachment.sandboxPath,
                   authorization
                 );
               } else {
-                downloadUrl = await resolveDownloadUrlFromFileId(
+                downloadUrl = await CGO.resolveDownloadUrlFromFileId(
                   attachment.fileId,
                   conversationId,
                   authorization
@@ -221,15 +222,15 @@
               }
             }
           } catch (error) {
-            log("[warn] export resolveAttachmentUrlsWithDownloadApi failed", {
+            CGO.log("[warn] export resolveAttachmentUrlsWithDownloadApi failed", {
               fileId: attachment.fileId,
-              code: classifyFetchError(error),
+              code: CGO.classifyFetchError(error),
               status: error?.status,
               detail: error?.detail,
               error: String(error),
             });
             attachment.unresolved = true;
-            attachment.skipReason = classifyFetchError(error);
+            attachment.skipReason = CGO.classifyFetchError(error);
           }
 
           done += 1;
@@ -275,6 +276,7 @@
             requestId,
             fileId,
             conversationId,
+            secret: window.__CGO_BRIDGE_SECRET__ || "",
           },
           "*"
         );
@@ -300,16 +302,16 @@
     }
 
     CGO.buildDomAssetMap = function buildDomAssetMap() {
-      const turns = getTurnArticlesForExport();
+      const turns = CGO.getTurnArticlesForExport();
       const items = [];
 
       for (const turn of turns) {
-        const role = getTurnRoleFromDom(turn);
+        const role = CGO.getTurnRoleFromDom(turn);
         if (role !== "user" && role !== "assistant") continue;
 
-        const messageId = extractMessageIdFromTurn(turn);
-        const images = extractImagesFromTurn(turn);
-        const attachments = extractAttachmentsFromTurn(turn);
+        const messageId = CGO.extractMessageIdFromTurn(turn);
+        const images = CGO.extractImagesFromTurn(turn);
+        const attachments = CGO.extractAttachmentsFromTurn(turn);
 
         items.push({
           role,
@@ -319,7 +321,7 @@
         });
       }
 
-      log("export dom asset map", items.map((item) => ({
+      CGO.log("export dom asset map", items.map((item) => ({
         role: item.role,
         messageId: item.messageId,
         imageCount: item.images.length,
@@ -330,7 +332,7 @@
     }
 
     CGO.imageUrlToDataUrl = async function imageUrlToDataUrl(url) {
-      const blob = await fetchBlobWithAuth(url, "image");
+      const blob = await CGO.fetchBlobWithAuth(url, "image");
 
       if (!blob.type || !blob.type.startsWith("image/")) {
         const error = new Error(
@@ -358,27 +360,27 @@
     CGO.embedImagesInMessages = async function embedImagesInMessages(messages, onProgress, concurrency = 3) {
       const allImages = messages.flatMap((m) => m.images || []);
       const total = allImages.length;
-      const includeImages = SETTINGS.htmlDownloadIncludeImages !== false;
+      const includeImages = CGO.SETTINGS.htmlDownloadIncludeImages !== false;
       let done = 0;
 
-      await runWithConcurrency(
+      await CGO.runWithConcurrency(
         allImages,
         async (image) => {
           if (image.unresolved === false && image.url && includeImages) {
             try {
-              image.embeddedUrl = await imageUrlToDataUrl(image.url);
+              image.embeddedUrl = await CGO.imageUrlToDataUrl(image.url);
               image.skipReason = "";
             } catch (error) {
-              log("[warn] export image embed failed", {
+              CGO.log("[warn] export image embed failed", {
                 url: image.url,
                 fileId: image.fileId,
-                code: classifyFetchError(error),
+                code: CGO.classifyFetchError(error),
                 status: error?.status,
                 contentType: error?.contentType,
                 error: String(error),
               });
               image.embeddedUrl = null;
-              image.skipReason = classifyFetchError(error);
+              image.skipReason = CGO.classifyFetchError(error);
             }
           } else {
             image.embeddedUrl = null;
@@ -431,11 +433,11 @@
             imageResult.source_url ||
             "";
 
-          const url = normalizeMaybeRelativeChatgptUrl(rawUrl);
+          const url = CGO.normalizeMaybeRelativeChatgptUrl(rawUrl);
           if (!url || seen.has(url)) continue;
           seen.add(url);
 
-          results.push(normalizeImageMeta({
+          results.push(CGO.normalizeImageMeta({
             url,
             alt: ref.alt || imageResult.alt || "",
             hint: ref.prompt_text || "",
@@ -491,12 +493,12 @@
     }
 
     CGO.renderImageSourceLink = function renderImageSourceLink(image) {
-      const href = getImageSourceHref(image);
+      const href = CGO.getImageSourceHref(image);
       if (!href) return "";
 
       return `<div class="cgo-image-source">
-      <a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">
-        ${escapeHtml(t("image_source_link_label"))}
+      <a href="${CGO.escapeHtml(href)}" target="_blank" rel="noopener noreferrer">
+        ${CGO.escapeHtml(CGO.t("image_source_link_label"))}
       </a>
     </div>`;
     }
@@ -511,22 +513,22 @@
     CGO.hasToolGeneratedImages = function hasToolGeneratedImages(message) {
       if (!Array.isArray(message?.toolMessages)) return false;
       return message.toolMessages.some(
-        (toolMsg) => extractImageAssetsFromToolMessage(toolMsg).length > 0
+        (toolMsg) => CGO.extractImageAssetsFromToolMessage(toolMsg).length > 0
       );
     }
 
     CGO.isImageCandidateMessage = function isImageCandidateMessage(message) {
       return (
         hasToolGeneratedImages(message) ||
-        extractImageAssetsFromContentReferences(message?.rawMessage || {}).length > 0 ||
-        !!extractPromptFromJsonParamMessage(message?.rawMessage || {})
+        CGO.extractImageAssetsFromContentReferences(message?.rawMessage || {}).length > 0 ||
+        !!CGO.extractPromptFromJsonParamMessage(message?.rawMessage || {})
       );
     }
 
     CGO.extractPromptHintsFromMessage = function extractPromptHintsFromMessage(message) {
       const prompts = [];
 
-      const jsonPrompt = extractPromptFromJsonParamMessage(message?.rawMessage || {});
+      const jsonPrompt = CGO.extractPromptFromJsonParamMessage(message?.rawMessage || {});
       if (jsonPrompt) {
         prompts.push({
           text: jsonPrompt,
@@ -534,7 +536,7 @@
         });
       }
 
-      const hints = extractImageHintsFromMessage(message?.rawMessage || null);
+      const hints = CGO.extractImageHintsFromMessage(message?.rawMessage || null);
       for (const hint of hints) {
         if (!prompts.some((item) => item.text === hint)) {
           prompts.push({
@@ -553,7 +555,7 @@
 
       for (const asset of domAssets || []) {
         if (!asset || asset.role !== "assistant") continue;
-        if (!isNonEmptyArray(asset.images)) continue;
+        if (!CGO.isNonEmptyArray(asset.images)) continue;
 
         if (asset.messageId) {
           byMessageId.set(asset.messageId, asset);
@@ -591,12 +593,29 @@
         .trim();
     }
 
-    CGO.fetchBlobWithAuth = async function fetchBlobWithAuth(url, type = "") {
-      const authorization = await getLastAuthorizationFromPage();
+    CGO.fetchBlobWithAuth = async function fetchBlobWithAuth(url, type = "", timeoutMs = 30000) {
+      const authorization = await CGO.getLastAuthorizationFromPage();
 
       const headers = new Headers();
-      if (authorization) {
-        headers.set("authorization", authorization);
+
+      // Only add auth for trusted OpenAI/ChatGPT origins
+      let credentials = "omit";
+      try {
+        const parsedUrl = new URL(url, location.origin);
+        const hostname = parsedUrl.hostname.toLowerCase();
+        const isTrustedOrigin = (
+          hostname === "chatgpt.com" ||
+          hostname === "chat.openai.com" ||
+          hostname.endsWith(".chatgpt.com") ||
+          hostname.endsWith(".openai.com")
+        );
+
+        if (isTrustedOrigin && authorization) {
+          headers.set("authorization", authorization);
+          credentials = "include";
+        }
+      } catch {
+        // Invalid URL; proceed without auth
       }
 
       if (type == "image") {
@@ -605,17 +624,35 @@
         headers.set("accept", "application/octet-stream,application/*,text/plain,text/*,*/*;q=0.8");
       }
 
-      const response = await fetch(url, {
-        method: "GET",
-        credentials: "include",
-        headers,
-      });
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-      if (!response.ok) {
-        throw createHttpError(response, "Blob fetch");
+      try {
+        const response = await fetch(url, {
+          method: "GET",
+          credentials,
+          headers,
+          signal: controller.signal,
+        });
+
+        clearTimeout(timer);
+
+        if (!response.ok) {
+          throw CGO.createHttpError(response, "Blob fetch");
+        }
+
+        return response.blob();
+      } catch (error) {
+        clearTimeout(timer);
+
+        if (error.name === "AbortError") {
+          const timeoutError = new Error("Fetch timeout");
+          timeoutError.code = "aborted";
+          throw timeoutError;
+        }
+
+        throw error;
       }
-
-      return response.blob();
     }
 
     CGO.saveImagesToZip = async function saveImagesToZip(
@@ -628,25 +665,25 @@
       const imageFolder = zip.folder(projectFolderName ? `${projectFolderName}/images` : "images");
       const allImages = messages.flatMap((m) => m.images || []);
       const zipTargetImages = allImages.filter(
-        (image) => !isProbablyExternalImage(image)
+        (image) => !CGO.isProbablyExternalImage(image)
       );
 
       const total = zipTargetImages.length;
       let done = 0;
       let counter = 1;
 
-      await runWithConcurrency(
+      await CGO.runWithConcurrency(
         zipTargetImages,
         async (image) => {
           try {
             if (image.unresolved === false && image.url) {
-              const blob = await fetchBlobWithAuth(image.url, "image");
+              const blob = await CGO.fetchBlobWithAuth(image.url, "image");
               if (!/^image\//i.test(blob.type || "")) {
                 image.localPath = "";
                 image.skipReason = "unsupported_media";
                 return;
               }
-              const ext = guessExtensionFromMimeType(blob.type);
+              const ext = CGO.guessExtensionFromMimeType(blob.type);
               const fileName = `img_${String(counter++).padStart(4, "0")}.${ext}`;
               const localPath = `images/${fileName}`;
 
@@ -654,13 +691,13 @@
               image.embeddedUrl = null;
               image.skipReason = "";
 
-              const buffer = await blobToArrayBuffer(blob);
+              const buffer = await CGO.blobToArrayBuffer(blob);
               imageFolder.file(fileName, buffer);
             } else {
               image.localPath = "";
             }
           } catch (error) {
-            log("[warn] zip image save failed", {
+            CGO.log("[warn] zip image save failed", {
               url: image.url,
               fileId: image.fileId,
               error: String(error),
@@ -698,19 +735,19 @@
 
       switch (skipReason) {
         case "unresolved":
-          return t("image_skip_unresolved");
+          return CGO.t("image_skip_unresolved");
         case "unsupported_media":
-          return t("image_skip_unsupported_media");
+          return CGO.t("image_skip_unsupported_media");
         case "auth":
-          return t("image_skip_auth");
+          return CGO.t("image_skip_auth");
         case "server":
-          return t("image_skip_server");
+          return CGO.t("image_skip_server");
         case "network":
-          return t("image_skip_network");
+          return CGO.t("image_skip_network");
         case "not_found":
-          return t("image_skip_not_found");
+          return CGO.t("image_skip_not_found");
         case "setting":
-          return t("image_skip_setting");
+          return CGO.t("image_skip_setting");
         default:
           return "";
       }
@@ -722,25 +759,25 @@
 
       switch (skipReason) {
         case "too_large":
-          return t("attachment_skip_too_large", [
-            formatBytes(Number(skipValue || 0))
+          return CGO.t("attachment_skip_too_large", [
+            CGO.formatBytes(Number(skipValue || 0))
           ]);
         case "unresolved":
-          return t("attachment_skip_unresolved");
+          return CGO.t("attachment_skip_unresolved");
         case "sandbox":
-          return t("attachment_skip_sandbox");
+          return CGO.t("attachment_skip_sandbox");
         case "unsupported_media":
-          return t("attachment_skip_unsupported_media");
+          return CGO.t("attachment_skip_unsupported_media");
         case "auth":
-          return t("attachment_skip_auth");
+          return CGO.t("attachment_skip_auth");
         case "server":
-          return t("attachment_skip_server");
+          return CGO.t("attachment_skip_server");
         case "network":
-          return t("attachment_skip_network");
+          return CGO.t("attachment_skip_network");
         case "not_found":
-          return t("attachment_skip_not_found");
+          return CGO.t("attachment_skip_not_found");
         case "expired":
-          return t("attachment_skip_expired");
+          return CGO.t("attachment_skip_expired");
         default:
           return "";
       }
@@ -782,12 +819,12 @@
       let done = 0;
       let counter = 1;
 
-      await runWithConcurrency(
+      await CGO.runWithConcurrency(
         zipTargetAttachments,
         async (attachment) => {
           try {
-            const blob = await fetchBlobWithAuth(attachment.url, "attachment");
-            const ext = guessExtensionFromMimeType(attachment.mimeType || blob.type);
+            const blob = await CGO.fetchBlobWithAuth(attachment.url, "attachment");
+            const ext = CGO.guessExtensionFromMimeType(attachment.mimeType || blob.type);
             const safeBaseName = sanitizeZipFileName(
               attachment.name || `file_${String(counter).padStart(4, "0")}`
             );
@@ -796,7 +833,7 @@
             const fileName = hasExt ? safeBaseName : `${safeBaseName}.${ext}`;
             const numberedName = `${String(counter++).padStart(4, "0")}_${fileName}`;
 
-            const folderPath = getZipSubfolderForAttachment(attachment);
+            const folderPath = CGO.getZipSubfolderForAttachment(attachment);
             const folder = zip.folder(projectFolderName ? `${projectFolderName}/${folderPath}` : folderPath);
             const localPath = `${folderPath}/${numberedName}`;
 
@@ -805,19 +842,19 @@
             attachment.mimeType = attachment.mimeType || blob.type || "";
             attachment.skipReason = "";
 
-            const buffer = await blobToArrayBuffer(blob);
+            const buffer = await CGO.blobToArrayBuffer(blob);
             folder.file(numberedName, buffer);
           } catch (error) {
-            log("[warn] zip attachment save failed", {
+            CGO.log("[warn] zip attachment save failed", {
               name: attachment.name,
               fileId: attachment.fileId,
-              code: classifyFetchError(error),
+              code: CGO.classifyFetchError(error),
               status: error?.status,
               contentType: error?.contentType,
               error: String(error),
             });
             attachment.localPath = "";
-            attachment.skipReason = classifyFetchError(error);
+            attachment.skipReason = CGO.classifyFetchError(error);
           }
 
           done += 1;
@@ -836,9 +873,9 @@
       const externalItems = [];
 
       for (const image of images) {
-        const html = renderSingleImageFigure(image, { mode: "zip" });
+        const html = CGO.renderSingleImageFigure(image, { mode: "zip" });
 
-        if (isProbablyExternalImage(image)) {
+        if (CGO.isProbablyExternalImage(image)) {
           externalItems.push(html);
         } else {
           internalItems.push(html);
@@ -860,31 +897,31 @@
       if (!Array.isArray(attachments) || attachments.length === 0) return "";
 
       const items = attachments.map((attachment) => {
-        const icon = getAttachmentIcon(attachment.kind, (attachment.isSandboxArtifact && !attachment.url));
-        const name = escapeHtml(attachment.name || t("attachment_unknown_name"));
+        const icon = CGO.getAttachmentIcon(attachment.kind, (attachment.isSandboxArtifact && !attachment.url));
+        const name = CGO.escapeHtml(attachment.name || CGO.t("attachment_unknown_name"));
         const kindLabel = escapeHtml(
-          t(`attachment_kind_${attachment.kind || "attachment"}`)
+          CGO.t(`attachment_kind_${attachment.kind || "attachment"}`)
         );
-        const sizeText = escapeHtml(formatBytes(attachment.fileSizeBytes));
+        const sizeText = CGO.escapeHtml(CGO.formatBytes(attachment.fileSizeBytes));
         const meta = [kindLabel, sizeText].filter(Boolean).join(" · ");
 
-        const skipLabel = getAttachmentSkipLabel(attachment);
-        let actionHtml = `<span>${escapeHtml(t("attachment_not_embedded_label"))}</span>`;
+        const skipLabel = CGO.getAttachmentSkipLabel(attachment);
+        let actionHtml = `<span>${CGO.escapeHtml(CGO.t("attachment_not_embedded_label"))}</span>`;
 
         if (skipLabel) {
-          actionHtml = `<span class="cgo-attachment-skip">${escapeHtml(skipLabel)}</span>`;
+          actionHtml = `<span class="cgo-attachment-skip">${CGO.escapeHtml(skipLabel)}</span>`;
         } else if (attachment.localPath) {
-          actionHtml = `<a href="${escapeHtml(attachment.localPath)}" target="_blank" rel="noopener noreferrer">
-          ${escapeHtml(t("attachment_open_local_link"))}
+          actionHtml = `<a href="${CGO.escapeHtml(attachment.localPath)}" target="_blank" rel="noopener noreferrer">
+          ${CGO.escapeHtml(CGO.t("attachment_open_local_link"))}
         </a>`;
         } else if (attachment.url) {
-          actionHtml = `<a href="${escapeHtml(attachment.url)}" target="_blank" rel="noopener noreferrer">
-          ${escapeHtml(t("attachment_open_link"))}
+          actionHtml = `<a href="${CGO.escapeHtml(attachment.url)}" target="_blank" rel="noopener noreferrer">
+          ${CGO.escapeHtml(CGO.t("attachment_open_link"))}
         </a>`;
         }
 
-        return `<div class="cgo-attachment cgo-attachment-${escapeHtml(attachment.kind || "attachment")}">
-        <div class="cgo-attachment-icon" aria-hidden="true">${escapeHtml(icon)}</div>
+        return `<div class="cgo-attachment cgo-attachment-${CGO.escapeHtml(attachment.kind || "attachment")}">
+        <div class="cgo-attachment-icon" aria-hidden="true">${CGO.escapeHtml(icon)}</div>
         <div class="cgo-attachment-main">
           <div class="cgo-attachment-name">${name}</div>
           ${meta ? `<div class="cgo-attachment-meta">${meta}</div>` : ""}
@@ -902,20 +939,20 @@
       if (!Array.isArray(attachments) || attachments.length === 0) return "";
 
       const items = attachments.map((attachment) => {
-        const icon = getAttachmentIcon(attachment.kind, attachment.isSandboxArtifact);
-        const name = escapeHtml(attachment.name || t("attachment_unknown_name"));
+        const icon = CGO.getAttachmentIcon(attachment.kind, attachment.isSandboxArtifact);
+        const name = CGO.escapeHtml(attachment.name || CGO.t("attachment_unknown_name"));
         const kindLabel = escapeHtml(
-          t(`attachment_kind_${attachment.kind || "attachment"}`)
+          CGO.t(`attachment_kind_${attachment.kind || "attachment"}`)
         );
-        const sizeText = escapeHtml(formatBytes(attachment.fileSizeBytes));
+        const sizeText = CGO.escapeHtml(CGO.formatBytes(attachment.fileSizeBytes));
         const meta = [kindLabel, sizeText].filter(Boolean).join(" · ");
 
         let actionHtml = "";
 
-        const skipLabel = getAttachmentSkipLabel(attachment);
+        const skipLabel = CGO.getAttachmentSkipLabel(attachment);
 
         if (skipLabel) {
-          actionHtml = `<span class="cgo-attachment-skip">${escapeHtml(skipLabel)}</span>`;
+          actionHtml = `<span class="cgo-attachment-skip">${CGO.escapeHtml(skipLabel)}</span>`;
         } else if (attachment.isSandboxArtifact) {
           actionHtml = `<span>${escapeHtml(t("attachment_sandbox_artifact_label"))}</span>`;
         } else if (attachment.url) {
@@ -926,8 +963,8 @@
           actionHtml = `<span>${escapeHtml(t("attachment_not_embedded_label"))}</span>`;
         }
 
-        return `<div class="cgo-attachment cgo-attachment-${escapeHtml(attachment.kind || "attachment")}">
-        <div class="cgo-attachment-icon" aria-hidden="true">${escapeHtml(icon)}</div>
+        return `<div class="cgo-attachment cgo-attachment-${CGO.escapeHtml(attachment.kind || "attachment")}">
+        <div class="cgo-attachment-icon" aria-hidden="true">${CGO.escapeHtml(icon)}</div>
         <div class="cgo-attachment-main">
           <div class="cgo-attachment-name">${name}</div>
           ${meta ? `<div class="cgo-attachment-meta">${meta}</div>` : ""}
@@ -946,12 +983,12 @@
         throw new Error("JSZip is not loaded");
       }
 
-      const conversationId = getConversationIdFromLocation();
+      const conversationId = CGO.getConversationIdFromLocation();
       if (!conversationId) {
         throw new Error("conversationId not found");
       }
 
-      const conversationData = await getConversationFromCache();
+      const conversationData = await CGO.getConversationFromCache();
       if (!conversationData) {
         throw new Error("conversation cache not found");
       }
@@ -959,14 +996,14 @@
       const mapping = conversationData.mapping || {};
       const currentNode = conversationData.current_node || null;
 
-      const chain = buildExportChain(mapping, currentNode);
-      const baseMessages = normalizeMessagesForExport(chain, mapping);
-      const domAssets = buildDomAssetMap();
-      const messages = mergeMessagesWithDomAssets(baseMessages, domAssets);
-      const authorization = await getLastAuthorizationFromPage();
-      const highlightJsContent = await loadExtensionTextFile("vendor/highlight.min.js");
-      const highlightCssContent = await loadExtensionTextFile("vendor/github-dark.min.css");
-      const sharedExportAssets = await getSharedExportAssets();
+      const chain = CGO.buildExportChain(mapping, currentNode);
+      const baseMessages = CGO.normalizeMessagesForExport(chain, mapping);
+      const domAssets = CGO.buildDomAssetMap();
+      const messages = CGO.mergeMessagesWithDomAssets(baseMessages, domAssets);
+      const authorization = await CGO.getLastAuthorizationFromPage();
+      const highlightJsContent = await CGO.loadExtensionTextFile("vendor/highlight.min.js");
+      const highlightCssContent = await CGO.loadExtensionTextFile("vendor/github-dark.min.css");
+      const sharedExportAssets = await CGO.getSharedExportAssets();
 
       await resolveImageUrlsWithDownloadApi(
         messages,
@@ -974,7 +1011,7 @@
         authorization,
         ({ done, total }) => {
           if (total > 0 && exportButton) {
-            setToolbarButtonText(exportButton, t("export_resolving_progress", [done, total]));
+            CGO.setToolbarButtonText(exportButton, CGO.t("export_resolving_progress", [done, total]));
           }
         },
         3
@@ -986,7 +1023,7 @@
         authorization,
         ({ done, total }) => {
           if (total > 0 && exportButton) {
-            setToolbarButtonText(exportButton, t("export_resolving_attachments_progress", [done, total]));
+            CGO.setToolbarButtonText(exportButton, CGO.t("export_resolving_attachments_progress", [done, total]));
           }
         },
         3
@@ -1000,7 +1037,7 @@
               "ChatGPT Conversation";*/
       const conversationTitle = (conversationData?.title || "").trim() || "ChatGPT Conversation";
 
-      const fallbackProjectName = extractProjectNameFromDocumentTitle(
+      const fallbackProjectName = CGO.extractProjectNameFromDocumentTitle(
         document.title, conversationTitle
       );
 
@@ -1010,9 +1047,9 @@
         ? `${projectName} / ${conversationTitle}`
         : conversationTitle;
 
-      const htmlFileBase = sanitizeZipFileName(conversationTitle || "ChatGPT Conversation");
+      const htmlFileBase = CGO.sanitizeZipFileName(conversationTitle || "ChatGPT Conversation");
       const projectFolderName = projectName
-        ? sanitizeZipFileName(projectName) + "/" + htmlFileBase
+        ? CGO.sanitizeZipFileName(projectName) + "/" + htmlFileBase
         : "";
 
       const htmlEntryPath = projectFolderName
@@ -1023,26 +1060,26 @@
         ? `${projectFolderName}/assets`
         : "assets";
 
-      const includeImages = SETTINGS.htmlDownloadIncludeImages !== false;
+      const includeImages = CGO.SETTINGS.htmlDownloadIncludeImages !== false;
 
-      await saveImagesToZip(
+      await CGO.saveImagesToZip(
         messages,
         zip,
         ({ done, total }) => {
           if (total > 0 && exportButton) {
-            setToolbarButtonText(exportButton, t("export_zip_progress", [done, total]));
+            CGO.setToolbarButtonText(exportButton, CGO.t("export_zip_progress", [done, total]));
           }
         },
         3,
         projectFolderName
       );
 
-      await saveAttachmentsToZip(
+      await CGO.saveAttachmentsToZip(
         messages,
         zip,
         ({ done, total }) => {
           if (total > 0 && exportButton) {
-            setToolbarButtonText(exportButton, t("export_zip_attachments_progress", [done, total]));
+            CGO.setToolbarButtonText(exportButton, CGO.t("export_zip_attachments_progress", [done, total]));
           }
         },
         3,
@@ -1051,17 +1088,17 @@
       );
 
       for (const message of messages) {
-        prepareInlineImageData(message);
+        CGO.prepareInlineImageData(message);
       }
 
-      const html = buildConversationExportHtml(
+      const html = CGO.buildConversationExportHtml(
         title,
         conversationId,
         messages,
         {
           zipMode: true,
-          imageRenderer: renderImagesForZip,
-          attachmentRenderer: renderAttachmentsForZip,
+          imageRenderer: CGO.renderImagesForZip,
+          attachmentRenderer: CGO.renderAttachmentsForZip,
           interactiveCode: true,
           highlightAttach: true,
           includeImages,
@@ -1083,8 +1120,8 @@
 
       const zipBlob = await zip.generateAsync({ type: "blob" });
 
-      const fileNameBase = sanitizeZipFileName(title);
-      const downloadName = buildSafeFilename(fileNameBase, "zip");
+      const fileNameBase = CGO.sanitizeZipFileName(title);
+      const downloadName = CGO.buildSafeFilename(fileNameBase, "zip");
 
       const url = URL.createObjectURL(zipBlob);
       const a = document.createElement("a");
@@ -1096,6 +1133,4 @@
 
       setTimeout(() => URL.revokeObjectURL(url), 5000);
     }
-
-  }
 })();

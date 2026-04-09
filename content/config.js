@@ -497,6 +497,10 @@
           if (!data || data.source !== "CGO_PAGE") return;
 
           if (data.type === "CGO_INIT_SETTINGS_ACK" && data.mainHook === true) {
+            // Store the bridge secret for authenticated requests
+            if (data.secret) {
+              window.__CGO_BRIDGE_SECRET__ = data.secret;
+            }
             cleanup();
             resolve(data.version === PAGE_HOOK_VERSION);
           }

@@ -97,6 +97,19 @@
   }
 
   /**
+   * Generate a consistent DOM id for a message element.
+   *
+   * Takes a raw message ID and returns the exact string used for the element's id attribute,
+   * ensuring lookups and template generation use the same normalization.
+   *
+   * @param {string} messageId - The raw message identifier.
+   * @returns {string} The normalized id string prefixed with "mes-".
+   */
+  function makeMessageDomId(messageId) {
+    return `mes-${escapeHtml(messageId || "")}`;
+  }
+
+  /**
    * Create a customized marked renderer that produces application-styled HTML for code blocks and inline code.
    *
    * The returned renderer renders fenced/code blocks as a code panel that includes a language label and a copy button,
@@ -161,13 +174,14 @@
     const source = typeof text === "string" ? text : "";
     if (!source.trim()) return "";
 
-    const escapedSrc = escapeHtml(stripChatgptUiArtifacts(source));
+    const strippedSrc = stripChatgptUiArtifacts(source);
 
     if (typeof marked === "undefined") {
+      const escapedSrc = escapeHtml(strippedSrc);
       return `<div class="cgo-markdown"><p>${escapedSrc.replace(/\n/g, "<br>")}</p></div>`;
     }
 
-    const rawHtml = marked.parse(escapedSrc, {
+    const rawHtml = marked.parse(strippedSrc, {
       breaks: true,
       gfm: true,
       renderer: createMarkedRenderer(),
@@ -338,13 +352,31 @@
     const externalItems = [];
 
     for (const image of images) {
-      const src = image?.embeddedUrl || image?.url || "";
+      const rawSrc = image?.embeddedUrl || image?.url || "";
       const alt = escapeHtml(image?.alt || "");
       const caption = escapeHtml(image?.alt || image?.title || "");
 
+      // Validate URL scheme
+      let src = "";
+      let isExternal = false;
+      if (rawSrc) {
+        try {
+          if (/^https?:\/\//i.test(rawSrc)) {
+            src = rawSrc;
+            isExternal = true;
+          } else if (/^data:image\//i.test(rawSrc)) {
+            src = rawSrc;
+            isExternal = false;
+          }
+          // Otherwise treat as missing (disallow other schemes)
+        } catch {
+          // Invalid URL; treat as missing
+        }
+      }
+
       const figureHtml = src
-        ? `<figure class="cgo-image${/^https?:\/\//i.test(src) ? " cgo-image-external" : ""}">
-            <img src="${escapeHtml(src)}" alt="${alt}"${/^https?:\/\//i.test(src) ? ' loading="lazy" referrerpolicy="no-referrer"' : ""}>
+        ? `<figure class="cgo-image${isExternal ? " cgo-image-external" : ""}">
+            <img src="${escapeHtml(src)}" alt="${alt}"${isExternal ? ' loading="lazy" referrerpolicy="no-referrer"' : ""}>
             ${caption ? `<figcaption>${caption}</figcaption>` : ""}
             ${renderImageMeta(image)}
           </figure>`
@@ -353,7 +385,7 @@
             ${caption ? `<figcaption>${caption}</figcaption>` : ""}
           </figure>`;
 
-      if (/^https?:\/\//i.test(src)) {
+      if (isExternal) {
         externalItems.push(figureHtml);
       } else {
         internalItems.push(figureHtml);
@@ -377,8 +409,21 @@
 
     return `<div class="cgo-attachments">${attachments.map((attachment) => {
       const name = escapeHtml(attachment?.name || "attachment");
-      const href = attachment?.localPath || attachment?.url || "";
+      const rawHref = attachment?.localPath || attachment?.url || "";
       const meta = escapeHtml(t("attachment_not_embedded_label"));
+
+      // Validate URL scheme (only allow http: and https:)
+      let href = "";
+      if (rawHref) {
+        try {
+          if (/^https?:\/\//i.test(rawHref)) {
+            href = rawHref;
+          }
+          // Otherwise omit the link (disallow other schemes)
+        } catch {
+          // Invalid URL; omit link
+        }
+      }
 
       return `<div class="cgo-attachment">
         <div class="cgo-attachment-icon" aria-hidden="true">📎</div>
@@ -412,7 +457,7 @@
     const sourceText = typeof message.renderText === "string" ? message.renderText : (message.text || "");
     const rawMarkdownJson = JSON.stringify(typeof sourceText === "string" ? sourceText : "").replace(/<\//g, "<\/");
 
-    return `<section class="message ${escapeHtml(message.role || "")}" id="mes-${escapeHtml(message.id || "")}">
+    return `<section class="message ${escapeHtml(message.role || "")}" id="${makeMessageDomId(message.id)}">
   <script type="application/json" class="cgo-message-markdown">${rawMarkdownJson}</script>
   <div class="message-header">
     <div class="message-header-main">
@@ -436,8 +481,8 @@
   }
 
   /**
-   * Loads and consumes the viewer payload stored under `cgo_viewer_<token>` where `token` is taken from the page's query string; removes the stored entry after reading.
-   * @returns {any} The payload object retrieved from storage.
+   * Loads the viewer payload stored under `cgo_viewer_<token>` where `token` is taken from the page's query string.
+   * @returns {{payload: any, key: string}} An object containing the payload and storage key.
    * @throws {Error} If the `token` query parameter is missing ("viewer token not found").
    * @throws {Error} If no payload is found for the token ("viewer payload not found").
    */
@@ -450,10 +495,8 @@
     const stored = await chrome.storage.local.get(key);
     const payload = stored?.[key];
 
-    await chrome.storage.local.remove(key);
-
     if (!payload) throw new Error("viewer payload not found");
-    return payload;
+    return { payload, key };
   }
 
   /**
@@ -475,12 +518,14 @@
    * Initialize and render the CGO Viewer page from a stored export payload.
    *
    * Loads the export payload, sets document language/title/meta, renders message HTML into #app,
-   * installs UI handlers, and scrolls to a specific message if requested; on failure it renders
-   * an error UI and logs the error.
+   * installs UI handlers, and scrolls to a specific message if requested; deletes the stored payload
+   * only after successful rendering. On failure it renders an error UI and logs the error.
    */
   async function main() {
+    let storageKey = null;
     try {
-      const payload = await loadPayload();
+      const { payload, key } = await loadPayload();
+      storageKey = key;
 
       document.documentElement.lang = chrome?.i18n?.getUILanguage?.() || document.documentElement.lang || "en";
       document.title = payload.title || t("untitled_conversation") || "CGO Viewer";
@@ -494,14 +539,20 @@
 
       installHandlers(payload);
 
-      if (payload.messageId && typeof CSS !== "undefined" && CSS.escape) {
-        document.getElementById(`mes-${CSS.escape(payload.messageId)}`)?.scrollIntoView({ block: "start" });
+      if (payload.messageId) {
+        document.getElementById(makeMessageDomId(payload.messageId))?.scrollIntoView({ block: "start" });
+      }
+
+      // Only remove storage after successful render
+      if (storageKey) {
+        await chrome.storage.local.remove(storageKey);
       }
     } catch (error) {
       document.title = "CGO Viewer Error";
       document.getElementById("page-title").textContent = "CGO Viewer Error";
       document.getElementById("app").innerHTML = `<pre>${escapeHtml(String(error?.message || error))}</pre>`;
       console.error(error);
+      // Do not remove storage on error, allowing retry
     }
   }
 

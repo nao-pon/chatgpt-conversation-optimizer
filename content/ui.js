@@ -797,17 +797,23 @@
 
       if (state === "idle") {
         button.disabled = false;
-        setToolbarButtonText(button, t("download"))
+        button.setAttribute("aria-disabled", "false");
+        button.classList.remove("cgo-btn-disabled");
+        setToolbarButtonText(button, "");
       }
 
       if (state === "loading") {
         button.disabled = true;
+        button.setAttribute("aria-disabled", "true");
+        button.classList.add("cgo-btn-disabled");
         setToolbarButtonText(button, t("exporting"));
       }
 
-      if (state === "error") {
+      if (state === "error" || state === "export_retry") {
         button.disabled = false;
-        setToolbarButtonText(button, t("retry"));
+        button.setAttribute("aria-disabled", "false");
+        button.classList.remove("cgo-btn-disabled");
+        setToolbarButtonText(button, t("export_retry"));
       }
     }
 
