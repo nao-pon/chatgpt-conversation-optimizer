@@ -1,4 +1,12 @@
 (() => {
+  /**
+   * Retrieve a localized message for the given key using chrome.i18n when available.
+   *
+   * Suppresses any errors and returns an empty string if the translation is missing or retrieval fails.
+   * @param {string} key - The i18n message key.
+   * @param {Array|Object} [substitutions] - Optional substitutions passed to chrome.i18n.getMessage (array or mapping).
+   * @returns {string} The localized message if found and truthy, otherwise an empty string.
+   */
   function i18nGetMessage(key, substitutions) {
     try {
       if (globalThis.chrome?.i18n?.getMessage) {
@@ -9,6 +17,13 @@
     return "";
   }
 
+  /**
+   * Resolve a localized message for a given key with optional substitutions and sensible fallbacks.
+   *
+   * @param {string} key - The message key to resolve.
+   * @param {string|Array<string|number>|undefined} [substitutions] - Optional substitution(s) for the message; when an array is provided, the first element is used for fallback formatting.
+   * @returns {string} The localized message if available; if the key is `"thought_item_fallback"`, returns `Thought <n>` where `n` is taken from `substitutions`; otherwise returns the original `key`.
+   */
   function t(key, substitutions) {
     const value = i18nGetMessage(key, substitutions);
     if (value) return value;
@@ -19,6 +34,13 @@
     return key;
   }
 
+  /**
+   * Escape special HTML characters in a value so it can be safely inserted into HTML.
+   *
+   * Converts the input to a string and replaces &, <, >, " and ' with their corresponding HTML entities.
+   * @param {*} text - Value to escape; non-string values will be converted to a string.
+   * @returns {string} The escaped string with `&`, `<`, `>`, `"` and `'` replaced by HTML entities.
+   */
   function escapeHtml(text) {
     return String(text)
       .replace(/&/g, "&amp;")
@@ -28,12 +50,24 @@
       .replace(/'/g, "&#39;");
   }
 
+  /**
+   * Decode HTML entities in a value and return the resulting plain text.
+   *
+   * @param {*} html - The value containing HTML-escaped text; falsy values are treated as an empty string.
+   * @returns {string} The decoded string with HTML entities converted to their corresponding characters.
+   */
   function unescapeHtml(html) {
     const el = document.createElement("textarea");
     el.innerHTML = String(html || "");
     return el.value;
   }
 
+  /**
+   * Remove proprietary ChatGPT UI artifact markers, collapse excessive blank lines, and trim the result.
+   * 
+   * @param {*} text - Input value to be normalized; will be converted to a string.
+   * @returns {string} The cleaned string with artifact sequences removed, runs of three or more newlines collapsed to two, and surrounding whitespace trimmed.
+   */
   function stripChatgptUiArtifacts(text) {
     return String(text || "")
       .replace(/\uE200(?:filecite|cite)\uE202[\s\S]*?\uE201/g, "")
@@ -43,6 +77,15 @@
       .trim();
   }
 
+  /**
+   * Extracts a plain string from a marked token, string, or other value.
+   *
+   * If `value` is a string it is returned unchanged. If `value` is an object, the first present string among
+   * its `text`, `raw`, or `lang` properties is returned. For any other input, returns `String(value ?? "")`.
+   *
+   * @param {*} value - A string, a token-like object (with `text`, `raw`, or `lang`), or any other value.
+   * @returns {string} The extracted or converted string.
+   */
   function getMarkedTextValue(value) {
     if (typeof value === "string") return value;
     if (value && typeof value === "object") {
@@ -53,6 +96,14 @@
     return String(value ?? "");
   }
 
+  /**
+   * Create a customized marked renderer that produces application-styled HTML for code blocks and inline code.
+   *
+   * The returned renderer renders fenced/code blocks as a code panel that includes a language label and a copy button,
+   * and renders inline code spans with escaped content suitable for safe insertion into the document.
+   *
+   * @returns {marked.Renderer} A configured marked renderer with custom `code` and `codespan` handlers.
+   */
   function createMarkedRenderer() {
     const renderer = new marked.Renderer();
 
@@ -97,6 +148,15 @@
     return renderer;
   }
 
+  /**
+   * Convert message text (plain or Markdown) into sanitized HTML suitable for embedding in the page.
+   *
+   * This strips known ChatGPT UI artifact sequences, escapes HTML, renders Markdown when `marked` is available
+   * (falling back to simple paragraph/line-break conversion), sanitizes the generated HTML with `DOMPurify`
+   * when present, and ensures all links open in a new tab with `rel="noopener noreferrer"`.
+   * @param {string} text - The message content to render; non-string values are treated as empty.
+   * @returns {string} An HTML string wrapped in a `<div class="cgo-markdown">` containing the rendered and sanitized content.
+   */
   function renderMessageTextToHtml(text) {
     const source = typeof text === "string" ? text : "";
     if (!source.trim()) return "";
@@ -133,6 +193,10 @@
     return `<div class="cgo-markdown">${wrapper.innerHTML}</div>`;
   }
 
+  /**
+   * Get the inline SVG markup used for the thought icon.
+   * @returns {string} SVG markup string for the thought icon.
+   */
   function getThoughtIconSvg() {
     return `
 <svg viewBox="0 0 24 24" aria-hidden="true" class="cgo-thought-icon">
@@ -140,6 +204,13 @@
 </svg>`;
   }
 
+  /**
+   * Provide the inline SVG markup used for the markdown copy button icon.
+   *
+   * The returned SVG string contains the markup for a 24×24 markdown-copy icon and includes
+   * the `cgo-markdown-copy-icon` CSS class and `aria-hidden="true"`.
+   * @returns {string} The SVG markup string for the markdown-copy icon.
+   */
   function getMarkdownCopyIconSvg() {
     return `
 <svg viewBox="0 0 24 24" aria-hidden="true" class="cgo-markdown-copy-icon">
@@ -150,6 +221,11 @@
 </svg>`;
   }
 
+  /**
+   * Format a Unix timestamp (seconds) into a locale-aware date and time string.
+   * @param {number|any} value - Seconds since the Unix epoch; if falsy the function returns an empty string.
+   * @returns {string} The local date/time string for the given timestamp, or `""` if `value` is falsy or cannot be parsed.
+   */
   function formatExportDate(value) {
     if (!value) return "";
     try {
@@ -159,6 +235,12 @@
     }
   }
 
+  /**
+   * Render a list of "thought" items as a toolbar of toggles and corresponding hidden panels in HTML.
+   * @param {Array<object>} thoughts - Array of thought objects; each may include `summary`, `content`, and `finished`.
+   * @param {string|number} [messageId] - Identifier used to derive stable DOM IDs for each thought panel.
+   * @returns {string} An HTML string containing the thoughts toolbar and panels, or an empty string if `thoughts` is empty or not an array.
+   */
   function renderThoughts(thoughts, messageId) {
     if (!Array.isArray(thoughts) || thoughts.length === 0) return "";
 
@@ -198,6 +280,16 @@
 </div>`;
   }
 
+  /**
+   * Render an image's metadata as an escaped HTML fragment.
+   *
+   * @param {Object} image - Image metadata object.
+   * @param {number} [image.width] - Image width in pixels.
+   * @param {number} [image.height] - Image height in pixels.
+   * @param {number|string} [image.fileSizeBytes] - File size in bytes.
+   * @param {string} [image.mimeType] - MIME type string.
+   * @returns {string} An HTML string containing joined, escaped metadata (dimensions, human-readable file size, MIME type) separated by " · ", or an empty string when no metadata is available.
+   */
   function renderImageMeta(image) {
     const parts = [];
 
@@ -225,6 +317,20 @@
     return `<div class="cgo-image-meta">${escapeHtml(parts.join(" · "))}</div>`;
   }
 
+  /**
+   * Render an array of image descriptors into HTML blocks grouping internal and external images.
+   *
+   * @param {Array<Object>} images - List of image objects. Each object may contain:
+   *   - {string} [embeddedUrl] - Preferred source URL for embedded images.
+   *   - {string} [url] - Fallback source URL.
+   *   - {string} [alt] - Alternate text used for the image and as a caption fallback.
+   *   - {string} [title] - Caption fallback when `alt` is not provided.
+   *   - {number} [width], {number} [height], {number} [fileSizeBytes], {string} [mimeType] - Optional metadata used by renderImageMeta.
+   * @returns {string} An HTML string with two optional containers:
+   *   - A `.cgo-images-internal` block for non-http(s) sources.
+   *   - A `.cgo-images-external` block for http(s) sources (images get `loading="lazy"` and `referrerpolicy="no-referrer"`).
+   *   Returns an empty string when `images` is not a non-empty array.
+   */
   function renderImages(images) {
     if (!Array.isArray(images) || images.length === 0) return "";
 
@@ -260,6 +366,12 @@
     ].join("\n");
   }
 
+  /**
+   * Render an HTML fragment representing a list of attachments.
+   *
+   * @param {Array<Object>} attachments - Array of attachment objects. Each object may include `name`, `localPath`, and `url`.
+   * @returns {string} An HTML string containing rendered attachment rows, or an empty string if `attachments` is not a non-empty array.
+   */
   function renderAttachments(attachments) {
     if (!Array.isArray(attachments) || attachments.length === 0) return "";
 
@@ -281,6 +393,19 @@
     }).join("\n")}</div>`;
   }
 
+  /**
+   * Render a conversation message into an HTML section string suitable for insertion into the viewer.
+   *
+   * @param {Object} message - Message data used to build the section.
+   * @param {string} [message.id] - Message identifier used for the section's id attribute.
+   * @param {string} [message.role] - Sender role (e.g., "user" or assistant) used for role label and CSS class.
+   * @param {number|string} [message.createTime] - Export timestamp (seconds) used to generate the displayed date.
+   * @param {string} [message.renderText] - Preferred markdown source text to render; falls back to `message.text`.
+   * @param {Array} [message.thoughts] - Optional thoughts array to render below the message body.
+   * @param {Array} [message.visibleImages] - Optional array of images to render (falls back to `message.images`).
+   * @param {Array} [message.visibleAttachments] - Optional array of attachments to render (falls back to `message.attachments`).
+   * @returns {string} An HTML string for the message section, including a JSON <script> with the raw markdown, header (role/date and copy action), and rendered body (markdown, thoughts, images, attachments).
+   */
   function buildMessageHtml(message) {
     const roleLabel = message.role === "user" ? t("role_user") : t("role_assistant");
     const dateText = formatExportDate(message.createTime);
@@ -310,6 +435,12 @@
 </section>`;
   }
 
+  /**
+   * Loads and consumes the viewer payload stored under `cgo_viewer_<token>` where `token` is taken from the page's query string; removes the stored entry after reading.
+   * @returns {any} The payload object retrieved from storage.
+   * @throws {Error} If the `token` query parameter is missing ("viewer token not found").
+   * @throws {Error} If no payload is found for the token ("viewer payload not found").
+   */
   async function loadPayload() {
     const params = new URLSearchParams(location.search);
     const token = params.get("token");
@@ -325,6 +456,13 @@
     return payload;
   }
 
+  /**
+   * Initialize the optional CGO export UI (if present) with feature flags and a label resolver.
+   *
+   * When a global `window.CGOExportUI` exists, calls its `init` method to enable code actions,
+   * disable built-in highlighting, and provide a `getLabel` callback that resolves localization
+   * keys via `t(key)` with fallbacks.
+   */
   function installHandlers(payload) {
     window.CGOExportUI?.init({
       enableCodeActions: true,
@@ -333,6 +471,13 @@
     });
   }
 
+  /**
+   * Initialize and render the CGO Viewer page from a stored export payload.
+   *
+   * Loads the export payload, sets document language/title/meta, renders message HTML into #app,
+   * installs UI handlers, and scrolls to a specific message if requested; on failure it renders
+   * an error UI and logs the error.
+   */
   async function main() {
     try {
       const payload = await loadPayload();

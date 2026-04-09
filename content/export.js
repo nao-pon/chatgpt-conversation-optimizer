@@ -31,6 +31,11 @@
           resolve("");
         }, timeoutMs);
 
+        /**
+         * Abort the pending request and clean up associated resources.
+         *
+         * Ensures idempotent cleanup by clearing the timeout and removing the window message listener only once.
+         */
         function cleanup() {
           if (done) return;
           done = true;
@@ -38,6 +43,10 @@
           window.removeEventListener("message", onMessage);
         }
 
+        /**
+         * Process window message events for CGO_LAST_AUTHORIZATION_RESPONSE; when a message with the expected requestId is received, perform cleanup and resolve the pending authorization with the provided string or an empty string.
+         * @param {MessageEvent} event - The window message event to inspect; ignored unless it originates from window, has `type === "CGO_LAST_AUTHORIZATION_RESPONSE"`, and matches the expected requestId.
+         */
         function onMessage(event) {
           if (event.source !== window) return;
           const data = event.data;
@@ -242,6 +251,10 @@
           resolve(null);
         }, timeoutMs);
 
+        /**
+         * Handle window "message" events for a specific CGO file download cache request and finalize the associated promise when a matching response arrives.
+         * @param {MessageEvent} event - The message event to inspect; ignored unless it originates from the same window, has type `"CGO_FILE_DOWNLOAD_CACHE_RESPONSE"`, and matches the current `requestId`. On match, clears the timeout, removes this listener, and resolves with `data.data` or `null`.
+         */
         function handler(event) {
           if (event.source !== window) return;
 

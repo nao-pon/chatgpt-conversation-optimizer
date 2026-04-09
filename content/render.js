@@ -824,6 +824,12 @@
       setTimeout(() => URL.revokeObjectURL(url), 60000);
     }
 
+    /**
+     * Stores a payload temporarily in chrome.storage.local under a generated token and opens the export viewer page for that token in a new tab.
+     *
+     * The function adds an `exportedAt` timestamp to the stored payload and generates a token used both as the storage key prefix (`cgo_viewer_<token>`) and as a `token` query parameter to viewer.html.
+     * @param {Object} payload - Arbitrary serializable data to make available to the lightweight viewer.
+     */
     async function openLightweightViewer(payload) {
       const token =
         Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 10);
