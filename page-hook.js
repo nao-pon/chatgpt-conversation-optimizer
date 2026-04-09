@@ -501,9 +501,10 @@
   /**
    * Adjusts the recommended number of recent conversation messages to retain based on conversation statistics.
    *
-   * @param {number} baseKeepDomMessages - Preferred base keep count; when falsy the function falls back to CONFIG.turnCount or 15.
-   * @param {{turnCount?: number, textLength?: number, imageCount?: number, attachmentCount?: number}} stats - Conversation statistics used to compute a heuristic score: `turnCount`, cumulative `textLength`, number of `imageCount`, and `attachmentCount`.
-   * @returns {number} The adjusted keep count (an integer) computed from the heuristic score, bounded to sensible minima and maxima.
+   * `@param` {number} baseKeepDomMessages - Preferred base keep count; when falsy the function falls back to CONFIG.turnCount or 15.
+   * `@param` {{turnCount?: number, textLength?: number, imageCount?: number, attachmentCount?: number}} stats - Conversation statistics used to compute a heuristic score: `turnCount`, cumulative `textLength`, number of `imageCount`, and `attachmentCount`.
+   * `@returns` {number} The adjusted keep count (an integer) computed from the heuristic score, bounded to sensible minima and maxima.
+   */
   function getRecommendedKeepDomMessages(baseKeepDomMessages, stats) {
     const base = Math.max(1, Number(baseKeepDomMessages || CONFIG.turnCount || 15));
 
