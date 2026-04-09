@@ -335,6 +335,9 @@
           resolve(false);
         }, timeoutMs);
 
+        /**
+         * Stop any pending timeout and unregister the message event listener, performing cleanup exactly once.
+         */
         function cleanup() {
           if (done) return;
           done = true;
@@ -342,6 +345,11 @@
           window.removeEventListener("message", onMessage);
         }
 
+        /**
+         * Announces the content script to the page hook by posting a ping message on window.
+         *
+         * Posts a message with the shape `{ source: "CGO_CONTENT", type: "CGO_PING", version: PAGE_HOOK_VERSION }` via `window.postMessage`.
+         */
         function sendPing() {
           window.postMessage(
             {
@@ -353,6 +361,15 @@
           );
         }
 
+        /**
+         * Handle window 'message' events for the CGO bootstrap handshake.
+         *
+         * Ignores messages not originating from window or not marked with `source === "CGO_PAGE"`. For
+         * `type === "CGO_READY"` with `bootstrap === true` it sends a follow-up ping. For
+         * `type === "CGO_PONG"` with `bootstrap === true` it performs cleanup and resolves the surrounding
+         * handshake promise with `true` if the page hook version matches `PAGE_HOOK_VERSION`, `false` otherwise.
+         * @param {MessageEvent} event - The message event received on window.
+         */
         function onMessage(event) {
           if (event.source !== window) return;
 
@@ -435,6 +452,9 @@
           resolve(false);
         }, timeoutMs);
 
+        /**
+         * Stop any pending timeout and unregister the message event listener, performing cleanup exactly once.
+         */
         function cleanup() {
           if (done) return;
           done = true;
@@ -442,6 +462,12 @@
           window.removeEventListener("message", onMessage);
         }
 
+        /**
+         * Send the current extension settings to the page hook via window.postMessage.
+         *
+         * The posted message has shape { source: "CGO_CONTENT", type: "CGO_INIT_SETTINGS", version, settings }
+         * where `settings` contains `keepDomMessages` and `autoAdjustEnabled`.
+         */
         function sendInit() {
           window.postMessage(
             {
@@ -457,6 +483,14 @@
           );
         }
 
+        /**
+         * Handle window `message` events for the page-hook initialization acknowledgement.
+         *
+         * Listens for messages originating from the page with `data.source === "CGO_PAGE"`.
+         * When a `CGO_INIT_SETTINGS_ACK` message with `mainHook === true` is received, it performs cleanup and resolves the pending handshake with `true` if `data.version` equals `PAGE_HOOK_VERSION`, `false` otherwise.
+         *
+         * @param {MessageEvent} event - The message event posted to `window`. Expects `event.data` to be an object containing at least `source`, `type`, and `mainHook`; `version` is read when acknowledging initialization.
+         */
         function onMessage(event) {
           if (event.source !== window) return;
           const data = event.data;

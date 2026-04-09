@@ -12,6 +12,13 @@
           reject(new Error("Export cache response timeout"));
         }, 5000);
 
+        /**
+         * Handle window "message" events for CGO export cache responses and settle the export promise.
+         *
+         * Filters incoming messages to those from the same window with `data.type === "CGO_EXPORT_CACHE_RESPONSE"` and a matching `requestId`, then clears the associated timeout, removes the message listener, and either resolves with `data.data` or rejects with `data.error`.
+         *
+         * @param {MessageEvent} event - The window message event; expected to carry an object `data` with `type`, `requestId`, and either `data` (response payload) or `error`.
+         */
         function handler(event) {
           if (event.source !== window) return;
 
@@ -711,6 +718,16 @@
     CGO.findThoughtTargetMessageId = function findThoughtTargetMessageId(messageId, mapping) {
       if (!messageId || !mapping || !mapping[messageId]) return "";
 
+      /**
+       * Determine whether a message is a renderable assistant message.
+       *
+       * A message is considered renderable if it is authored by the assistant, its
+       * content type is not `"thoughts"`, and it contains at least one non-empty
+       * string in `content.parts`.
+       *
+       * @param {Object} msg - The message object to evaluate.
+       * @returns {boolean} `true` if the message meets the renderable criteria, `false` otherwise.
+       */
       function isRenderableAssistantMessage(msg) {
         if (!msg || msg?.author?.role !== "assistant") return false;
         if (msg?.content?.content_type === "thoughts") return false;
@@ -1243,6 +1260,13 @@
       const safeConcurrency = Math.max(1, Math.min(concurrency, items.length || 1));
       let index = 0;
 
+      /**
+       * Continuously pulls the next available item index and invokes `worker` on it until no items remain.
+       *
+       * This runner increments a shared `index` and processes items[index] in a loop, exiting when the index reaches `items.length`.
+       * It is intended to be used as one concurrent worker in a pool created by `runWithConcurrency`.
+       * @returns {Promise<void>} Resolves when this runner has processed all items assigned to it.
+       */
       async function runner() {
         while (true) {
           const currentIndex = index++;

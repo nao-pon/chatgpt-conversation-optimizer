@@ -258,6 +258,15 @@
       const saveBtn = panel.querySelector(".cgo-settings-save-btn");
       const cancelBtn = panel.querySelector(".cgo-settings-cancel-btn");
 
+      /**
+       * Update the auto-adjust label text to reflect the current effective keepDomMessages value.
+       *
+       * If the auto-adjust toggle is off, the label is set to the configured "disabled" text.
+       * If the toggle is on, the function determines the effective value (conversation-specific override if available,
+       * otherwise SETTINGS or CONFIG with a fallback of 40), clamps it to valid bounds, and sets the label to the
+       * configured "enabled" text with that value. On error, a warning is logged and the label is set using the
+       * fallback value.
+       */
       async function updateAutoAdjustLabel() {
         if (!autoAdjustLabel) return;
 
@@ -288,6 +297,12 @@
         }
       }
 
+      /**
+       * Populate the settings panel inputs from persisted configuration and refresh the auto-adjust label.
+       *
+       * Reads values from `SETTINGS` (falling back to `CONFIG` and defaults) to set the keep-dom-messages input,
+       * the auto-adjust checkbox, and the HTML-images checkbox, then updates the auto-adjust descriptive label.
+       */
       async function syncFromSettings() {
         keepInput.value = String(SETTINGS.keepDomMessages ?? CONFIG.keepDomMessages ?? 40);
         autoAdjustInput.checked = !!SETTINGS.autoAdjustEnabled;

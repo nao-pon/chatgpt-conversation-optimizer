@@ -1,4 +1,10 @@
 (() => {
+  /**
+   * Extracts Markdown text from a `.cgo-message-markdown` child of a message section.
+   *
+   * @param {Element|null|undefined} section - Parent element that may contain a `.cgo-message-markdown` element.
+   * @returns {string} The parsed Markdown string from the element's textContent, or an empty string if the element is missing or its content cannot be parsed.
+   */
   function getMessageMarkdown(section) {
     const scriptEl = section?.querySelector(".cgo-message-markdown");
     if (!scriptEl) return "";
@@ -9,11 +15,25 @@
     }
   }
 
+  /**
+   * Set a button's markdown-copy status by updating its `data-state` attribute.
+   *
+   * If `button` is falsy, the function does nothing. When `state` is falsy, the
+   * attribute is set to an empty string.
+   * @param {HTMLElement|null|undefined} button - The button element to update.
+   * @param {string|undefined} state - The state value to apply (e.g., "working", "done", "error").
+   */
   function setMarkdownCopyState(button, state) {
     if (!button) return;
     button.setAttribute("data-state", state || "");
   }
 
+  /**
+   * Create (or return an existing) modal backdrop used for copying Markdown and attach its close handlers.
+   *
+   * @param {Function} [getLabel] - Optional function (key, fallback) => string used to obtain localized labels for the dialog title and close button; when omitted or not a function, falls back to Japanese title "Markdownをコピー" and English close label "Close".
+   * @returns {HTMLElement} The backdrop element with id "cgo-md-modal-backdrop"; the element is created and appended to document.body if it did not already exist.
+   */
   function ensureMarkdownModal(getLabel) {
     let backdrop = document.getElementById("cgo-md-modal-backdrop");
     if (backdrop) return backdrop;
@@ -49,6 +69,11 @@
     return backdrop;
   }
 
+  /**
+   * Open the Markdown copy modal, populate it with the provided text, and focus/select the textarea content.
+   * @param {string} text - The Markdown text to display in the modal; if falsy, the textarea is cleared.
+   * @param {function(string, string): string} [getLabel] - Optional label resolver used when creating the modal; receives (key, fallback).
+   */
   function showMarkdownModal(text, getLabel) {
     const backdrop = ensureMarkdownModal(getLabel);
     const textarea = backdrop.querySelector(".cgo-md-modal-textarea");
@@ -61,6 +86,11 @@
     });
   }
 
+  /**
+   * Copy the provided text to the clipboard using the Clipboard API with an off-screen textarea fallback.
+   * @param {string} text - The text to copy.
+   * @returns {boolean} `true` if the text was copied to the clipboard; `false` if copying failed or `text` is empty.
+   */
   async function copyTextRobust(text) {
     if (!text) return false;
 
@@ -91,6 +121,14 @@
     }
   }
 
+  /**
+   * Initialize syntax highlighting for all `pre code` blocks using `window.hljs`.
+   *
+   * If `window.hljs` is not present this function does nothing. When `IntersectionObserver`
+   * is available it lazily highlights blocks as they enter the viewport (with a 200px
+   * root margin) and marks processed blocks to avoid re-highlighting; otherwise it
+   * highlights all blocks immediately.
+   */
   function initLazyHighlight() {
     if (!window.hljs) return;
     const blocks = document.querySelectorAll("pre code");
@@ -118,6 +156,11 @@
     blocks.forEach((el) => observer.observe(el));
   }
 
+  /**
+   * Waits for the global `hljs` library to become available and then initializes lazy highlighting.
+   *
+   * Polls for `window.hljs` every 50ms until present, then calls `initLazyHighlight`.
+   */
   function waitForHljs() {
     if (window.hljs) {
       initLazyHighlight();
@@ -126,6 +169,16 @@
     setTimeout(waitForHljs, 50);
   }
 
+  /**
+   * Initialize CGO export UI behavior and event handlers.
+   *
+   * Registers document-level handlers for markdown copying (with modal fallback), code copying, code collapse/expand, and thought-panel toggles, and optionally starts lazy syntax highlighting.
+   *
+   * @param {Object} [options] - Configuration options.
+   * @param {boolean} [options.enableCodeActions=true] - When false, disables code-related copy and toggle actions.
+   * @param {boolean} [options.enableHighlight=true] - When false, prevents initializing syntax highlighting.
+   * @param {function(string, string): string} [options.getLabel] - Function to resolve UI labels; called as (key, fallback) and should return the label string.
+   */
   function init(options = {}) {
     const enableCodeActions = options.enableCodeActions !== false;
     const enableHighlight = options.enableHighlight !== false;
