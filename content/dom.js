@@ -1,159 +1,156 @@
 (() => {
   if (globalThis.__CGO_SKIP__) return;
   const CGO = (globalThis.__CGO ||= {});
-  with (CGO) {
-    CGO.getConversationRoot = function getConversationRoot() {
-      return document.querySelector("main");
-    }
+
+  function getConversationRoot() {
+    return document.querySelector("main");
+  }
     
-    CGO.getTurnArticles = function getTurnArticles() {
-      const root = getConversationRoot();
-      if (!root) return [];
+  CGO.getTurnArticles = function getTurnArticles() {
+    const root = getConversationRoot();
+    if (!root) return [];
     
-      return Array.from(
-        root.querySelectorAll('article[data-testid^="conversation-turn-"]')
-      ).filter((node) => node && node.isConnected);
+    return Array.from(
+      root.querySelectorAll('article[data-testid^="conversation-turn-"]')
+    ).filter((node) => node && node.isConnected);
+  }
+
+  function trimOldDomTurns() {
+    const nodes = CGO.getTurnArticles();
+    const removeCount = nodes.length - CGO.CONFIG.keepDomMessages;
+
+    if (removeCount <= 0 || !nodes.length) return;
+
+    // const fragment = document.createDocumentFragment();
+
+    for (const node of nodes.slice(0, removeCount)) {
+      // fragment.appendChild(node);
+      node.remove();
     }
 
-    CGO.trimOldDomTurns = function trimOldDomTurns() {
-      const nodes = getTurnArticles();
-      const removeCount = nodes.length - CONFIG.keepDomMessages;
+    CGO.log("DOM trim", {
+      total: nodes.length,
+      removed: removeCount,
+      kept: CGO.CONFIG.keepDomMessages,
+    });
+  }
 
-      if (removeCount <= 0 || !nodes.length) return;
+  function runWhenIdle(fn, timeout = 2000) {
+    if (typeof requestIdleCallback === "function") {
+      requestIdleCallback(fn, { timeout });
+      return;
+    }
+    setTimeout(fn, 0);
+  }
 
-      // const fragment = document.createDocumentFragment();
+  function scheduleDomTrim(delayMs = CGO.CONFIG.domTrimDelayMs) {
+    if (CGO.STATE.trimScheduled) return;
+    CGO.STATE.trimScheduled = true;
 
-      for (const node of nodes.slice(0, removeCount)) {
-        // fragment.appendChild(node);
-        node.remove();
+    setTimeout(() => {
+      runWhenIdle(() => {
+        CGO.STATE.trimScheduled = false;
+        trimOldDomTurns();
+      }, 2000);
+    }, delayMs);
+  }
+
+  CGO.observeStreamCompletion = function observeStreamCompletion() {
+    const observer = new MutationObserver(() => {
+      if (!location.pathname.startsWith("/c/")) return;
+
+      const stopButton = document.querySelector('button[data-testid="stop-button"]');
+      const stopVisible = !!stopButton;
+
+      if (CGO.STATE.lastStopVisible && !stopVisible) {
+        scheduleDomTrim();
       }
 
-      log("DOM trim", {
-        total: nodes.length,
-        removed: removeCount,
-        kept: CONFIG.keepDomMessages,
-      });
-    }
+      CGO.STATE.lastStopVisible = stopVisible;
+    });
 
-    CGO.runWhenIdle = function runWhenIdle(fn, timeout = 2000) {
-      if (typeof requestIdleCallback === "function") {
-        requestIdleCallback(fn, { timeout });
-        return;
-      }
-      setTimeout(fn, 0);
-    }
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+    });
+  }
 
-    CGO.scheduleDomTrim = function scheduleDomTrim(delayMs = CONFIG.domTrimDelayMs) {
-      if (STATE.trimScheduled) return;
-      STATE.trimScheduled = true;
+  function handleRuntimeMessage(data) {
+    if (data.type === "autoAdjustResult") {
+      const conversationId = data.conversationId || getConversationIdFromLocation?.() || "";
+      const projectName = data.projectName || "";
+      const stats = data.stats || null;
+      const level = CGO.getProjectGuideLevel(stats);
+      const effective = Number(data.effectiveKeepDomMessages || 0);
 
-      setTimeout(() => {
-        runWhenIdle(() => {
-          STATE.trimScheduled = false;
-          trimOldDomTurns();
-        }, 2000);
-      }, delayMs);
-    }
+      CGO.log("[autoAdjustResult]", data);
 
-    CGO.observeStreamCompletion = function observeStreamCompletion() {
-      const observer = new MutationObserver(() => {
-        if (!location.pathname.startsWith("/c/")) return;
-
-        const stopButton = document.querySelector('button[data-testid="stop-button"]');
-        const stopVisible = !!stopButton;
-
-        if (STATE.lastStopVisible && !stopVisible) {
-          scheduleDomTrim();
-        }
-
-        STATE.lastStopVisible = stopVisible;
-      });
-
-      observer.observe(document.body, {
-        childList: true,
-        subtree: true,
-      });
-    }
-
-    CGO.handleRuntimeMessage = function handleRuntimeMessage(data) {
-      if (data.type === "autoAdjustResult") {
-        const conversationId = data.conversationId || getConversationIdFromLocation?.() || "";
-        const projectName = data.projectName || "";
-        const stats = data.stats || null;
-        const level = getProjectGuideLevel(stats);
-        const effective = Number(data.effectiveKeepDomMessages || 0);
-
-        log("[autoAdjustResult]", data);
-
-        if (
-          SETTINGS.autoAdjustEnabled &&
-          conversationId &&
-          effective > 0 &&
-          effective < SETTINGS.keepDomMessages
-        ) {
-          saveConversationOverride(conversationId, effective)
-            .then(() => {
-              log("[autoAdjustResult] saved", {
-                conversationId,
-                effective,
-              });
-              SETTINGS.keepDomMessages = effective;
-              scheduleDomTrim(0);
-            })
-            .catch((e) => {
-              log("[warn] saveConversationOverride failed", String(e));
+      if (
+        CGO.SETTINGS.autoAdjustEnabled &&
+        conversationId &&
+        effective > 0 &&
+        effective < CGO.SETTINGS.keepDomMessages
+      ) {
+        CGO.saveConversationOverride(conversationId, effective)
+          .then(() => {
+            CGO.log("[autoAdjustResult] saved", {
+              conversationId,
+              effective,
             });
-        }
-
-        STATE.projectGuide = {
-          conversationId,
-          projectName,
-          stats,
-          level,
-        };
-
-        void updateProjectGuideVisibility?.();
-        void updateProjectGuideAlertVisibility?.();
-
-        return;
+            CGO.SETTINGS.keepDomMessages = effective;
+            scheduleDomTrim(0);
+          })
+          .catch((e) => {
+            CGO.log("[warn] saveConversationOverride failed", String(e));
+          });
       }
 
-      if (data.type === "analysis") {
-        updateExportButtonVisibility(true)
-        console.group("[CGO prune analysis]");
-        console.log("url:", data.url);
-        console.log("summary:", data.summary);
-        console.groupEnd();
-        return;
-      }
+      CGO.STATE.projectGuide = {
+        conversationId,
+        projectName,
+        stats,
+        level,
+      };
 
-      if (data.type === "streamNotify") {
-        updateExportButtonVisibility(true);
-        log("[streamNotify]", data.message);
-        return;
-      }
+      void CGO.updateProjectGuideVisibility?.();
+      void CGO.updateProjectGuideAlertVisibility?.();
 
-      if (data.type === "log") {
-        log(...(data.args || []));
-        return;
-      }
-
-      if (data.type === "error") {
-        log("[error]", data.error);
-      }
+      return;
     }
 
-    CGO.observeWindowMessages = function observeWindowMessages() {
-      window.addEventListener("message", (event) => {
-        if (event.source !== window) return;
-
-        const data = event.data;
-        if (!data || data.source !== "cgo-prune-runtime") return;
-
-        handleRuntimeMessage(data);
-      });
+    if (data.type === "analysis") {
+      CGO.updateExportButtonVisibility(true)
+      console.group("[CGO prune analysis]");
+      console.log("url:", data.url);
+      console.log("summary:", data.summary);
+      console.groupEnd();
+      return;
     }
 
-    // exporter
+    if (data.type === "streamNotify") {
+      CGO.updateExportButtonVisibility(true);
+      CGO.log("[streamNotify]", data.message);
+      return;
+    }
+
+    if (data.type === "log") {
+      CGO.log(...(data.args || []));
+      return;
+    }
+
+    if (data.type === "error") {
+      CGO.log("[error]", data.error);
+    }
+  }
+
+  CGO.observeWindowMessages = function observeWindowMessages() {
+    window.addEventListener("message", (event) => {
+      if (event.source !== window) return;
+
+      const data = event.data;
+      if (!data || data.source !== "cgo-prune-runtime") return;
+
+      handleRuntimeMessage(data);
+    });
   }
 })();

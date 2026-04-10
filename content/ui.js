@@ -1,401 +1,400 @@
 (() => {
   if (globalThis.__CGO_SKIP__) return;
   const CGO = (globalThis.__CGO ||= {});
-  with (CGO) {
-    CGO.createHeaderButton = function createHeaderButton(html, text, callback) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "cgo-btn";
-      button.title = text
-      button.ariaLabel = text
-      button.innerHTML = html;
+
+  function createHeaderButton(html, text, callback) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "cgo-btn";
+    button.title = text
+    button.ariaLabel = text
+    button.innerHTML = html;
      
-      button.addEventListener("click", callback);
+    button.addEventListener("click", callback);
      
-      return button;
+    return button;
+  }
+
+  function createSvgIcon(pathD, viewBox = "0 0 24 24") {
+    const svgNS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(svgNS, "svg");
+    svg.setAttribute("viewBox", viewBox);
+    svg.setAttribute("aria-hidden", "true");
+
+    const path = document.createElementNS(svgNS, "path");
+    path.setAttribute("d", pathD);
+    path.setAttribute("fill", "currentColor");
+
+    svg.appendChild(path);
+    return svg;
+  }
+
+  function getButtonIconSvg(kind) {
+    switch (kind) {
+      case "settings":
+        return createSvgIcon("M19.14 12.94a7.49 7.49 0 0 0 .05-.94 7.49 7.49 0 0 0-.05-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.28 7.28 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.49-.42h-3.84a.5.5 0 0 0-.49.42l-.36 2.54a7.28 7.28 0 0 0-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7.49 7.49 0 0 0-.05.94 7.49 7.49 0 0 0 .05.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.5.39 1.05.71 1.63.94l.36 2.54a.5.5 0 0 0 .49.42h3.84a.5.5 0 0 0 .49-.42l.36-2.54c.58-.23 1.13-.55 1.63-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z");
+      case "light":
+        return createSvgIcon("M13 2L6 14h5l-1 8 8-12h-5l1-8z");
+      case "html":
+        return createSvgIcon("M6 2h9l5 5v15a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V8h4.5", "0 0 24 24");
+      case "zip":
+        return createSvgIcon("M12 3v10.17l3.59-3.58L17 11l-5 5-5-5 1.41-1.41L11 13.17V3h1zM5 19h14v2H5z");
+      case "alert":
+        return createSvgIcon("M12 3 2 21h20L12 3zm0 5.5a1 1 0 0 1 1 1V14a1 1 0 1 1-2 0V9.5a1 1 0 0 1 1-1zm0 9a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5z");
+      default:
+        return createSvgIcon("M12 3v18M3 12h18");
     }
+  }
 
-    CGO.createSvgIcon = function createSvgIcon(pathD, viewBox = "0 0 24 24") {
-      const svgNS = "http://www.w3.org/2000/svg";
-      const svg = document.createElementNS(svgNS, "svg");
-      svg.setAttribute("viewBox", viewBox);
-      svg.setAttribute("aria-hidden", "true");
+  function buildToolbarButton({ title, iconKind }) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "cgo-btn";
+    button.title = title;
+    button.setAttribute("aria-label", title);
+    button.dataset.iconKind = iconKind;
 
-      const path = document.createElementNS(svgNS, "path");
-      path.setAttribute("d", pathD);
-      path.setAttribute("fill", "currentColor");
+    const iconWrap = document.createElement("span");
+    iconWrap.className = "cgo-btn-icon";
+    iconWrap.appendChild(getButtonIconSvg(iconKind));
 
-      svg.appendChild(path);
-      return svg;
+    const labelWrap = document.createElement("span");
+    labelWrap.className = "cgo-btn-label";
+    labelWrap.hidden = true;
+
+    button.appendChild(iconWrap);
+    button.appendChild(labelWrap);
+
+    return button;
+  }
+
+  CGO.setToolbarButtonText = function setToolbarButtonText(button, text = "") {
+    const icon = button.querySelector(".cgo-btn-icon");
+    const label = button.querySelector(".cgo-btn-label");
+    if (!icon || !label) return;
+
+    if (text) {
+      //icon.hidden = true;
+      label.hidden = false;
+      label.textContent = text;
+    } else {
+      label.textContent = "";
+      label.hidden = true;
+      //icon.hidden = false;
     }
+  }
 
-    CGO.getButtonIconSvg = function getButtonIconSvg(kind) {
-      switch (kind) {
-        case "settings":
-          return createSvgIcon("M19.14 12.94a7.49 7.49 0 0 0 .05-.94 7.49 7.49 0 0 0-.05-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.28 7.28 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.49-.42h-3.84a.5.5 0 0 0-.49.42l-.36 2.54a7.28 7.28 0 0 0-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7.49 7.49 0 0 0-.05.94 7.49 7.49 0 0 0 .05.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.5.39 1.05.71 1.63.94l.36 2.54a.5.5 0 0 0 .49.42h3.84a.5.5 0 0 0 .49-.42l.36-2.54c.58-.23 1.13-.55 1.63-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z");
-        case "light":
-          return createSvgIcon("M13 2L6 14h5l-1 8 8-12h-5l1-8z");
-        case "html":
-          return createSvgIcon("M6 2h9l5 5v15a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V8h4.5", "0 0 24 24");
-        case "zip":
-          return createSvgIcon("M12 3v10.17l3.59-3.58L17 11l-5 5-5-5 1.41-1.41L11 13.17V3h1zM5 19h14v2H5z");
-        case "alert":
-          return createSvgIcon("M12 3 2 21h20L12 3zm0 5.5a1 1 0 0 1 1 1V14a1 1 0 1 1-2 0V9.5a1 1 0 0 1 1-1zm0 9a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5z");
-        default:
-          return createSvgIcon("M12 3v18M3 12h18");
+  function createOpenNewTabButton() {
+    const button = buildToolbarButton({
+      title: CGO.t("open_new_tab_button"),
+      iconKind: "light",
+    });
+
+    button.addEventListener("click", async () => {
+      try {
+        setExportButtonState(button, "loading");
+        await exportCurrentConversationAsHtml(button, getCurrentVisibleMessageId());
+        setExportButtonState(button, "idle");
+        CGO.setToolbarButtonText(button, "");
+      } catch (error) {
+        CGO.log("[error]", error);
+        setExportButtonState(button, "export_retry");
       }
-    }
+    });
 
-    CGO.buildToolbarButton = function buildToolbarButton({ title, iconKind }) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "cgo-btn";
-      button.title = title;
-      button.setAttribute("aria-label", title);
-      button.dataset.iconKind = iconKind;
+    return button;
+  }
 
-      const iconWrap = document.createElement("span");
-      iconWrap.className = "cgo-btn-icon";
-      iconWrap.appendChild(getButtonIconSvg(iconKind));
+  function createExportButton() {
+    const button = buildToolbarButton({
+      title: CGO.t("download_button"),
+      iconKind: "html",
+    });
 
-      const labelWrap = document.createElement("span");
-      labelWrap.className = "cgo-btn-label";
-      labelWrap.hidden = true;
-
-      button.appendChild(iconWrap);
-      button.appendChild(labelWrap);
-
-      return button;
-    }
-
-    CGO.setToolbarButtonText = function setToolbarButtonText(button, text = "") {
-      const icon = button.querySelector(".cgo-btn-icon");
-      const label = button.querySelector(".cgo-btn-label");
-      if (!icon || !label) return;
-
-      if (text) {
-        //icon.hidden = true;
-        label.hidden = false;
-        label.textContent = text;
-      } else {
-        label.textContent = "";
-        label.hidden = true;
-        //icon.hidden = false;
+    button.addEventListener("click", async () => {
+      try {
+        setExportButtonState(button, "loading");
+        await exportCurrentConversationAsHtml(button);
+        setExportButtonState(button, "idle");
+        CGO.setToolbarButtonText(button, "");
+      } catch (error) {
+        CGO.log("[error]", error);
+        setExportButtonState(button, "export_retry");
       }
-    }
+    });
 
-    CGO.createOpenNewTabButton = function createOpenNewTabButton() {
-      const button = buildToolbarButton({
-        title: t("open_new_tab_button"),
-        iconKind: "light",
-      });
+    return button;
+  }
 
-      button.addEventListener("click", async () => {
-        try {
-          setExportButtonState(button, "loading");
-          await exportCurrentConversationAsHtml(button, getCurrentVisibleMessageId());
-          setExportButtonState(button, "idle");
-          setToolbarButtonText(button, "");
-        } catch (error) {
-          log("[error]", error);
-          setExportButtonState(button, "export_retry");
-        }
-      });
+  function createZipExportButton() {
+    const button = buildToolbarButton({
+      title: CGO.t("zip_download_button"),
+      iconKind: "zip",
+    });
 
-      return button;
-    }
-
-    CGO.createExportButton = function createExportButton() {
-      const button = buildToolbarButton({
-        title: t("download_button"),
-        iconKind: "html",
-      });
-
-      button.addEventListener("click", async () => {
-        try {
-          setExportButtonState(button, "loading");
-          await exportCurrentConversationAsHtml(button);
-          setExportButtonState(button, "idle");
-          setToolbarButtonText(button, "");
-        } catch (error) {
-          log("[error]", error);
-          setExportButtonState(button, "export_retry");
-        }
-      });
-
-      return button;
-    }
-
-    CGO.createZipExportButton = function createZipExportButton() {
-      const button = buildToolbarButton({
-        title: t("zip_download_button"),
-        iconKind: "zip",
-      });
-
-      button.addEventListener("click", async () => {
-        try {
-          setExportButtonState(button, "loading");
-          await exportCurrentConversationAsZip(button);
-          setExportButtonState(button, "idle");
-          setToolbarButtonText(button, "");
-        } catch (error) {
-          log("[error]", error);
-          setExportButtonState(button, "error");
-        }
-      });
-
-      return button;
-    }
-
-    CGO.toggleSettingsPanel = function toggleSettingsPanel(button) {
-      const panel = document.getElementById("cgo-settings-panel");
-      if (!panel) return;
-      if (panel.hidden) {
-        openSettingsPanel(button);
-      } else {
-        panel.hidden = true;
+    button.addEventListener("click", async () => {
+      try {
+        setExportButtonState(button, "loading");
+        await exportCurrentConversationAsZip(button);
+        setExportButtonState(button, "idle");
+        CGO.setToolbarButtonText(button, "");
+      } catch (error) {
+        CGO.log("[error]", error);
+        setExportButtonState(button, "error");
       }
-    }
+    });
 
-    CGO.closeSettingsPanel = function closeSettingsPanel() {
-      const panel = document.getElementById("cgo-settings-panel");
-      if (!panel) return;
+    return button;
+  }
+
+  function toggleSettingsPanel(button) {
+    const panel = document.getElementById("cgo-settings-panel");
+    if (!panel) return;
+    if (panel.hidden) {
+      openSettingsPanel(button);
+    } else {
       panel.hidden = true;
     }
+  }
 
-    CGO.createSettingsButton = function createSettingsButton() {
-      const button = buildToolbarButton({
-        title: t("settings_button") || "Settings",
-        iconKind: "settings",
-      });
+  CGO.closeSettingsPanel = function closeSettingsPanel() {
+    const panel = document.getElementById("cgo-settings-panel");
+    if (!panel) return;
+    panel.hidden = true;
+  }
 
-      button.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        toggleSettingsPanel(button);
-        //openSettingsPanel(button);
-      });
+  function createSettingsButton() {
+    const button = buildToolbarButton({
+      title: CGO.t("settings_button") || "Settings",
+      iconKind: "settings",
+    });
 
-      return button;
-    }
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleSettingsPanel(button);
+    });
 
-    CGO.createProjectGuideAlertButton = function createProjectGuideAlertButton() {
-      const title =
-        t("project_guide_alert_tooltip") ||
-        t("project_guide_alert_button") ||
-        "Very large conversation";
+    return button;
+  }
 
-      const button = buildToolbarButton({
-        title,
-        iconKind: "alert",
-      });
+  function createProjectGuideAlertButton() {
+    const title =
+      CGO.t("project_guide_alert_tooltip") ||
+      CGO.t("project_guide_alert_button") ||
+      "Very large conversation";
 
-      button.id = "cgo-project-guide-alert";
-      button.classList.add("cgo-project-guide-alert");
-      button.hidden = true;
-      button.dataset.pulsed = "0";
+    const button = buildToolbarButton({
+      title,
+      iconKind: "alert",
+    });
 
-      button.addEventListener("click", async (event) => {
-        event.preventDefault();
-        event.stopPropagation();
+    button.id = "cgo-project-guide-alert";
+    button.classList.add("cgo-project-guide-alert");
+    button.hidden = true;
+    button.dataset.pulsed = "0";
 
-        try {
-          const conversationId =
-            STATE.projectGuide?.conversationId ||
-            getConversationIdFromLocation?.() ||
-            "";
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
 
-          if (!conversationId) return;
+      try {
+        const conversationId =
+          CGO.STATE.projectGuide?.conversationId ||
+          CGO.getConversationIdFromLocation?.() ||
+          "";
 
-          await clearProjectGuideDismissed(conversationId);
+        if (!conversationId) return;
 
-          button.dataset.pulsed = "1";
+        await clearProjectGuideDismissed(conversationId);
 
-          await updateProjectGuideVisibility?.();
-          await updateProjectGuideAlertVisibility?.();
-        } catch (error) {
-          log("[warn] reopen project guide failed", String(error));
-        }
-      });
+        button.dataset.pulsed = "1";
 
-      return button;
-    }
+        await CGO.updateProjectGuideVisibility?.();
+        await CGO.updateProjectGuideAlertVisibility?.();
+      } catch (error) {
+        CGO.log("[warn] reopen project guide failed", String(error));
+      }
+    });
 
-    CGO.buildSettingsPanel = function buildSettingsPanel() {
-      const panel = document.createElement("div");
-      panel.id = "cgo-settings-panel";
-      panel.className = "cgo-settings-panel";
-      panel.hidden = true;
+    return button;
+  }
 
-      panel.innerHTML = `
-        <div class="cgo-settings-title">${escapeHtml(t("settings_button") || "Settings")}</div>
+  function buildSettingsPanel() {
+    const panel = document.createElement("div");
+    panel.id = "cgo-settings-panel";
+    panel.className = "cgo-settings-panel";
+    panel.hidden = true;
+
+    panel.innerHTML = `
+        <div class="cgo-settings-title">${CGO.escapeHtml(CGO.t("settings_button") || "Settings")}</div>
 
         <label class="cgo-settings-row">
-          <span>${escapeHtml(t("keep_dom_messages_label"))}</span>
+          <span>${CGO.escapeHtml(CGO.t("keep_dom_messages_label"))}</span>
           <input id="cgo-setting-keep-dom-messages" type="number" min="5" max="200" step="1">
         </label>
 
         <label class="cgo-settings-row cgo-settings-check">
           <input id="cgo-setting-auto-adjust-enabled" type="checkbox">
-          <span id="cgo-setting-auto-adjust-label">${escapeHtml(t("auto_adjust_disabled_label"))}</span>
+          <span id="cgo-setting-auto-adjust-label">${CGO.escapeHtml(CGO.t("auto_adjust_disabled_label"))}</span>
         </label>
 
         <label class="cgo-settings-row cgo-settings-check">
           <input id="cgo-setting-html-include-images" type="checkbox">
-          <span>${escapeHtml(t("html_include_images_label"))}</span>
+          <span>${CGO.escapeHtml(CGO.t("html_include_images_label"))}</span>
         </label>
 
         <div class="cgo-settings-actions">
-          <button type="button" class="cgo-settings-save-btn">${escapeHtml(t("save_button"))}</button>
-          <button type="button" class="cgo-settings-cancel-btn">${escapeHtml(t("cancel_button"))}</button>
+          <button type="button" class="cgo-settings-save-btn">${CGO.escapeHtml(CGO.t("save_button"))}</button>
+          <button type="button" class="cgo-settings-cancel-btn">${CGO.escapeHtml(CGO.t("cancel_button"))}</button>
         </div>
       `;
 
-      const keepInput = panel.querySelector("#cgo-setting-keep-dom-messages");
-      const autoAdjustInput = panel.querySelector("#cgo-setting-auto-adjust-enabled");
-      const autoAdjustLabel = panel.querySelector("#cgo-setting-auto-adjust-label");
-      const htmlImagesInput = panel.querySelector("#cgo-setting-html-include-images");
-      const saveBtn = panel.querySelector(".cgo-settings-save-btn");
-      const cancelBtn = panel.querySelector(".cgo-settings-cancel-btn");
+    const keepInput = panel.querySelector("#cgo-setting-keep-dom-messages");
+    const autoAdjustInput = panel.querySelector("#cgo-setting-auto-adjust-enabled");
+    const autoAdjustLabel = panel.querySelector("#cgo-setting-auto-adjust-label");
+    const htmlImagesInput = panel.querySelector("#cgo-setting-html-include-images");
+    const saveBtn = panel.querySelector(".cgo-settings-save-btn");
+    const cancelBtn = panel.querySelector(".cgo-settings-cancel-btn");
 
-      /**
-       * Update the auto-adjust label text to reflect the current effective keepDomMessages value.
-       *
-       * If the auto-adjust toggle is off, the label is set to the configured "disabled" text.
-       * If the toggle is on, the function determines the effective value (conversation-specific override if available,
-       * otherwise SETTINGS or CONFIG with a fallback of 40), clamps it to valid bounds, and sets the label to the
-       * configured "enabled" text with that value. On error, a warning is logged and the label is set using the
-       * fallback value.
-       */
-      async function updateAutoAdjustLabel() {
-        if (!autoAdjustLabel) return;
+    /**
+     * Update the auto-adjust label text to reflect the current effective keepDomMessages value.
+     *
+     * If the auto-adjust toggle is off, the label is set to the configured "disabled" text.
+     * If the toggle is on, the function determines the effective value (conversation-specific override if available,
+     * otherwise CGO.STTINGS or CONFIG with a fallback of 40), clamps it to valid bounds, and sets the label to the
+     * configured "enabled" text with that value. On error, a warning is logged and the label is set using the
+     * fallback value.
+     */
+    async function updateAutoAdjustLabel() {
+      if (!autoAdjustLabel) return;
 
-        const disabledLabel = t("auto_adjust_disabled_label");
+      const disabledLabel = CGO.t("auto_adjust_disabled_label");
 
-        if (!autoAdjustInput.checked) {
-          autoAdjustLabel.textContent = disabledLabel;
-          return;
-        }
-
-        try {
-          const conversationId = getConversationIdFromLocation?.() || "";
-          let effective = SETTINGS.keepDomMessages ?? CONFIG.keepDomMessages ?? 40;
-
-          if (conversationId) {
-            const override = await loadConversationOverride(conversationId);
-
-            if (override?.keepDomMessages) {
-              effective = clampKeepDomMessages(override.keepDomMessages);
-            }
-          }
-
-          autoAdjustLabel.textContent = t("auto_adjust_enabled_label", String(effective));
-        } catch (error) {
-          log("[warn] updateAutoAdjustLabel failed", String(error));
-          autoAdjustLabel.textContent =
-            t("auto_adjust_enabled_label", String(SETTINGS.keepDomMessages ?? CONFIG.keepDomMessages ?? 40));
-        }
+      if (!autoAdjustInput.checked) {
+        autoAdjustLabel.textContent = disabledLabel;
+        return;
       }
 
-      /**
-       * Populate the settings panel inputs from persisted configuration and refresh the auto-adjust label.
-       *
-       * Reads values from `SETTINGS` (falling back to `CONFIG` and defaults) to set the keep-dom-messages input,
-       * the auto-adjust checkbox, and the HTML-images checkbox, then updates the auto-adjust descriptive label.
-       */
-      async function syncFromSettings() {
-        keepInput.value = String(SETTINGS.keepDomMessages ?? CONFIG.keepDomMessages ?? 40);
-        autoAdjustInput.checked = !!SETTINGS.autoAdjustEnabled;
-        htmlImagesInput.checked = SETTINGS.htmlDownloadIncludeImages !== false;
-        await updateAutoAdjustLabel();
-      }
+      try {
+        const conversationId = getConversationIdFromLocation?.() || "";
+        let effective = CGO.STTINGS.keepDomMessages ?? CONFIG.keepDomMessages ?? 40;
 
-      saveBtn.addEventListener("click", async () => {
-        try {
-          const conversationId = getConversationIdFromLocation?.() || "";
-          const wasAutoAdjustEnabled = !!SETTINGS.autoAdjustEnabled;
-          const nextAutoAdjustEnabled = !!autoAdjustInput.checked;
+        if (conversationId) {
+          const override = await loadConversationOverride(conversationId);
 
-          await saveSettings({
-            keepDomMessages: keepInput.value,
-            autoAdjustEnabled: nextAutoAdjustEnabled,
-            htmlDownloadIncludeImages: htmlImagesInput.checked,
-          });
-
-          if (wasAutoAdjustEnabled && !nextAutoAdjustEnabled && conversationId) {
-            await clearConversationOverride(conversationId);
-            log("[autoAdjust] cleared conversation override", { conversationId });
+          if (override?.keepDomMessages) {
+            effective = clampKeepDomMessages(override.keepDomMessages);
           }
-
-          await postSettingsToPageHook?.();
-          await syncFromSettings();
-          closeSettingsPanel();
-          log("settings saved", { ...SETTINGS });
-        } catch (error) {
-          log("[error] saveSettings failed", String(error));
         }
-      });
 
-      autoAdjustInput.addEventListener("change", () => {
-        void updateAutoAdjustLabel();
-      });
+        autoAdjustLabel.textContent = CGO.t("auto_adjust_enabled_label", String(effective));
+      } catch (error) {
+        CGO.log("[warn] CGO.updateAutoAdjustLabel failed", String(error));
+        autoAdjustLabel.textContent =
+          CGO.t("auto_adjust_enabled_label", String(CGO.STTINGS.keepDomMessages ?? CONFIG.keepDomMessages ?? 40));
+      }
+    }
 
-      cancelBtn.addEventListener("click", () => {
-        syncFromSettings();
-        closeSettingsPanel();
-      });
+    /**
+     * Populate the settings panel inputs from persisted configuration and refresh the auto-adjust label.
+     *
+     * Reads values from `CGO.STTINGS` (falling back to `CONFIG` and defaults) to set the keep-dom-messages input,
+     * the auto-adjust checkbox, and the HTML-images checkbox, then updates the auto-adjust descriptive label.
+     */
+    async function syncFromSettings() {
+      keepInput.value = String(CGO.STTINGS.keepDomMessages ?? CONFIG.keepDomMessages ?? 40);
+      autoAdjustInput.checked = !!CGO.STTINGS.autoAdjustEnabled;
+      htmlImagesInput.checked = CGO.STTINGS.htmlDownloadIncludeImages !== false;
+      await CGO.updateAutoAdjustLabel();
+    }
 
-      panel.addEventListener("click", (event) => {
-        event.stopPropagation();
-      });
-      panel.__cgoSyncFromSettings = syncFromSettings;
+    saveBtn.addEventListener("click", async () => {
+      try {
+        const conversationId = CGO.getConversationIdFromLocation?.() || "";
+        const wasAutoAdjustEnabled = !!CGO.STTINGS.autoAdjustEnabled;
+        const nextAutoAdjustEnabled = !!autoAdjustInput.checked;
 
+        await saveSettings({
+          keepDomMessages: keepInput.value,
+          autoAdjustEnabled: nextAutoAdjustEnabled,
+          htmlDownloadIncludeImages: htmlImagesInput.checked,
+        });
+
+        if (wasAutoAdjustEnabled && !nextAutoAdjustEnabled && conversationId) {
+          await clearConversationOverride(conversationId);
+          CGO.log("[autoAdjust] cleared conversation override", { conversationId });
+        }
+
+        await postSettingsToPageHook?.();
+        await syncFromSettings();
+        CGO.closeSettingsPanel();
+        CGO.log("settings saved", { ...CGO.STTINGS });
+      } catch (error) {
+        CGO.log("[error] saveSettings failed", String(error));
+      }
+    });
+
+    autoAdjustInput.addEventListener("change", () => {
+      void CGO.updateAutoAdjustLabel();
+    });
+
+    cancelBtn.addEventListener("click", () => {
       syncFromSettings();
-      return panel;
+      CGO.closeSettingsPanel();
+    });
+
+    panel.addEventListener("click", (event) => {
+      event.stopPropagation();
+    });
+    panel.__cgoSyncFromSettings = syncFromSettings;
+
+    syncFromSettings();
+    return panel;
+  }
+
+  function ensureSettingsPanel() {
+    let panel = document.getElementById("cgo-settings-panel");
+    if (panel) return panel;
+
+    const headerActions = document.getElementById("conversation-header-actions");
+    if (!headerActions) return null;
+
+    panel = buildSettingsPanel();
+    document.body.appendChild(panel);
+    return panel;
+  }
+
+  function openSettingsPanel(buttonEl) {
+    const panel = ensureSettingsPanel();
+    if (!panel) return;
+
+    const rect = buttonEl.getBoundingClientRect();
+    const panelWidth = 200;
+    let left = rect.right - panelWidth;
+    if (left < 8) left = 8;
+    if (left + panelWidth > window.innerWidth - 8) {
+      left = window.innerWidth - panelWidth - 8;
     }
+    panel.style.position = "fixed";
+    panel.style.top = `${rect.bottom + 8}px`;
+    panel.style.left = `${left}px`; // 幅に応じて調整
+    panel.hidden = false;
+  }
 
-    CGO.ensureSettingsPanel = function ensureSettingsPanel() {
-      let panel = document.getElementById("cgo-settings-panel");
-      if (panel) return panel;
+  function ensureProjectGuide() {
+    let guide = document.getElementById("cgo-project-guide");
+    if (guide) return guide;
 
-      const headerActions = document.getElementById("conversation-header-actions");
-      if (!headerActions) return null;
+    const headerActions = document.getElementById("conversation-header-actions");
+    if (!headerActions) return null;
 
-      panel = buildSettingsPanel();
-      document.body.appendChild(panel);
-      return panel;
-    }
+    guide = document.createElement("div");
+    guide.id = "cgo-project-guide";
+    guide.className = "cgo-project-guide";
+    guide.hidden = true;
 
-    CGO.openSettingsPanel = function openSettingsPanel(buttonEl) {
-      const panel = ensureSettingsPanel();
-      if (!panel) return;
-
-      const rect = buttonEl.getBoundingClientRect();
-      const panelWidth = 200;
-      let left = rect.right - panelWidth;
-      if (left < 8) left = 8;
-      if (left + panelWidth > window.innerWidth - 8) {
-        left = window.innerWidth - panelWidth - 8;
-      }
-      panel.style.position = "fixed";
-      panel.style.top = `${rect.bottom + 8}px`;
-      panel.style.left = `${left}px`; // 幅に応じて調整
-      panel.hidden = false;
-    }
-
-    CGO.ensureProjectGuide = function ensureProjectGuide() {
-      let guide = document.getElementById("cgo-project-guide");
-      if (guide) return guide;
-
-      const headerActions = document.getElementById("conversation-header-actions");
-      if (!headerActions) return null;
-
-      guide = document.createElement("div");
-      guide.id = "cgo-project-guide";
-      guide.className = "cgo-project-guide";
-      guide.hidden = true;
-
-      guide.innerHTML = `
+    guide.innerHTML = `
         <div class="cgo-project-guide-main">
           <div class="cgo-project-guide-title"></div>
           <div class="cgo-project-guide-body"></div>
@@ -406,187 +405,188 @@
         </div>
       `;
 
-      const zipBtn = guide.querySelector(".cgo-project-guide-zip");
-      const hideBtn = guide.querySelector(".cgo-project-guide-hide");
+    const zipBtn = guide.querySelector(".cgo-project-guide-zip");
+    const hideBtn = guide.querySelector(".cgo-project-guide-hide");
 
-      zipBtn.textContent = t("zip_download_button") || "Save as ZIP";
-      hideBtn.textContent = t("hide_button") || "Hide";
+    zipBtn.textContent = CGO.t("zip_download_button") || "Save as ZIP";
+    hideBtn.textContent = CGO.t("hide_button") || "Hide";
 
-      zipBtn.addEventListener("click", async () => {
-        try {
-          zipBtn.disabled = true;
-          await exportCurrentConversationAsZip();
-        } catch (error) {
-          log("[error] project guide zip export failed", String(error));
-        } finally {
-          zipBtn.disabled = false;
-        }
-      });
+    zipBtn.addEventListener("click", async () => {
+      try {
+        zipBtn.disabled = true;
+        await exportCurrentConversationAsZip();
+      } catch (error) {
+        CGO.log("[error] project guide zip export failed", String(error));
+      } finally {
+        zipBtn.disabled = false;
+      }
+    });
 
-      hideBtn.addEventListener("click", async () => {
-        try {
-          const conversationId = STATE.projectGuide?.conversationId || getConversationIdFromLocation?.() || "";
-          const level = Number(STATE.projectGuide?.level || 0);
-          await dismissProjectGuide(conversationId, level);
-          guide.hidden = true;
-          await updateProjectGuideAlertVisibility?.();
-        } catch (error) {
-          log("[warn] dismissProjectGuide failed", String(error));
-        }
-      });
+    hideBtn.addEventListener("click", async () => {
+      try {
+        const conversationId = CGO.STATE.projectGuide?.conversationId || CGO.getConversationIdFromLocation?.() || "";
+        const level = Number(CGO.STATE.projectGuide?.level || 0);
+        await dismissProjectGuide(conversationId, level);
+        guide.hidden = true;
+        await CGO.updateProjectGuideAlertVisibility?.();
+      } catch (error) {
+        CGO.log("[warn] dismissProjectGuide failed", String(error));
+      }
+    });
 
-      headerActions.after(guide);
-      return guide;
+    headerActions.after(guide);
+    return guide;
+  }
+
+  function getProjectGuideTexts({ level = 0, projectName = "" } = {}) {
+    const inProject = !!String(projectName || "").trim();
+
+    if (level <= 0) {
+      return { title: "", body: "" };
     }
 
-    CGO.getProjectGuideTexts = function getProjectGuideTexts({ level = 0, projectName = "" } = {}) {
-      const inProject = !!String(projectName || "").trim();
+    const lvl = level >= 3 ? 3 : level === 2 ? 2 : 1;
 
-      if (level <= 0) {
-        return { title: "", body: "" };
-      }
-
-      const lvl = level >= 3 ? 3 : level === 2 ? 2 : 1;
-
-      if (inProject) {
-        return {
-          title: t(`project_guide_title_project_level${lvl}`),
-          body: t(`project_guide_body_project_level${lvl}`, projectName),
-        };
-      }
-
+    if (inProject) {
       return {
-        title: t(`project_guide_title_level${lvl}`),
-        body: t(`project_guide_body_level${lvl}`),
+        title: CGO.t(`project_guide_title_project_level${lvl}`),
+        body: CGO.t(`project_guide_body_project_level${lvl}`, projectName),
       };
     }
 
-    CGO.updateProjectGuideVisibility = async function updateProjectGuideVisibility() {
-      const guide = ensureProjectGuide();
-      if (!guide) return;
+    return {
+      title: CGO.t(`project_guide_title_level${lvl}`),
+      body: CGO.t(`project_guide_body_level${lvl}`),
+    };
+  }
 
-      const pathname = location.pathname || "";
-      if (!/^(\/g\/[^/]+)?\/c\/([^/?#]+)/i.test(pathname)) {
-        guide.hidden = true;
-        return;
-      }
+  CGO.updateProjectGuideVisibility = async function updateProjectGuideVisibility() {
+    const guide = ensureProjectGuide();
+    if (!guide) return;
 
-      const conversationId = STATE.projectGuide?.conversationId || getConversationIdFromLocation?.() || "";
-      const projectName = STATE.projectGuide?.projectName || "";
-      const stats = STATE.projectGuide?.stats || null;
-      const level = Number(STATE.projectGuide?.level || 0);
-
-      if (!conversationId || !stats || level <= 0) {
-        guide.hidden = true;
-        return;
-      }
-
-      const dismissed = await isProjectGuideDismissed(conversationId, level);
-      if (dismissed) {
-        guide.hidden = true;
-        return;
-      }
-
-      const titleEl = guide.querySelector(".cgo-project-guide-title");
-      const bodyEl = guide.querySelector(".cgo-project-guide-body");
-
-      const texts = getProjectGuideTexts({ level, projectName });
-      titleEl.textContent = texts.title;
-      bodyEl.textContent = texts.body;
-
-      guide.dataset.level = String(level);
-      guide.hidden = false;
-      await updateProjectGuideAlertVisibility?.();
+    const pathname = location.pathname || "";
+    if (!/^(\/g\/[^/]+)?\/c\/([^/?#]+)/i.test(pathname)) {
+      guide.hidden = true;
+      return;
     }
 
-    CGO.updateProjectGuideAlertVisibility = async function updateProjectGuideAlertVisibility() {
-      const button = document.getElementById("cgo-project-guide-alert");
-      if (!button) return;
+    const conversationId = CGO.STATE.projectGuide?.conversationId || CGO.getConversationIdFromLocation?.() || "";
+    const projectName = CGO.STATE.projectGuide?.projectName || "";
+    const stats = CGO.STATE.projectGuide?.stats || null;
+    const level = Number(CGO.STATE.projectGuide?.level || 0);
 
-      const pathname = location.pathname || "";
-      if (!/^(\/g\/[^/]+)?\/c\/([^/?#]+)/i.test(pathname)) {
-        button.hidden = true;
-        button.classList.remove("cgo-pulse-once");
-        return;
-      }
-
-      const conversationId =
-        STATE.projectGuide?.conversationId ||
-        getConversationIdFromLocation?.() ||
-        "";
-
-      const level = Number(STATE.projectGuide?.level || 0);
-
-      if (!conversationId || level < 3) {
-        button.hidden = true;
-        button.classList.remove("cgo-pulse-once");
-        return;
-      }
-
-      const dismissed = await isProjectGuideDismissed(conversationId, 3);
-
-      button.title =
-        t("project_guide_alert_tooltip") ||
-        t("project_guide_alert_button") ||
-        "Very large conversation";
-      button.setAttribute("aria-label", button.title);
-
-      const shouldShow = !!dismissed;
-      const wasHidden = button.hidden;
-
-      button.hidden = !shouldShow;
-
-      if (shouldShow && wasHidden && button.dataset.pulsed !== "1") {
-        button.classList.remove("cgo-pulse-once");
-        void button.offsetWidth;
-        button.classList.add("cgo-pulse-once");
-        button.dataset.pulsed = "1";
-      }
-
-      if (!shouldShow) {
-        button.classList.remove("cgo-pulse-once");
-        button.dataset.pulsed = "0";
-      }
+    if (!conversationId || !stats || level <= 0) {
+      guide.hidden = true;
+      return;
     }
 
-    CGO.injectExportButtonIntoHeader = function injectExportButtonIntoHeader() {
-      if (!/^(\/g\/[^/]+)?\/c\/([a-z0-9-]+)/i.test(location.pathname)) return;
-
-      if (document.querySelector("div.cgo-toolbar")) return;
-
-      const headerActions = document.getElementById("conversation-header-actions");
-      if (!headerActions) return;
-
-      toolbarBase = document.createElement("div");
-      toolbarBase.className = "cgo-toolbar";
-      toolbarBase.hidden = true;
-
-      const open_new_tab_button = createOpenNewTabButton();
-      const download_button = createExportButton();
-      const zip_download_button = createZipExportButton();
-      const project_guide_alert_button = createProjectGuideAlertButton();
-      const settings_button = createSettingsButton();
-
-      toolbarBase.append(
-        zip_download_button,
-        download_button,
-        open_new_tab_button,
-        project_guide_alert_button,
-        settings_button
-      );
-
-      headerActions.prepend(toolbarBase);
-      ensureSettingsPanel();
-      void updateProjectGuideAlertVisibility?.();
+    const dismissed = await CGO.isProjectGuideDismissed(conversationId, level);
+    if (dismissed) {
+      guide.hidden = true;
+      return;
     }
 
-    CGO.injectExportButtonStyle = function injectExportButtonStyle() {
-      if (document.getElementById("cgo-export-style")) return;
+    const titleEl = guide.querySelector(".cgo-project-guide-title");
+    const bodyEl = guide.querySelector(".cgo-project-guide-body");
 
-      const style = document.createElement("style");
-      style.id = "cgo-export-style";
+    const texts = getProjectGuideTexts({ level, projectName });
+    titleEl.textContent = texts.title;
+    bodyEl.textContent = texts.body;
 
-      style.textContent = `
+    guide.dataset.level = String(level);
+    guide.hidden = false;
+    await CGO.updateProjectGuideAlertVisibility?.();
+  }
+
+  CGO.updateProjectGuideAlertVisibility = async function updateProjectGuideAlertVisibility() {
+    const button = document.getElementById("cgo-project-guide-alert");
+    if (!button) return;
+
+    const pathname = location.pathname || "";
+    if (!/^(\/g\/[^/]+)?\/c\/([^/?#]+)/i.test(pathname)) {
+      button.hidden = true;
+      button.classList.remove("cgo-pulse-once");
+      return;
+    }
+
+    const conversationId =
+      CGO.STATE.projectGuide?.conversationId ||
+      CGO.getConversationIdFromLocation?.() ||
+      "";
+
+    const level = Number(CGO.STATE.projectGuide?.level || 0);
+
+    if (!conversationId || level < 3) {
+      button.hidden = true;
+      button.classList.remove("cgo-pulse-once");
+      return;
+    }
+
+    const dismissed = await CGO.isProjectGuideDismissed(conversationId, 3);
+
+    button.title =
+      CGO.t("project_guide_alert_tooltip") ||
+      CGO.t("project_guide_alert_button") ||
+      "Very large conversation";
+    button.setAttribute("aria-label", button.title);
+
+    const shouldShow = !!dismissed;
+    const wasHidden = button.hidden;
+
+    button.hidden = !shouldShow;
+
+    if (shouldShow && wasHidden && button.dataset.pulsed !== "1") {
+      button.classList.remove("cgo-pulse-once");
+      void button.offsetWidth;
+      button.classList.add("cgo-pulse-once");
+      button.dataset.pulsed = "1";
+    }
+
+    if (!shouldShow) {
+      button.classList.remove("cgo-pulse-once");
+      button.dataset.pulsed = "0";
+    }
+  }
+
+  CGO.injectExportButtonIntoHeader = function injectExportButtonIntoHeader() {
+    if (!/^(\/g\/[^/]+)?\/c\/([^/?#]+)/i.test(location.pathname)) return;
+
+    if (document.querySelector("div.cgo-toolbar")) return;
+
+    const headerActions = document.getElementById("conversation-header-actions");
+    if (!headerActions) return;
+
+    CGO.toolbarBase = document.createElement("div");
+    const toolbarBase = CGO.toolbarBase;
+    toolbarBase.className = "cgo-toolbar";
+    toolbarBase.hidden = true;
+
+    const open_new_tab_button = createOpenNewTabButton();
+    const download_button = createExportButton();
+    const zip_download_button = createZipExportButton();
+    const project_guide_alert_button = createProjectGuideAlertButton();
+    const settings_button = createSettingsButton();
+
+    toolbarBase.append(
+      zip_download_button,
+      download_button,
+      open_new_tab_button,
+      project_guide_alert_button,
+      settings_button
+    );
+
+    headerActions.prepend(toolbarBase);
+    ensureSettingsPanel();
+    void CGO.updateProjectGuideAlertVisibility?.();
+  }
+
+  CGO.injectExportButtonStyle = function injectExportButtonStyle() {
+    if (document.getElementById("cgo-export-style")) return;
+
+    const style = document.createElement("style");
+    style.id = "cgo-export-style";
+
+    style.textContent = `
   .cgo-toolbar {
     display: flex;
     gap: 6px;
@@ -789,76 +789,63 @@
   }
       `;
 
-      document.head.appendChild(style);
+    document.head.appendChild(style);
+  }
+
+  function setExportButtonState(button, state) {
+    if (!button) return;
+
+    if (state === "idle") {
+      button.disabled = false;
+      button.setAttribute("aria-disabled", "false");
+      button.classList.remove("cgo-btn-disabled");
+      CGO.setToolbarButtonText(button, "");
     }
 
-    CGO.setExportButtonState = function setExportButtonState(button, state) {
-      if (!button) return;
-
-      if (state === "idle") {
-        button.disabled = false;
-        button.setAttribute("aria-disabled", "false");
-        button.classList.remove("cgo-btn-disabled");
-        setToolbarButtonText(button, "");
-      }
-
-      if (state === "loading") {
-        button.disabled = true;
-        button.setAttribute("aria-disabled", "true");
-        button.classList.add("cgo-btn-disabled");
-        setToolbarButtonText(button, t("exporting"));
-      }
-
-      if (state === "error" || state === "export_retry") {
-        button.disabled = false;
-        button.setAttribute("aria-disabled", "false");
-        button.classList.remove("cgo-btn-disabled");
-        setToolbarButtonText(button, t("export_retry"));
-      }
+    if (state === "loading") {
+      button.disabled = true;
+      button.setAttribute("aria-disabled", "true");
+      button.classList.add("cgo-btn-disabled");
+      CGO.setToolbarButtonText(button, CGO.t("exporting"));
     }
 
-    CGO.startHeaderButtonObserver = function startHeaderButtonObserver() {
+    if (state === "error" || state === "export_retry") {
+      button.disabled = false;
+      button.setAttribute("aria-disabled", "false");
+      button.classList.remove("cgo-btn-disabled");
+      CGO.setToolbarButtonText(button, CGO.t("export_retry"));
+    }
+  }
 
-      const observer = new MutationObserver(() => {
-        injectExportButtonIntoHeader();
-      });
+  CGO.startHeaderButtonObserver = function startHeaderButtonObserver() {
 
-      observer.observe(document.body, {
-        childList: true,
-        subtree: true
-      });
-
+    const observer = new MutationObserver(() => {
       injectExportButtonIntoHeader();
+    });
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true
+    });
+
+    injectExportButtonIntoHeader();
+  }
+
+  CGO.updateExportButtonVisibility = function updateExportButtonVisibility(state) {
+    if (toolbarBase) {
+      toolbarBase.hidden = !state;
+    }
+  }
+
+  CGO.onDomReady = function onDomReady(callback) {
+    if (
+      document.readyState === "interactive" ||
+      document.readyState === "complete"
+    ) {
+      callback();
+      return;
     }
 
-    CGO.updateExportButtonVisibility = function updateExportButtonVisibility(state) {
-      if (toolbarBase) {
-        toolbarBase.hidden = !state;
-      }
-    }
-
-    CGO.onDomReady = function onDomReady(callback) {
-      if (
-        document.readyState === "interactive" ||
-        document.readyState === "complete"
-      ) {
-        callback();
-        return;
-      }
-
-      window.addEventListener("DOMContentLoaded", callback, { once: true });
-    }
-
-    /*  window.addEventListener("keydown", (event) => {
-        if (!location.pathname.startsWith("/c/")) return;
-     
-        if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "e") {
-          event.preventDefault();
-          event.stopPropagation();
-          exportCurrentConversationAsHtml();
-        }
-      });*/
-    // exporter end
-
+    window.addEventListener("DOMContentLoaded", callback, { once: true });
   }
 })();

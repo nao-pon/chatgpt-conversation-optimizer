@@ -2012,6 +2012,7 @@
    *
    * @param {{args: any[], response: Response, url: string}} options - Fetch call arguments: the original fetch arguments array, the original Response, and the request URL.
    * @returns {Response} The original Response when no processing or modification is performed, or a Response whose body contains the (possibly pruned) conversation JSON or preserved original body.
+   */
   async function handleFetchResponse({ args, response, url }) {
     const orgResponse = response;
     const shouldObserveEventStream =

@@ -101,9 +101,9 @@ Within exported views and supported UI areas, you can:
 For very long conversations:
 
 1. Continue working normally while the extension keeps the visible conversation lighter.
-2. When you want to revisit older content, open the **Lightweight HTML** viewer.
-3. When you want to keep a local archive, use **HTML Download**.
-4. When you also want to preserve attachments, use **ZIP Download**.
+2. To revisit older content, open the **Lightweight HTML** viewer.
+3. For a local archive, use **HTML Download**.
+4. To also preserve attachments, use **ZIP Download**.
 
 ---
 

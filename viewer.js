@@ -162,6 +162,54 @@
   }
 
   /**
+   * Select the safest and most appropriate text source from a message object.
+   *
+   * ChatGPT export data may contain multiple text representations:
+   * - `message.text`       : raw/original text (may include HTML-like content)
+   * - `message.renderText` : processed/render-ready text (may already be formatted)
+   *
+   * This function prioritizes **safety and predictability**:
+   * 1. Prefer `text` when available
+   *    竊・preserves original content and avoids unintended HTML execution
+   * 2. Fallback to `renderText` when `text` is empty
+   *
+   * Rationale:
+   * - `renderText` may contain partially rendered HTML or structures that
+   *   can break when passed through `innerHTML` again.
+   * - Using `text` helps avoid issues like:
+   *     - accidental `<script>` execution
+   *     - DOM structure corruption
+   *     - double-rendering artifacts
+   *
+   * This function is intentionally simple. Any advanced heuristics
+   * (e.g. detecting HTML-heavy content or switching modes) should be added
+   * carefully to avoid inconsistent rendering.
+   *
+   * @param {Object} message - Message object from payload.messages
+   * @param {string} [message.text] - Raw/original message text
+   * @param {string} [message.renderText] - Alternative/rendered text
+   *
+   * @returns {string} Selected source text (never null/undefined, may be empty string)
+   *
+   * @example
+   * const source = pickMessageSourceText(message);
+   * const html = renderMessageTextToHtml(source);
+   *
+   * @note
+   * This function does NOT perform sanitization or escaping.
+   * Always pass the result through `renderMessageTextToHtml()`.
+   */
+  function pickMessageSourceText(message) {
+    const rawText = typeof message?.text === "string" ? message.text : "";
+    const renderText = typeof message?.renderText === "string" ? message.renderText : "";
+
+    if (rawText) return rawText;
+    if (renderText) return renderText;
+    return "";
+  }
+
+
+  /**
    * Convert message text (plain or Markdown) into sanitized HTML suitable for embedding in the page.
    *
    * This strips known ChatGPT UI artifact sequences, escapes HTML, renders Markdown when `marked` is available
@@ -174,27 +222,26 @@
     const source = typeof text === "string" ? text : "";
     if (!source.trim()) return "";
 
-    const strippedSrc = stripChatgptUiArtifacts(source);
+    const rawSrc = stripChatgptUiArtifacts(source);
 
-    if (typeof marked === "undefined") {
-      const escapedSrc = escapeHtml(strippedSrc);
+    if (typeof marked === "undefined" || typeof DOMPurify === "undefined") {
+      const escapedSrc = escapeHtml(rawSrc);
       return `<div class="cgo-markdown"><p>${escapedSrc.replace(/\n/g, "<br>")}</p></div>`;
     }
 
-    const rawHtml = marked.parse(strippedSrc, {
+    const preEscapedSrc = rawSrc.replace(/<([^<>]+)>/g, "&lt;$1&gt;");
+
+    const rawHtml = marked.parse(preEscapedSrc, {
       breaks: true,
       gfm: true,
       renderer: createMarkedRenderer(),
     });
 
-    const safeHtml =
-      typeof DOMPurify !== "undefined"
-        ? DOMPurify.sanitize(rawHtml, {
-          USE_PROFILES: { html: true },
-          FORBID_TAGS: ["style", "script", "iframe", "object", "embed"],
-          FORBID_ATTR: ["style", "onerror", "onclick", "onload"],
-        })
-        : rawHtml;
+    const safeHtml = DOMPurify.sanitize(rawHtml, {
+      USE_PROFILES: { html: true },
+      FORBID_TAGS: ["style", "script", "iframe", "object", "embed", "svg", "path"],
+      FORBID_ATTR: ["style", "onerror", "onclick", "onload"],
+    });
 
     const wrapper = document.createElement("div");
     wrapper.innerHTML = safeHtml;
@@ -439,26 +486,59 @@
   }
 
   /**
-   * Render a conversation message into an HTML section string suitable for insertion into the viewer.
+   * Render a single conversation message into a complete HTML section.
    *
-   * @param {Object} message - Message data used to build the section.
-   * @param {string} [message.id] - Message identifier used for the section's id attribute.
-   * @param {string} [message.role] - Sender role (e.g., "user" or assistant) used for role label and CSS class.
-   * @param {number|string} [message.createTime] - Export timestamp (seconds) used to generate the displayed date.
-   * @param {string} [message.renderText] - Preferred markdown source text to render; falls back to `message.text`.
-   * @param {Array} [message.thoughts] - Optional thoughts array to render below the message body.
-   * @param {Array} [message.visibleImages] - Optional array of images to render (falls back to `message.images`).
-   * @param {Array} [message.visibleAttachments] - Optional array of attachments to render (falls back to `message.attachments`).
-   * @returns {string} An HTML string for the message section, including a JSON <script> with the raw markdown, header (role/date and copy action), and rendered body (markdown, thoughts, images, attachments).
+   * This function builds the structural HTML for one message, including:
+   * - Header (role label, timestamp, markdown copy button)
+   * - Body (rendered markdown content, thoughts, images, attachments)
+   *
+   * The actual markdown source text is NOT embedded directly here to avoid
+   * HTML parsing issues (e.g. accidental <script> execution). Instead, the raw
+   * markdown is injected later in `main()` as a hidden
+   * `<script type="application/json" class="cgo-message-markdown">`.
+   *
+   * Rendering flow:
+   * 1. Extract source text via `pickMessageSourceText()`
+   * 2. Convert to safe HTML via `renderMessageTextToHtml()`
+   * 3. Append optional sections:
+   *    - thoughts (renderThoughts)
+   *    - images (renderImages)
+   *    - attachments (renderAttachments)
+   *
+   * Security considerations:
+   * - All dynamic values are escaped via `escapeHtml()`
+   * - Markdown HTML output is sanitized via DOMPurify
+   * - No raw user HTML is directly injected into the DOM
+   *
+   * @param {Object} message - Message object from payload.messages
+   * @param {string} [message.id] - Unique message ID (used for DOM id)
+   * @param {string} [message.role] - "user" or "assistant"
+   * @param {number} [message.createTime] - Unix timestamp (seconds)
+   * @param {string} [message.text] - Raw text content (preferred for safety)
+   * @param {string} [message.renderText] - Pre-rendered/alternative text
+   * @param {Array} [message.thoughts] - Thought items to render
+   * @param {Array} [message.visibleImages] - Pre-filtered images
+   * @param {Array} [message.images] - Fallback images
+   * @param {Array} [message.visibleAttachments] - Pre-filtered attachments
+   * @param {Array} [message.attachments] - Fallback attachments
+   *
+   * @returns {string} HTML string representing the message section
+   *
+   * @example
+   * const html = buildMessageHtml(message);
+   * app.innerHTML += html;
+   *
+   * @note
+   * Do NOT embed raw markdown or JSON directly in this HTML string.
+   * Always inject it later using DOM APIs (see main()) to avoid parser issues.
    */
   function buildMessageHtml(message) {
     const roleLabel = message.role === "user" ? t("role_user") : t("role_assistant");
     const dateText = formatExportDate(message.createTime);
-    const sourceText = typeof message.renderText === "string" ? message.renderText : (message.text || "");
-    const rawMarkdownJson = JSON.stringify(typeof sourceText === "string" ? sourceText : "").replace(/<\//g, "<\/");
+    const sourceText = pickMessageSourceText(message);
 
-    return `<section class="message ${escapeHtml(message.role || "")}" id="${makeMessageDomId(message.id)}">
-  <script type="application/json" class="cgo-message-markdown">${rawMarkdownJson}</script>
+    return `
+<section class="message ${escapeHtml(message.role || "")}" id="mes-${escapeHtml(message.id || "")}">
   <div class="message-header">
     <div class="message-header-main">
       <span class="message-role">${escapeHtml(roleLabel)}</span>
@@ -535,7 +615,26 @@
         <span>${escapeHtml(t("exported_at"))}: ${escapeHtml(new Date(payload.exportedAt || Date.now()).toLocaleString())}</span>`;
 
       const app = document.getElementById("app");
-      app.innerHTML = (payload.messages || []).map(buildMessageHtml).join("\n");
+      const messages = payload.messages || [];
+
+      app.innerHTML = messages.map(buildMessageHtml).join("\n");
+
+      for (const message of messages) {
+        const messageId = String(message?.id || "");
+        if (!messageId) continue;
+
+        const section = app.querySelector(`#mes-${CSS.escape(messageId)}`);
+        if (!section) continue;
+
+        const sourceText = pickMessageSourceText(message);
+
+        const holder = document.createElement("script");
+        holder.type = "application/json";
+        holder.className = "cgo-message-markdown";
+        holder.textContent = JSON.stringify(sourceText || "");
+
+        section.insertBefore(holder, section.firstChild);
+      }
 
       installHandlers(payload);
 
