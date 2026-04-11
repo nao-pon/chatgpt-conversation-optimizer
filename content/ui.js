@@ -93,7 +93,7 @@
     button.addEventListener("click", async () => {
       try {
         setExportButtonState(button, "loading");
-        await exportCurrentConversationAsHtml(button, getCurrentVisibleMessageId());
+        await CGO.exportCurrentConversationAsHtml(button, CGO.getCurrentVisibleMessageId());
         setExportButtonState(button, "idle");
         CGO.setToolbarButtonText(button, "");
       } catch (error) {
@@ -114,7 +114,7 @@
     button.addEventListener("click", async () => {
       try {
         setExportButtonState(button, "loading");
-        await exportCurrentConversationAsHtml(button);
+        await CGO.exportCurrentConversationAsHtml(button);
         setExportButtonState(button, "idle");
         CGO.setToolbarButtonText(button, "");
       } catch (error) {
@@ -135,7 +135,7 @@
     button.addEventListener("click", async () => {
       try {
         setExportButtonState(button, "loading");
-        await exportCurrentConversationAsZip(button);
+        await CGO.exportCurrentConversationAsZip(button);
         setExportButtonState(button, "idle");
         CGO.setToolbarButtonText(button, "");
       } catch (error) {
@@ -206,7 +206,7 @@
 
         if (!conversationId) return;
 
-        await clearProjectGuideDismissed(conversationId);
+        await CGO.clearProjectGuideDismissed(conversationId);
 
         button.dataset.pulsed = "1";
 
@@ -262,7 +262,7 @@
      *
      * If the auto-adjust toggle is off, the label is set to the configured "disabled" text.
      * If the toggle is on, the function determines the effective value (conversation-specific override if available,
-     * otherwise CGO.STTINGS or CONFIG with a fallback of 40), clamps it to valid bounds, and sets the label to the
+     * otherwise CGO.SETTINGS or CGO.CONFIG with a fallback of 40), clamps it to valid bounds, and sets the label to the
      * configured "enabled" text with that value. On error, a warning is logged and the label is set using the
      * fallback value.
      */
@@ -277,66 +277,66 @@
       }
 
       try {
-        const conversationId = getConversationIdFromLocation?.() || "";
-        let effective = CGO.STTINGS.keepDomMessages ?? CONFIG.keepDomMessages ?? 40;
+        const conversationId = CGO.getConversationIdFromLocation?.() || "";
+        let effective = CGO.SETTINGS.keepDomMessages ?? CGO.CONFIG.keepDomMessages ?? 40;
 
         if (conversationId) {
-          const override = await loadConversationOverride(conversationId);
+          const override = await CGO.loadConversationOverride(conversationId);
 
           if (override?.keepDomMessages) {
-            effective = clampKeepDomMessages(override.keepDomMessages);
+            effective = CGO.clampKeepDomMessages(override.keepDomMessages);
           }
         }
 
         autoAdjustLabel.textContent = CGO.t("auto_adjust_enabled_label", String(effective));
       } catch (error) {
-        CGO.log("[warn] CGO.updateAutoAdjustLabel failed", String(error));
+        CGO.log("[warn] updateAutoAdjustLabel failed", String(error));
         autoAdjustLabel.textContent =
-          CGO.t("auto_adjust_enabled_label", String(CGO.STTINGS.keepDomMessages ?? CONFIG.keepDomMessages ?? 40));
+          CGO.t("auto_adjust_enabled_label", String(CGO.SETTINGS.keepDomMessages ?? CGO.CONFIG.keepDomMessages ?? 40));
       }
     }
 
     /**
      * Populate the settings panel inputs from persisted configuration and refresh the auto-adjust label.
      *
-     * Reads values from `CGO.STTINGS` (falling back to `CONFIG` and defaults) to set the keep-dom-messages input,
+     * Reads values from `CGO.SETTINGS` (falling back to `CGO.CONFIG` and defaults) to set the keep-dom-messages input,
      * the auto-adjust checkbox, and the HTML-images checkbox, then updates the auto-adjust descriptive label.
      */
     async function syncFromSettings() {
-      keepInput.value = String(CGO.STTINGS.keepDomMessages ?? CONFIG.keepDomMessages ?? 40);
-      autoAdjustInput.checked = !!CGO.STTINGS.autoAdjustEnabled;
-      htmlImagesInput.checked = CGO.STTINGS.htmlDownloadIncludeImages !== false;
-      await CGO.updateAutoAdjustLabel();
+      keepInput.value = String(CGO.SETTINGS.keepDomMessages ?? CGO.CONFIG.keepDomMessages ?? 40);
+      autoAdjustInput.checked = !!CGO.SETTINGS.autoAdjustEnabled;
+      htmlImagesInput.checked = CGO.SETTINGS.htmlDownloadIncludeImages !== false;
+      await updateAutoAdjustLabel();
     }
 
     saveBtn.addEventListener("click", async () => {
       try {
         const conversationId = CGO.getConversationIdFromLocation?.() || "";
-        const wasAutoAdjustEnabled = !!CGO.STTINGS.autoAdjustEnabled;
+        const wasAutoAdjustEnabled = !!CGO.SETTINGS.autoAdjustEnabled;
         const nextAutoAdjustEnabled = !!autoAdjustInput.checked;
 
-        await saveSettings({
+        await CGO.saveSettings({
           keepDomMessages: keepInput.value,
           autoAdjustEnabled: nextAutoAdjustEnabled,
           htmlDownloadIncludeImages: htmlImagesInput.checked,
         });
 
         if (wasAutoAdjustEnabled && !nextAutoAdjustEnabled && conversationId) {
-          await clearConversationOverride(conversationId);
+          await CGO.clearConversationOverride(conversationId);
           CGO.log("[autoAdjust] cleared conversation override", { conversationId });
         }
 
-        await postSettingsToPageHook?.();
+        await CGO.postSettingsToPageHook?.();
         await syncFromSettings();
         CGO.closeSettingsPanel();
-        CGO.log("settings saved", { ...CGO.STTINGS });
+        CGO.log("settings saved", { ...CGO.SETTINGS });
       } catch (error) {
         CGO.log("[error] saveSettings failed", String(error));
       }
     });
 
     autoAdjustInput.addEventListener("change", () => {
-      void CGO.updateAutoAdjustLabel();
+      void updateAutoAdjustLabel();
     });
 
     cancelBtn.addEventListener("click", () => {
@@ -414,7 +414,7 @@
     zipBtn.addEventListener("click", async () => {
       try {
         zipBtn.disabled = true;
-        await exportCurrentConversationAsZip();
+        await CGO.exportCurrentConversationAsZip();
       } catch (error) {
         CGO.log("[error] project guide zip export failed", String(error));
       } finally {
@@ -426,7 +426,7 @@
       try {
         const conversationId = CGO.STATE.projectGuide?.conversationId || CGO.getConversationIdFromLocation?.() || "";
         const level = Number(CGO.STATE.projectGuide?.level || 0);
-        await dismissProjectGuide(conversationId, level);
+        await CGO.dismissProjectGuide(conversationId, level);
         guide.hidden = true;
         await CGO.updateProjectGuideAlertVisibility?.();
       } catch (error) {
@@ -820,7 +820,7 @@
   CGO.startHeaderButtonObserver = function startHeaderButtonObserver() {
 
     const observer = new MutationObserver(() => {
-      injectExportButtonIntoHeader();
+      CGO.injectExportButtonIntoHeader();
     });
 
     observer.observe(document.body, {
@@ -828,12 +828,12 @@
       subtree: true
     });
 
-    injectExportButtonIntoHeader();
+    CGO.injectExportButtonIntoHeader();
   }
 
   CGO.updateExportButtonVisibility = function updateExportButtonVisibility(state) {
-    if (toolbarBase) {
-      toolbarBase.hidden = !state;
+    if (CGO.toolbarBase) {
+      CGO.toolbarBase.hidden = !state;
     }
   }
 

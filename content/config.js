@@ -79,7 +79,7 @@
     CGO.SETTINGS.autoAdjustEnabled = normalized.autoAdjustEnabled;
     CGO.SETTINGS.htmlDownloadIncludeImages = normalized.htmlDownloadIncludeImages;
 
-    CONFIG.keepDomMessages = normalized.keepDomMessages;
+    CGO.CONFIG.keepDomMessages = normalized.keepDomMessages;
 
     return CGO.SETTINGS;
   }
@@ -90,7 +90,7 @@
       const raw = stored?.[CGO.SETTING_STORAGE_KEY] || {};
       return applySettings(raw);
     } catch (error) {
-      log("[warn] CGO.loadSettings failed", String(error));
+      CGO.log("[warn] CGO.loadSettings failed", String(error));
       return applySettings(CGO.DEFAULT_SETTINGS);
     }
   }
@@ -133,7 +133,7 @@
       const stored = await chrome.storage.local.get(PROJECT_GUIDE_DISMISSED_STORAGE_KEY);
       return stored?.[PROJECT_GUIDE_DISMISSED_STORAGE_KEY] || {};
     } catch (error) {
-      log("[warn] loadProjectGuideDismissedMap failed", String(error));
+      CGO.log("[warn] loadProjectGuideDismissedMap failed", String(error));
       return {};
     }
   }
@@ -175,12 +175,12 @@
     });
   }
  
-  function loadConversationOverrides() {
+  async function loadConversationOverrides() {
     try {
       const stored = await chrome.storage.local.get(CGO.CONVERSATION_OVERRIDE_STORAGE_KEY);
       return stored?.[CGO.CONVERSATION_OVERRIDE_STORAGE_KEY] || {};
     } catch (error) {
-      log("[warn] loadConversationOverrides failed", String(error));
+      CGO.log("[warn] loadConversationOverrides failed", String(error));
       return {};
     }
   }
@@ -220,7 +220,7 @@
     });
   }
 
-  function getEffectiveKeepDomMessagesForConversation(conversationId = null, stats = null) {
+  async function getEffectiveKeepDomMessagesForConversation(conversationId = null, stats = null) {
     if (!CGO.SETTINGS.autoAdjustEnabled) {
       return CGO.SETTINGS.keepDomMessages;
     }
@@ -232,7 +232,7 @@
     if (conversationId) {
       const override = await CGO.loadConversationOverride(conversationId);
       if (override?.keepDomMessages) {
-        return clampKeepDomMessages(override.keepDomMessages);
+        return CGO.clampKeepDomMessages(override.keepDomMessages);
       }
     }
     if (stats) {
@@ -298,28 +298,28 @@
 
   function getDetectionPatternSet() {
     return (
-      DETECTION_PATTERNS[CGO.DETECTION_LANG] ||
-      DETECTION_PATTERNS.en
+      CGO.DETECTION_PATTERNS[CGO.DETECTION_LANG] ||
+      CGO.DETECTION_PATTERNS.en
     );
   }
 
   function injectPageBootstrapScript() {
-    const oldScript = document.getElementById(PAGE_BOOTSTRAP_ID);
+    const oldScript = document.getElementById(CGO.PAGE_BOOTSTRAP_ID);
     if (oldScript) {
       oldScript.remove();
     }
 
     const script = document.createElement("script");
-    script.id = PAGE_BOOTSTRAP_ID;
+    script.id = CGO.PAGE_BOOTSTRAP_ID;
     script.src = chrome.runtime.getURL("page-bootstrap.js");
-    script.dataset.cgoVersion = PAGE_HOOK_VERSION;
+    script.dataset.cgoVersion = CGO.PAGE_HOOK_VERSION;
 
     script.onload = () => {
-      log("page bootstrap loaded");
+      CGO.log("page bootstrap loaded");
     };
 
     script.onerror = (error) => {
-      log("[error] page bootstrap load failed", error);
+      CGO.log("[error] page bootstrap load failed", error);
     };
 
     (document.documentElement || document.head).prepend(script);
@@ -354,7 +354,7 @@
           {
             source: "CGO_CONTENT",
             type: "CGO_PING",
-            version: PAGE_HOOK_VERSION,
+            version: CGO.PAGE_HOOK_VERSION,
           },
           "*"
         );
@@ -375,7 +375,7 @@
         const data = event.data;
         if (!data || data.source !== "CGO_PAGE") return;
 
-        log("[CGO content] saw window message", data);
+        CGO.log("[CGO content] saw window message", data);
 
         // bootstrap が起動完了したら再 ping
         if (data.type === "CGO_READY" && data.bootstrap === true) {
@@ -385,7 +385,7 @@
 
         if (data.type === "CGO_PONG" && data.bootstrap === true) {
           cleanup();
-          resolve(data.version === PAGE_HOOK_VERSION);
+          resolve(data.version === CGO.PAGE_HOOK_VERSION);
         }
       }
 
@@ -426,7 +426,7 @@
           {
             source: "CGO_CONTENT",
             type: "CGO_INIT_SETTINGS",
-            version: PAGE_HOOK_VERSION,
+            version: CGO.PAGE_HOOK_VERSION,
             settings: {
               keepDomMessages: CGO.SETTINGS.keepDomMessages,
               autoAdjustEnabled: CGO.SETTINGS.autoAdjustEnabled,
@@ -455,7 +455,7 @@
             window.__CGO_BRIDGE_SECRET__ = data.secret;
           }
           cleanup();
-          resolve(data.version === PAGE_HOOK_VERSION);
+          resolve(data.version === CGO.PAGE_HOOK_VERSION);
         }
       }
 
@@ -466,23 +466,23 @@
 
   async function injectMainPageHookScript() {
     return new Promise((resolve, reject) => {
-      const oldScript = document.getElementById(PAGE_MAIN_HOOK_ID);
+      const oldScript = document.getElementById(CGO.PAGE_MAIN_HOOK_ID);
       if (oldScript) {
         oldScript.remove();
       }
 
       const script = document.createElement("script");
-      script.id = PAGE_MAIN_HOOK_ID;
+      script.id = CGO.PAGE_MAIN_HOOK_ID;
       script.src = chrome.runtime.getURL("page-hook.js");
-      script.dataset.cgoVersion = PAGE_HOOK_VERSION;
+      script.dataset.cgoVersion = CGO.PAGE_HOOK_VERSION;
 
       script.onload = () => {
-        log("main page-hook loaded");
+        CGO.log("main page-hook loaded");
         resolve();
       };
 
       script.onerror = (error) => {
-        log("[error] main page-hook load failed", error);
+        CGO.log("[error] main page-hook load failed", error);
         reject(new Error("page-hook.js load failed"));
       };
 
@@ -494,7 +494,7 @@
     const bootstrapAlive = await waitForBootstrapPong();
 
     if (!bootstrapAlive) {
-      log("[warn] bootstrap not responding");
+      CGO.log("[warn] bootstrap not responding");
       return false;
     }
 
@@ -507,14 +507,14 @@
       //const mainHookAliveAfterInject = await waitForMainHookPong();
       const mainHookAliveAfterInject = await waitForMainHookInitAck();
       if (!mainHookAliveAfterInject) {
-        log("[warn] main hook did not respond after inject");
+        CGO.log("[warn] main hook did not respond after inject");
         return false;
       }
 
-      log("main hook injected successfully");
+      CGO.log("main hook injected successfully");
       return true;
     } catch (error) {
-      log("[error] failed to inject main hook", error);
+      CGO.log("[error] failed to inject main hook", error);
       return false;
     }
   }
@@ -523,18 +523,18 @@
 
   CGO.observeRouteChanges = function observeRouteChanges() {
     const observer = new MutationObserver(async () => {
-      if (location.pathname !== LAST_PATHNAME) {
-        LAST_PATHNAME = location.pathname;
+      if (location.pathname !== CGO.LAST_PATHNAME) {
+        CGO.LAST_PATHNAME = location.pathname;
 
-        STATE.projectGuide = {
+        CGO.STATE.projectGuide = {
           conversationId: "",
           projectName: "",
           stats: null,
           level: 0,
         };
 
-        updateExportButtonVisibility(false);
-        injectExportButtonIntoHeader();
+        CGO.updateExportButtonVisibility?.(false);
+        CGO.injectExportButtonIntoHeader?.();
 
         const ok = await CGO.ensurePageHooksInjected();
         if (ok) {
@@ -553,18 +553,18 @@
     });
   }
 
-  CGO.matchesAnyPattern = function matchesAnyPattern(text, patterns) {
+  function matchesAnyPattern(text, patterns) {
     if (!text || !Array.isArray(patterns)) return false;
     return patterns.some((pattern) => pattern.test(text));
   }
 
   CGO.matchesGeneratedImagePrefix = function matchesGeneratedImagePrefix(text) {
     const patterns = getDetectionPatternSet().generatedImagePrefixes;
-    return CGO.matchesAnyPattern(text, patterns);
+    return matchesAnyPattern(text, patterns);
   }
 
   CGO.log = function log(...args) {
-    if (!CONFIG.debug) return;
+    if (!CGO.CONFIG.debug) return;
     console.log("[CGO]", ...args);
   }
 

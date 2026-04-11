@@ -6,7 +6,7 @@
     return document.querySelector("main");
   }
     
-  CGO.getTurnArticles = function getTurnArticles() {
+  function getTurnArticles() {
     const root = getConversationRoot();
     if (!root) return [];
     
@@ -16,7 +16,7 @@
   }
 
   function trimOldDomTurns() {
-    const nodes = CGO.getTurnArticles();
+    const nodes = getTurnArticles();
     const removeCount = nodes.length - CGO.CONFIG.keepDomMessages;
 
     if (removeCount <= 0 || !nodes.length) return;
@@ -77,7 +77,7 @@
 
   function handleRuntimeMessage(data) {
     if (data.type === "autoAdjustResult") {
-      const conversationId = data.conversationId || getConversationIdFromLocation?.() || "";
+      const conversationId = data.conversationId || CGO.getConversationIdFromLocation?.() || "";
       const projectName = data.projectName || "";
       const stats = data.stats || null;
       const level = CGO.getProjectGuideLevel(stats);
@@ -119,7 +119,7 @@
     }
 
     if (data.type === "analysis") {
-      CGO.updateExportButtonVisibility(true)
+      CGO.updateExportButtonVisibility?.(true)
       console.group("[CGO prune analysis]");
       console.log("url:", data.url);
       console.log("summary:", data.summary);
@@ -128,7 +128,7 @@
     }
 
     if (data.type === "streamNotify") {
-      CGO.updateExportButtonVisibility(true);
+      CGO.updateExportButtonVisibility?.(true);
       CGO.log("[streamNotify]", data.message);
       return;
     }

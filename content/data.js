@@ -82,7 +82,7 @@
     return chain.reverse();
   }
 
-  CGO.isExportableMessage = function isExportableMessage(message) {
+  function isExportableMessage(message) {
     const role = message?.author?.role;
 
     if (role !== "user" && role !== "assistant") {
@@ -150,7 +150,7 @@
     return `https://chatgpt.com/backend-api/estuary/content?id=${encodeURIComponent(fileId)}`;
   }
 
-  CGO.isLikelyChatgptAssetUrl = function isLikelyChatgptAssetUrl(url) {
+  function isLikelyChatgptAssetUrl(url) {
     return (
       typeof url === "string" &&
       (
@@ -167,7 +167,7 @@
     return url;
   }
 
-  CGO.collectObjectsDeep = function collectObjectsDeep(value, out = []) {
+  function collectObjectsDeep(value, out = []) {
     if (!value) return out;
 
     if (Array.isArray(value)) {
@@ -187,7 +187,7 @@
     return out;
   }
 
-  CGO.deriveImageAltFromObject = function deriveImageAltFromObject(obj, message) {
+  function deriveImageAltFromObject(obj, message) {
     if (!obj || typeof obj !== "object") return "";
 
     const candidates = [
@@ -210,15 +210,15 @@
     return "";
   }
 
-  CGO.looksLikeImageMime = function looksLikeImageMime(value) {
+  function looksLikeImageMime(value) {
     return typeof value === "string" && /^image\//i.test(value);
   }
 
-  CGO.looksLikeImageFilename = function looksLikeImageFilename(value) {
+  function looksLikeImageFilename(value) {
     return typeof value === "string" && /\.(png|jpg|jpeg|webp|gif|bmp|svg)$/i.test(value);
   }
 
-  CGO.looksLikeImageObject = function looksLikeImageObject(obj) {
+  function looksLikeImageObject(obj) {
     if (!obj || typeof obj !== "object") return false;
 
     const contentType = String(obj.content_type || obj.type || "").toLowerCase();
@@ -262,7 +262,7 @@
         message?.metadata?.async_task_title ||
         "";
 
-      results.push(normalizeImageMeta({
+      results.push(CGO.normalizeImageMeta({
         fileId,
         url,
         alt: title ? `${CGO.t("generated_image")}: ${title}` : "",
@@ -332,7 +332,7 @@
       for (const rawUrl of rawUrlCandidates) {
         if (typeof rawUrl !== "string" || !rawUrl.trim()) continue;
 
-        const url = normalizeMaybeRelativeChatgptUrl(rawUrl.trim());
+        const url = CGO.normalizeMaybeRelativeChatgptUrl(rawUrl.trim());
         if (!isLikelyChatgptAssetUrl(url)) continue;
 
         const prev = byUrl.get(url);
@@ -385,7 +385,7 @@
       name: att.name || "",
       mimeType: att.mime_type || "",
       fileSizeBytes: Number(att.size || 0),
-      kind: guessAttachmentKind(att.name, att.mime_type),
+      kind: CGO.guessAttachmentKind(att.name, att.mime_type),
       source: "metadata.attachments",
       unresolved: true,
       localPath: "",
@@ -394,9 +394,9 @@
   }
 
   // page-hook.js に同名関数あり、変更時は合わせて変更
-  CGO.buildSandboxFileId = function buildSandboxFileId(messageId, sandboxPath) {
+  function buildSandboxFileId(messageId, sandboxPath) {
     if (!messageId || !sandboxPath) return "";
-    return "sandbox:" + hash(`${messageId}:${sandboxPath}`);
+    return "sandbox:" + CGO.hash(`${messageId}:${sandboxPath}`);
   }
 
   CGO.extractSandboxArtifacts = function extractSandboxArtifacts(message) {
@@ -415,7 +415,7 @@
         name,
         mimeType: "",
         fileSizeBytes: 0,
-        kind: guessAttachmentKind(name, ""),
+        kind: CGO.guessAttachmentKind(name, ""),
         source: "sandbox-artifact",
         unresolved: true,
         localPath: "",
@@ -619,7 +619,7 @@
           name,
           mimeType,
           fileSizeBytes,
-          kind: guessAttachmentKind(name, mimeType),
+          kind: CGO.guessAttachmentKind(name, mimeType),
           source: "message-part-asset-pointer",
           unresolved: true,
           localPath: "",
@@ -653,7 +653,7 @@
         name,
         mimeType,
         fileSizeBytes,
-        kind: guessAttachmentKind(name, mimeType),
+        kind: CGO.guessAttachmentKind(name, mimeType),
         source: "content-reference-file",
         unresolved: true,
         localPath: "",
@@ -670,13 +670,13 @@
     results.push(...CGO.extractImageAssetsFromContentReferences(message));
 
     for (const toolMessage of toolMessages) {
-      results.push(...extractImageAssetsFromToolMessage(toolMessage));
+      results.push(...CGO.extractImageAssetsFromToolMessage(toolMessage));
     }
 
-    return dedupeImages(results.map(normalizeImageMeta));
+    return CGO.dedupeImages(results.map(CGO.normalizeImageMeta));
   }
 
-  CGO.normalizeThoughtsForExport = function normalizeThoughtsForExport(message) {
+  function normalizeThoughtsForExport(message) {
     const thoughts = Array.isArray(message?.content?.thoughts)
       ? message.content.thoughts
       : [];
@@ -869,8 +869,8 @@
       });
 
       const baseImage = matchedImage
-        ? normalizeImageMeta(matchedImage)
-        : normalizeImageMeta({
+        ? CGO.normalizeImageMeta(matchedImage)
+        : CGO.normalizeImageMeta({
           fileId: attachment.fileId || "",
           url: attachment.url || "",
           fileName: attachment.name || "",
@@ -886,7 +886,7 @@
 
       inlineImages.push({
         token,
-        image: normalizeImageMeta({
+        image: CGO.normalizeImageMeta({
           ...baseImage,
           fileId: baseImage.fileId || attachment.fileId || "",
           url: baseImage.url || attachment.url || "",
@@ -925,14 +925,14 @@
     const pendingThoughts = [];
 
     for (const msg of chain) {
-      if (!CGO.isExportableMessage(msg)) continue;
+      if (!isExportableMessage(msg)) continue;
 
       const isThoughtMessage = msg?.content?.content_type === "thoughts";
 
       if (isThoughtMessage) {
         pendingThoughts.push({
           id: msg.id,
-          thoughts: CGO.normalizeThoughtsForExport(msg),
+          thoughts: normalizeThoughtsForExport(msg),
         });
         continue;
       }
@@ -1042,7 +1042,7 @@
       return true;
     }
 
-    if (matchesGeneratedImagePrefix(text)) {
+    if (CGO.matchesGeneratedImagePrefix(text)) {
       return true;
     }
 
@@ -1072,7 +1072,7 @@
       if (looksLikeJsonBlob(text)) continue;
 
       // 短い画像ラベルだけ許可
-      if (matchesGeneratedImagePrefix(text)) {
+      if (CGO.matchesGeneratedImagePrefix(text)) {
         hints.push(text);
       }
     }
@@ -1124,7 +1124,7 @@
     return out;
   }
 
-  CGO.createEmptyImageMeta = function createEmptyImageMeta() {
+  function createEmptyImageMeta() {
     return {
       url: "",
       fileId: "",
@@ -1155,7 +1155,7 @@
     };
   }
 
-  CGO.getImageMergeKey = function getImageMergeKey(image) {
+  function getImageMergeKey(image) {
     return (
       image?.fileId ||
       image?.url ||
@@ -1163,9 +1163,9 @@
     );
   }
 
-  CGO.mergeImageMeta = function mergeImageMeta(primary, fallback) {
-    const a = normalizeImageMeta(primary);
-    const b = normalizeImageMeta(fallback);
+  function mergeImageMeta(primary, fallback) {
+    const a = CGO.normalizeImageMeta(primary);
+    const b = CGO.normalizeImageMeta(fallback);
 
     return {
       ...a,
@@ -1191,12 +1191,12 @@
     const map = new Map();
 
     for (const image of dataImages || []) {
-      const normalized = normalizeImageMeta(image);
+      const normalized = CGO.normalizeImageMeta(image);
       map.set(getImageMergeKey(normalized), normalized);
     }
 
     for (const image of domImages || []) {
-      const normalized = normalizeImageMeta(image);
+      const normalized = CGO.normalizeImageMeta(image);
       const key = getImageMergeKey(normalized);
 
       if (map.has(key)) {
@@ -1225,7 +1225,7 @@
     return Array.from(map.values());
   }
 
-  CGO.isLikelyDomImageAsset = function isLikelyDomImageAsset(asset) {
+  function isLikelyDomImageAsset(asset) {
     return !!(
       asset &&
       asset.role === "assistant" &&
@@ -1303,7 +1303,7 @@
         (img.id ? 10 : 0);
 
       const prev = byUrl.get(url);
-      const candidate = normalizeImageMeta({
+      const candidate = CGO.normalizeImageMeta({
         url,
         alt,
         width,

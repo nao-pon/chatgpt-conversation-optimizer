@@ -221,7 +221,7 @@
       .join("\n");
   }
 
-  CGO.renderThoughts = function renderThoughts(thoughts, messageId = "") {
+  function renderThoughts(thoughts, messageId = "") {
     if (!Array.isArray(thoughts) || thoughts.length === 0) return "";
 
     const safeMessageId = String(messageId || "thoughts")
@@ -235,7 +235,7 @@
       const summaryText = item?.summary || CGO.t("thought_item_fallback", String(index + 1));
       const summary = CGO.escapeHtml(summaryText);
       const contentHtml = item?.content
-        ? CGO.renderMessageTextToHtml(item.content, { interactiveCode: false })
+        ? renderMessageTextToHtml(item.content, { interactiveCode: false })
         : "";
       /*        const chunks = Array.isArray(item?.chunks) ? item.chunks : [];
               const chunksHtml = chunks.length
@@ -257,7 +257,7 @@
         title="${summary}"
         aria-label="${summary}"
         aria-expanded="false"
-      >${CGO.getThoughtIconSvg()}</button>
+      >${getThoughtIconSvg()}</button>
     `);
 
       panelsHtml.push(`
@@ -284,7 +284,7 @@
   </div>`;
   }
 
-  CGO.renderImageMeta = function renderImageMeta(image) {
+  function renderImageMeta(image) {
     const parts = [];
     
     if (image.width && image.height) {
@@ -317,7 +317,7 @@
       return `<figure class="cgo-image${isExternal ? " cgo-image-external" : ""}">
         <img src="${CGO.escapeHtml(image.localPath)}" alt="${alt}">
         ${caption ? `<figcaption>${caption}</figcaption>` : ""}
-        ${CGO.renderImageMeta(image)}
+        ${renderImageMeta(image)}
         ${sourceLink}
       </figure>`;
     }
@@ -327,7 +327,7 @@
       return `<figure class="cgo-image${isExternal ? " cgo-image-external" : ""}">
         <img src="${image.embeddedUrl}" alt="${alt}">
         ${caption ? `<figcaption>${caption}</figcaption>` : ""}
-        ${CGO.renderImageMeta(image)}
+        ${renderImageMeta(image)}
         ${sourceLink}
       </figure>`;
     }
@@ -336,7 +336,7 @@
     if (image.url && !image.unresolved && isExternal) {
       return `<figure class="cgo-image cgo-image-external">
         <img src="${CGO.escapeHtml(image.url)}" loading="lazy" referrerpolicy="no-referrer">
-        ${CGO.renderImageMeta(image)}
+        ${renderImageMeta(image)}
         ${sourceLink}
       </figure>`;
     }
@@ -346,7 +346,7 @@
       return `<figure class="cgo-image">
         <img src="${CGO.escapeHtml(image.url)}" alt="${alt}">
         ${caption ? `<figcaption>${caption}</figcaption>` : ""}
-        ${CGO.renderImageMeta(image)}
+        ${renderImageMeta(image)}
         ${sourceLink}
       </figure>`;
     }
@@ -388,7 +388,7 @@
     ].join("\n");
   }
 
-  CGO.renderImages = function renderImages(images) {
+  function renderImages(images) {
     return renderImagesBase(images);
   }
 
@@ -397,7 +397,7 @@
     return renderImagesBase(images, noImg);
   }
 
-  CGO.escapeRegExp = function escapeRegExp(value) {
+  function escapeRegExp(value) {
     return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
@@ -490,7 +490,7 @@
       .replace(/'/g, "&#39;");
   }
 
-  CGO.stripChatgptUiArtifacts = function stripChatgptUiArtifacts(text) {
+  function stripChatgptUiArtifacts(text) {
     if (!text) return "";
 
     return String(text)
@@ -503,7 +503,7 @@
       .trim();
   }
 
-  CGO.postProcessRenderedMarkdown = function postProcessRenderedMarkdown(containerHtml) {
+  function postProcessRenderedMarkdown(containerHtml) {
     const wrapper = document.createElement("div");
     wrapper.innerHTML = containerHtml;
 
@@ -515,7 +515,7 @@
     return wrapper.innerHTML;
   }
 
-  CGO.getMarkedTextValue = function getMarkedTextValue(value) {
+  function getMarkedTextValue(value) {
     if (typeof value === "string") return value;
     if (value && typeof value === "object") {
       if (typeof value.text === "string") return value.text;
@@ -525,7 +525,7 @@
     return String(value ?? "");
   }
 
-  CGO.createMarkedRenderer = function createMarkedRenderer(options = {}) {
+  function createMarkedRenderer(options = {}) {
     const interactiveCode = options.interactiveCode !== false;
     
     const renderer = new marked.Renderer();
@@ -544,8 +544,8 @@
           typeof codeOrToken.lang === "string" ? codeOrToken.lang :
             "";
       } else {
-        codeText = CGO.getMarkedTextValue(codeOrToken);
-        langText = CGO.getMarkedTextValue(maybeLang).trim();
+        codeText = getMarkedTextValue(codeOrToken);
+        langText = getMarkedTextValue(maybeLang).trim();
       }
     
       const unescaped = CGO.unescapeHtml(codeText);
@@ -578,7 +578,7 @@
     };
     
     renderer.codespan = function (codeOrToken) {
-      const codeText = CGO.getMarkedTextValue(codeOrToken);
+      const codeText = getMarkedTextValue(codeOrToken);
       const unescaped = CGO.unescapeHtml(codeText);
       const safe = CGO.escapeHtml(unescaped);
       return `<code>${safe}</code>`;
@@ -613,14 +613,14 @@
     return out;
   }
 
-  CGO.renderMessageTextToHtml = function renderMessageTextToHtml(text, options = {}) {
+  function renderMessageTextToHtml(text, options = {}) {
     const source = typeof text === "string" ? text : "";
     if (!source.trim()) return "";
     
-    const markdownSrc = CGO.stripChatgptUiArtifacts(source).replace(/<([^<>]+)>/g, "&lt;$1&gt;");
+    const markdownSrc = stripChatgptUiArtifacts(source).replace(/<([^<>]+)>/g, "&lt;$1&gt;");
     
-    if (typeof marked !== "undefined" && DOMPurify !== "undefined") {
-      const renderer = CGO.createMarkedRenderer(options);
+    if (typeof marked !== "undefined" && typeof DOMPurify !== "undefined") {
+      const renderer = createMarkedRenderer(options);
     
       const rawHtml = marked.parse(markdownSrc, {
         breaks: true,
@@ -634,14 +634,14 @@
         FORBID_ATTR: ["style", "onerror", "onclick", "onload"],
       });
     
-      return `<div class="cgo-markdown">${CGO.postProcessRenderedMarkdown(safeHtml)}</div>`;
+      return `<div class="cgo-markdown">${postProcessRenderedMarkdown(safeHtml)}</div>`;
     } else {
       const safeText = CGO.escapeHtml(markdownSrc);
       return `<div class="cgo-markdown"><p>${safeText.replace(/\n/g, "<br>")}</p></div>`;
     }
   }
 
-  CGO.formatExportDate = function formatExportDate(value) {
+  function formatExportDate(value) {
     if (!value) return "";
     try {
       return new Date(value * 1000).toLocaleString();
@@ -650,7 +650,7 @@
     }
   }
 
-  CGO.getThoughtIconSvg = function getThoughtIconSvg() {
+  function getThoughtIconSvg() {
     return `
     <svg viewBox="0 0 24 24" aria-hidden="true" class="cgo-thought-icon">
       <path fill="currentColor" d="M12 4c-4.42 0-8 2.91-8 6.5 0 1.94 1.05 3.68 2.74 4.87-.12.92-.52 1.89-1.34 2.77 1.64-.15 3.08-.74 4.23-1.72.73.18 1.52.28 2.37.28 4.42 0 8-2.91 8-6.5S16.42 4 12 4zm-3 6.5a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5zm3 0a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5zm3 0a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5z"/>
@@ -658,7 +658,7 @@
   `;
   };
 
-  CGO.getMarkdownCopyIconSvg = function getMarkdownCopyIconSvg() {
+  function getMarkdownCopyIconSvg() {
     return `
     <svg viewBox="0 0 24 24" aria-hidden="true" class="cgo-markdown-copy-icon">
       <path d="M8.5 3.75h6.6l3.15 3.15v9.85a2.25 2.25 0 0 1-2.25 2.25H8.5a2.25 2.25 0 0 1-2.25-2.25V6A2.25 2.25 0 0 1 8.5 3.75Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
@@ -677,8 +677,8 @@
     const {
       lightweight = false,
       zipMode = false,
-      thoughtsRenderer = options.lightweight ? function () { return ""; } : CGO.renderThoughts,
-      imageRenderer = options.lightweight ? renderImagesNoImg : CGO.renderImages,
+      thoughtsRenderer = options.lightweight ? function () { return ""; } : renderThoughts,
+      imageRenderer = options.lightweight ? renderImagesNoImg : renderImages,
       attachmentRenderer = CGO.renderAttachments,
       interactiveCode = false,
       interactiveUi = true,
@@ -693,7 +693,7 @@
 
     const messageHtml = messages.map((message) => {
       const roleLabel = message.role === "user" ? CGO.t("role_user") : CGO.t("role_assistant");
-      const dateText = CGO.formatExportDate(message.createTime);
+      const dateText = formatExportDate(message.createTime);
       const sourceText = typeof message.renderText === "string" ? message.renderText : message.text;
       const renderedText =
         zipMode
@@ -702,7 +702,7 @@
       const rawMarkdownJson = JSON.stringify(typeof sourceText === "string" ? sourceText : "")
         .replace(/<\//g, "<\\/");
       const markdownCopyLabel = CGO.escapeHtml(CGO.t("copy_markdown_button"));
-      let bodyHtml = CGO.renderMessageTextToHtml(renderedText, { interactiveCode });
+      let bodyHtml = renderMessageTextToHtml(renderedText, { interactiveCode });
       bodyHtml = renderPreparedInlineImagesInHtml(bodyHtml, message, {
         noImg: !!lightweight,
         zipMode: !!zipMode,
@@ -724,7 +724,7 @@
       </div>
       <div class="message-header-actions">
         <button type="button" class="cgo-icon-btn cgo-markdown-copy-btn" title="${markdownCopyLabel}" aria-label="${markdownCopyLabel}">
-          ${CGO.getMarkdownCopyIconSvg()}
+          ${getMarkdownCopyIconSvg()}
           <span class="cgo-icon-tooltip">${markdownCopyLabel}</span>
         </button>
       </div>
@@ -830,7 +830,12 @@
   }
 
   CGO.getCurrentVisibleMessageId = function getCurrentVisibleMessageId() {
-    const turns = Array.from(document.querySelectorAll('article[data-testid^="conversation-turn-"]'));
+    const turns = Array.from(
+      document.querySelectorAll(
+        'article[data-testid^="conversation-turn-"], section[data-testid^="conversation-turn-"]'
+      )
+    );
+
     if (turns.length === 0) return "";
 
     const viewportCenter = window.innerHeight / 2;
@@ -850,15 +855,20 @@
 
     if (!bestEl) return "";
 
-    // Parse turn id from data-testid attribute
-    const testId = bestEl.getAttribute('data-testid') || "";
-    const match = testId.match(/^conversation-turn-(.+)$/);
-    if (match) {
-      return match[1];
-    }
+    return (
+      bestEl.getAttribute("data-turn-id") ||
+      bestEl.querySelector("[data-message-id]")?.getAttribute("data-message-id") ||
+      ""
+    );
+  };
 
-    // Fallback to dataset.turnId
-    return bestEl.dataset.turnId || "";
+  function resolveExportMessageIdFromDomId(messages, domMessageId) {
+    if (!domMessageId || !Array.isArray(messages)) return "";
+
+    const direct = messages.find((message) => message?.id === domMessageId);
+    if (direct?.id) return direct.id;
+
+    return "";
   }
 
   CGO.exportCurrentConversationAsHtml = async function exportCurrentConversationAsHtml(button, action = "download") {
@@ -968,12 +978,20 @@
       if (action == "download") {
         downloadTextFile(CGO.buildSafeFilename(title, "html"), html, "text/html;charset=utf-8");
       } else {
+        const requestedMessageId =
+          action === "download" ? "" : action;
+
+        const resolvedMessageId =
+          requestedMessageId
+            ? resolveExportMessageIdFromDomId(messages, requestedMessageId)
+            : "";
+
         const lightweightPayload = {
           title,
           conversationId,
           projectName,
           conversationTitle,
-          messageId: action === "download" ? "" : action,
+          messageId: resolvedMessageId,
           messages: messages.map((message) => ({
             id: message.id,
             role: message.role,
@@ -987,6 +1005,7 @@
             visibleAttachments: message.visibleAttachments || [],
           })),
         };
+
         await openLightweightViewer(lightweightPayload);
         return;
       }

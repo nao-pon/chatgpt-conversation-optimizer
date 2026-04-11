@@ -2,7 +2,7 @@
   if (globalThis.__CGO_SKIP__) return;
   const CGO = (globalThis.__CGO ||= {});
 
-  CGO.main = async function main() {
+  async function main() {
     await CGO.loadSettings();
     CGO.observeWindowMessages();
     //observeConversationStats();
@@ -25,5 +25,5 @@
     });
   }
 
-  CGO.main();
+  main();
 })();

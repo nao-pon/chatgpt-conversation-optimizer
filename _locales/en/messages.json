@@ -165,7 +165,7 @@
     "message": "Collapse"
   },
   "settings_button": {
-    "message": "ChatGPT Optimaizer settings"
+    "message": "ChatGPT Optimizer settings"
   },
   "keep_dom_messages_label": {
     "message": "Number of messages to display in the browser"
