@@ -1,10 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Conversation Optimizer for ChatGPT",
-  "version": "1.0.1",
+  "version": "2.0.0",
   "description": "Improve performance in long ChatGPT conversations by optimizing off-screen messages.",
-  "minimum_chrome_version": "88",
-  "permissions": ["storage"],
+  "minimum_chrome_version": "111",
+  "permissions": [
+    "storage"
+  ],
   "default_locale": "en",
   "host_permissions": [
     "https://chatgpt.com/*",
@@ -16,13 +18,58 @@
         "https://chatgpt.com/*",
         "https://chat.openai.com/*"
       ],
-      "js": ["content.js"],
-      "run_at": "document_idle"
+      "js": [
+        "page-bootstrap.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": [
+        "vendor/marked.min.js",
+        "vendor/purify.min.js",
+        "vendor/jszip.min.js",
+        "content/config.js",
+        "content/data.js",
+        "content/dom.js",
+        "content/render.js",
+        "content/export.js",
+        "content/ui.js",
+        "content/main.js"
+      ],
+      "css": [
+        "vendor/github-dark.min.css"
+      ],
+      "run_at": "document_start"
     }
   ],
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "page-bootstrap.js",
+        "page-hook.js",
+        "viewer.html",
+        "viewer.js",
+        "vendor/marked.min.js",
+        "vendor/purify.min.js",
+        "vendor/highlight.min.js",
+        "vendor/github-dark.min.css",
+        "shared-export.css",
+        "shared-export-ui.js"
+      ],
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ]
+    }
+  ]
 }

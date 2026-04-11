@@ -1,24 +1,257 @@
 {
-  "extName": { "message": "Conversation Optimizer for ChatGPT" },
-  "optimizer": { "message": "Optimizer" },
-  "off": { "message": "OFF" },
-  "weak": { "message": "Weak" },
-  "medium": { "message": "Medium" },
-  "strong": { "message": "Strong" },
-  "autoOn": { "message": "Auto: On" },
-  "autoOff": { "message": "Auto: Off" },
-  "intensity": { "message": "Intensity" },
-  "autoArrow": { "message": "Auto → $MODE$",
-    "placeholders": { "mode": { "content": "$1" } }
+  "role_user": {
+    "message": "User"
   },
-  "countsLine": {
-    "message": "Messages: $COUNT$ / Optimized: $OPTIMIZED$",
-    "placeholders": {
-      "count": { "content": "$1" },
-      "optimized": { "content": "$2" }
-    }
+  "role_assistant": {
+    "message": "Assistant"
   },
-  "debugOn": { "message": "Debug: On" },
-  "debugOff": { "message": "Debug: Off" },
-  "selector": { "message": "Selector" }
+  "attachments": {
+    "message": "Attachments"
+  },
+  "image_hint_label": {
+    "message": "Image reference hint"
+  },
+  "image_prompt_label": {
+    "message": "Image prompt"
+  },
+  "image_hint_fallback": {
+    "message": "Image exists (URL unavailable)"
+  },
+  "image_generation": {
+    "message": "Image generation"
+  },
+  "generated_image": {
+    "message": "Generated image"
+  },
+  "image_not_include_label": {
+    "message": "Images are excluded in the lightweight version"
+  },
+  "image_unavailable_label": {
+    "message": "An image was present but could not be embedded"
+  },
+  "generated_image_present_label": {
+    "message": "Image data present"
+  },
+  "conversation_id": {
+    "message": "Conversation ID"
+  },
+  "download_button": {
+    "message": "Download"
+  },
+  "open_new_tab_button": {
+    "message": "Open light page"
+  },
+  "exported_at": {
+    "message": "Exported"
+  },
+  "export_failed": {
+    "message": "HTML export failed"
+  },
+  "export_resolving_progress": {
+    "message": "Resolving image URLs... ($1/$2)"
+  },
+  "exporting": {
+    "message": "Exporting..."
+  },
+  "export_progress": {
+    "message": "Exporting...($1/$2)"
+  },
+  "export_retry": {
+    "message": "Retry"
+  },
+  "zip_download_button": {
+    "message": "Save as ZIP"
+  },
+  "export_zip_progress": {
+    "message": "Building ZIP... ($1/$2)"
+  },
+  "image_source_link_label": {
+    "message": "Open source image"
+  },
+  "attachment_unknown_name": {
+    "message": "Unnamed attachment"
+  },
+  "attachment_open_link": {
+    "message": "Open source link"
+  },
+  "attachment_open_local_link": {
+    "message": "Open file in ZIP"
+  },
+  "attachment_not_embedded_label": {
+    "message": "Not included in HTML"
+  },
+  "attachment_kind_archive": {
+    "message": "Archive"
+  },
+  "attachment_kind_pdf": {
+    "message": "PDF"
+  },
+  "attachment_kind_text": {
+    "message": "Text"
+  },
+  "attachment_kind_attachment": {
+    "message": "Attachment"
+  },
+  "export_resolving_attachments_progress": {
+    "message": "Resolving attachment URLs... ($1/$2)"
+  },
+  "export_zip_attachments_progress": {
+    "message": "Saving attachments... ($1/$2)"
+  },
+  "attachment_kind_image": {
+    "message": "Image"
+  },
+  "attachment_kind_code": {
+    "message": "Code"
+  },
+  "attachment_sandbox_artifact_label": {
+    "message": "Generated file artifact"
+  },
+  "attachment_skip_too_large": {
+    "message": "Not included in ZIP (file too large, maxium: $1)"
+  },
+  "attachment_skip_unresolved": {
+    "message": "Not included (could not resolve URL)"
+  },
+  "attachment_skip_sandbox": {
+    "message": "Not included (temporary generated file)"
+  },
+  "attachment_skip_unsupported_media": {
+    "message": "Download failed (unsupported media type)"
+  },
+  "attachment_skip_auth": {
+    "message": "Download failed (authentication failed)"
+  },
+  "attachment_skip_server": {
+    "message": "Download failed (server error)"
+  },
+  "attachment_skip_network": {
+    "message": "Download failed (network error)"
+  },
+  "attachment_skip_not_found": {
+    "message": "Download failed (file not found)"
+  },
+  "attachment_skip_expired": {
+    "message": "Download failed (file expired)"
+  },
+  "image_skip_setting": {
+    "message": "Could not display because setting \"Embed images in HTML download\" is off"
+  },
+  "image_skip_unresolved": {
+    "message": "Could not display because the URL could not be resolved"
+  },
+  "image_skip_unsupported_media": {
+    "message": "Could not display because the media type is not supported as an image"
+  },
+  "image_skip_auth": {
+    "message": "Could not display because authentication failed"
+  },
+  "image_skip_server": {
+    "message": "Could not display because of a server error"
+  },
+  "image_skip_network": {
+    "message": "Could not display because of a network error"
+  },
+  "image_skip_not_found": {
+    "message": "Could not display because the image was not found"
+  },
+  "copy_button": {
+    "message": "Copy"
+  },
+  "expand_code_button": {
+    "message": "Expand"
+  },
+  "collapse_code_button": {
+    "message": "Collapse"
+  },
+  "settings_button": {
+    "message": "ChatGPT Optimizer settings"
+  },
+  "keep_dom_messages_label": {
+    "message": "Number of messages to display in the browser"
+  },
+  "auto_adjust_disabled_label": {
+    "message": "Automatically adjust message count"
+  },
+  "auto_adjust_enabled_label": {
+    "message": "Automatically adjust message count (current value: $1)"
+  },
+  "html_include_images_label": {
+    "message": "Embed images in HTML download"
+  },
+  "save_button": {
+    "message": "Save"
+  },
+  "cancel_button": {
+    "message": "Cancel"
+  },
+  "hide_button": {
+    "message": "Ignore"
+  },
+  "project_guide_title_level1": {
+    "message": "This conversation is growing"
+  },
+  "project_guide_body_level1": {
+    "message": "You may want to organize related work in a project."
+  },
+  "project_guide_title_level2": {
+    "message": "This conversation is getting long"
+  },
+  "project_guide_body_level2": {
+    "message": "A project can make related chats easier to organize."
+  },
+  "project_guide_title_level3": {
+    "message": "This conversation is getting very large"
+  },
+  "project_guide_body_level3": {
+    "message": "Saving this chat and moving related work into a project may make it easier to manage."
+  },
+  "project_guide_title_project_level1": {
+    "message": "This project chat is getting longer"
+  },
+  "project_guide_body_project_level1": {
+    "message": "A fresh chat inside \"$1\" may be easier to manage."
+  },
+  "project_guide_title_project_level2": {
+    "message": "Long conversation in project"
+  },
+  "project_guide_body_project_level2": {
+    "message": "Continue in a new chat inside \"$1\" to keep things organized."
+  },
+  "project_guide_title_project_level3": {
+    "message": "This conversation is getting very large"
+  },
+  "project_guide_body_project_level3": {
+    "message": "You may want to continue in a new chat inside \"$1\" after saving this one."
+  },
+  "project_guide_alert_button": {
+    "message": "Very large conversation"
+  },
+  "project_guide_alert_tooltip": {
+    "message": "This conversation is very large. Click to reopen the guide."
+  },
+  "thoughts_toggle_label": {
+    "message": "Display thought data"
+  },
+  "thought_item_fallback": {
+    "message": "Thought $1"
+  },
+  "thought_finished_label": {
+    "message": "Finished"
+  },
+  "close_button": {
+    "message": "Close"
+  },
+  "untitled_conversation": {
+    "message": "Untitled Conversation"
+  },
+  "copy_markdown_button": {
+    "message": "Copy Markdown"
+  },
+  "copied_button": {
+    "message": "Copied"
+  },
+  "copy_failed_button": {
+    "message": "Failed"
+  }
 }
