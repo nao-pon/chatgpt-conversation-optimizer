@@ -2,10 +2,20 @@
   if (globalThis.__CGO_SKIP__) return;
   const CGO = (globalThis.__CGO ||= {});
 
+  /**
+   * Return the root element that contains the visible conversation turns.
+   *
+   * @returns {?HTMLElement} Conversation root element.
+   */
   function getConversationRoot() {
     return document.querySelector("main");
   }
     
+  /**
+   * Collect currently mounted conversation turn articles from the ChatGPT UI.
+   *
+   * @returns {HTMLElement[]} Connected turn nodes in DOM order.
+   */
   function getTurnArticles() {
     const root = getConversationRoot();
     if (!root) return [];
@@ -15,6 +25,9 @@
     ).filter((node) => node && node.isConnected);
   }
 
+  /**
+   * Remove the oldest visible turns once the DOM exceeds the configured retention budget.
+   */
   function trimOldDomTurns() {
     const nodes = getTurnArticles();
     const removeCount = nodes.length - CGO.CONFIG.keepDomMessages;
@@ -35,6 +48,12 @@
     });
   }
 
+  /**
+   * Schedule work during an idle period with a timeout fallback for browsers without `requestIdleCallback`.
+   *
+   * @param {Function} fn - Callback to run when the browser is idle.
+   * @param {number} [timeout=2000] - Idle callback timeout hint in milliseconds.
+   */
   function runWhenIdle(fn, timeout = 2000) {
     if (typeof requestIdleCallback === "function") {
       requestIdleCallback(fn, { timeout });
@@ -43,6 +62,11 @@
     setTimeout(fn, 0);
   }
 
+  /**
+   * Queue a single deferred DOM trim pass after streaming settles.
+   *
+   * @param {number} [delayMs=CGO.CONFIG.domTrimDelayMs] - Delay before trimming begins.
+   */
   function scheduleDomTrim(delayMs = CGO.CONFIG.domTrimDelayMs) {
     if (CGO.STATE.trimScheduled) return;
     CGO.STATE.trimScheduled = true;
@@ -55,7 +79,7 @@
     }, delayMs);
   }
 
-  CGO.observeStreamCompletion = function observeStreamCompletion() {
+  function observeStreamCompletion() {
     const observer = new MutationObserver(() => {
       if (!location.pathname.startsWith("/c/")) return;
 
@@ -75,6 +99,11 @@
     });
   }
 
+  /**
+   * Handle messages emitted by the injected page runtime and update extension UI state.
+   *
+   * @param {Object} data - Runtime payload posted on `window`.
+   */
   function handleRuntimeMessage(data) {
     if (data.type === "autoAdjustResult") {
       const conversationId = data.conversationId || CGO.getConversationIdFromLocation?.() || "";
@@ -143,7 +172,7 @@
     }
   }
 
-  CGO.observeWindowMessages = function observeWindowMessages() {
+  function observeWindowMessages() {
     window.addEventListener("message", (event) => {
       if (event.source !== window) return;
 
@@ -153,4 +182,7 @@
       handleRuntimeMessage(data);
     });
   }
+
+  CGO.observeStreamCompletion = observeStreamCompletion;
+  CGO.observeWindowMessages = observeWindowMessages;
 })();

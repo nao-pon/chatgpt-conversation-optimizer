@@ -46,6 +46,12 @@
     }
   }
 
+  /**
+   * Build a toolbar button shell with a consistent icon/label structure.
+   *
+   * @param {{title: string, iconKind: string}} options - Button descriptor.
+   * @returns {HTMLButtonElement} Configured toolbar button.
+   */
   function buildToolbarButton({ title, iconKind }) {
     const button = document.createElement("button");
     button.type = "button";
@@ -68,7 +74,13 @@
     return button;
   }
 
-  CGO.setToolbarButtonText = function setToolbarButtonText(button, text = "") {
+  /**
+   * Swap a toolbar button between icon-only and progress-label display.
+   *
+   * @param {HTMLButtonElement} button - Toolbar button to update.
+   * @param {string} [text=""] - Label text; empty string restores icon-only mode.
+   */
+  function setToolbarButtonText(button, text = "") {
     const icon = button.querySelector(".cgo-btn-icon");
     const label = button.querySelector(".cgo-btn-label");
     if (!icon || !label) return;
@@ -147,6 +159,11 @@
     return button;
   }
 
+  /**
+   * Toggle the visibility of the settings popover anchored to the provided button.
+   *
+   * @param {HTMLButtonElement} button - Button used as the popover anchor.
+   */
   function toggleSettingsPanel(button) {
     const panel = document.getElementById("cgo-settings-panel");
     if (!panel) return;
@@ -157,7 +174,10 @@
     }
   }
 
-  CGO.closeSettingsPanel = function closeSettingsPanel() {
+  /**
+   * Hide the settings popover if it is currently mounted.
+   */
+  function closeSettingsPanel() {
     const panel = document.getElementById("cgo-settings-panel");
     if (!panel) return;
     panel.hidden = true;
@@ -220,6 +240,11 @@
     return button;
   }
 
+  /**
+   * Create the settings popover and wire it to persisted extension settings.
+   *
+   * @returns {HTMLDivElement} Settings panel element.
+   */
   function buildSettingsPanel() {
     const panel = document.createElement("div");
     panel.id = "cgo-settings-panel";
@@ -353,6 +378,11 @@
     return panel;
   }
 
+  /**
+   * Ensure the settings panel exists in the document and return it.
+   *
+   * @returns {?HTMLDivElement} Existing or newly created settings panel.
+   */
   function ensureSettingsPanel() {
     let panel = document.getElementById("cgo-settings-panel");
     if (panel) return panel;
@@ -365,6 +395,11 @@
     return panel;
   }
 
+  /**
+   * Position and reveal the settings panel near the toolbar button that opened it.
+   *
+   * @param {HTMLElement} buttonEl - Anchor element used to place the panel.
+   */
   function openSettingsPanel(buttonEl) {
     const panel = ensureSettingsPanel();
     if (!panel) return;
@@ -382,6 +417,11 @@
     panel.hidden = false;
   }
 
+  /**
+   * Ensure the project guide callout exists below the conversation header.
+   *
+   * @returns {?HTMLDivElement} Existing or newly created guide element.
+   */
   function ensureProjectGuide() {
     let guide = document.getElementById("cgo-project-guide");
     if (guide) return guide;
@@ -438,6 +478,12 @@
     return guide;
   }
 
+  /**
+   * Return localized project-guide copy for the current warning level and project context.
+   *
+   * @param {{level?: number, projectName?: string}} [options={}] - Guide display context.
+   * @returns {{title: string, body: string}} Title/body pair for the guide UI.
+   */
   function getProjectGuideTexts({ level = 0, projectName = "" } = {}) {
     const inProject = !!String(projectName || "").trim();
 
@@ -460,7 +506,12 @@
     };
   }
 
-  CGO.updateProjectGuideVisibility = async function updateProjectGuideVisibility() {
+  /**
+   * Update the visibility and text of the project guide callout based on current conversation stats.
+   *
+   * @returns {Promise<void>} Resolves after the guide state is refreshed.
+   */
+  async function updateProjectGuideVisibility() {
     const guide = ensureProjectGuide();
     if (!guide) return;
 
@@ -498,7 +549,12 @@
     await CGO.updateProjectGuideAlertVisibility?.();
   }
 
-  CGO.updateProjectGuideAlertVisibility = async function updateProjectGuideAlertVisibility() {
+  /**
+   * Update the toolbar alert button that reopens the dismissed project guide for very large conversations.
+   *
+   * @returns {Promise<void>} Resolves after the alert button state is refreshed.
+   */
+  async function updateProjectGuideAlertVisibility() {
     const button = document.getElementById("cgo-project-guide-alert");
     if (!button) return;
 
@@ -548,7 +604,10 @@
     }
   }
 
-  CGO.injectExportButtonIntoHeader = function injectExportButtonIntoHeader() {
+  /**
+   * Inject the export toolbar into the conversation header when the route supports it.
+   */
+  function injectExportButtonIntoHeader() {
     if (!/^(\/g\/[^/]+)?\/c\/([^/?#]+)/i.test(location.pathname)) return;
 
     if (document.querySelector("div.cgo-toolbar")) return;
@@ -580,7 +639,10 @@
     void CGO.updateProjectGuideAlertVisibility?.();
   }
 
-  CGO.injectExportButtonStyle = function injectExportButtonStyle() {
+  /**
+   * Inject the stylesheet used by the export toolbar, settings panel, and project guide UI.
+   */
+  function injectExportButtonStyle() {
     if (document.getElementById("cgo-export-style")) return;
 
     const style = document.createElement("style");
@@ -792,6 +854,12 @@
     document.head.appendChild(style);
   }
 
+  /**
+   * Apply the visual state for an export-related toolbar button.
+   *
+   * @param {HTMLButtonElement} button - Toolbar button to update.
+   * @param {"idle"|"loading"|"error"|"export_retry"} state - Desired UI state.
+   */
   function setExportButtonState(button, state) {
     if (!button) return;
 
@@ -817,7 +885,10 @@
     }
   }
 
-  CGO.startHeaderButtonObserver = function startHeaderButtonObserver() {
+  /**
+   * Observe header mutations and ensure the export toolbar stays mounted across SPA updates.
+   */
+  function startHeaderButtonObserver() {
 
     const observer = new MutationObserver(() => {
       CGO.injectExportButtonIntoHeader();
@@ -831,13 +902,23 @@
     CGO.injectExportButtonIntoHeader();
   }
 
-  CGO.updateExportButtonVisibility = function updateExportButtonVisibility(state) {
+  /**
+   * Show or hide the export toolbar as a whole.
+   *
+   * @param {boolean} state - Whether the toolbar should be visible.
+   */
+  function updateExportButtonVisibility(state) {
     if (CGO.toolbarBase) {
       CGO.toolbarBase.hidden = !state;
     }
   }
 
-  CGO.onDomReady = function onDomReady(callback) {
+  /**
+   * Run a callback once the document is ready for DOM manipulation.
+   *
+   * @param {Function} callback - Callback to invoke on DOM readiness.
+   */
+  function onDomReady(callback) {
     if (
       document.readyState === "interactive" ||
       document.readyState === "complete"
@@ -848,4 +929,14 @@
 
     window.addEventListener("DOMContentLoaded", callback, { once: true });
   }
+
+  CGO.closeSettingsPanel = closeSettingsPanel;
+  CGO.injectExportButtonIntoHeader = injectExportButtonIntoHeader;
+  CGO.injectExportButtonStyle = injectExportButtonStyle;
+  CGO.onDomReady = onDomReady;
+  CGO.setToolbarButtonText = setToolbarButtonText;
+  CGO.startHeaderButtonObserver = startHeaderButtonObserver;
+  CGO.updateExportButtonVisibility = updateExportButtonVisibility;
+  CGO.updateProjectGuideAlertVisibility = updateProjectGuideAlertVisibility;
+  CGO.updateProjectGuideVisibility = updateProjectGuideVisibility;
 })();

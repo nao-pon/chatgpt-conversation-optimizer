@@ -1,7 +1,12 @@
 (() => {
   if (globalThis.__CGO_SKIP__) return;
   const CGO = (globalThis.__CGO ||= {});
-  CGO.getConversationFromCache = function getConversationFromCache() {
+  /**
+   * Request the current conversation payload from the page hook's in-memory cache.
+   *
+   * @returns {Promise<Object>} Cached conversation data used for export.
+   */
+  function getConversationFromCache() {
     return new Promise((resolve, reject) => {
       const conversationId = CGO.getConversationIdFromLocation();
       const requestId = "cgo_export_" + Date.now();
@@ -49,7 +54,12 @@
     });
   }
 
-  CGO.getConversationIdFromLocation = function getConversationIdFromLocation() {
+  /**
+   * Extract the current conversation id from the active ChatGPT URL.
+   *
+   * @returns {?string} Conversation id or `null` when the page is not a conversation route.
+   */
+  function getConversationIdFromLocation() {
     const path = location.pathname;
 
     // 通常会話 /c/<id> だが、WEB:... のような ":" 含みも許可
@@ -63,7 +73,14 @@
     return null;
   }
 
-  CGO.buildExportChain = function buildExportChain(mapping, currentNode) {
+  /**
+   * Walk backward from the current node and build the ordered message chain for export.
+   *
+   * @param {Object} mapping - Conversation node map keyed by node id.
+   * @param {?string} currentNode - Current leaf node id.
+   * @returns {Object[]} Ordered message chain from oldest to newest.
+   */
+  function buildExportChain(mapping, currentNode) {
     const chain = [];
     const seen = new Set();
     let cursor = currentNode;
@@ -160,7 +177,13 @@
     );
   }
 
-  CGO.normalizeMaybeRelativeChatgptUrl = function normalizeMaybeRelativeChatgptUrl(url) {
+  /**
+   * Convert relative ChatGPT asset URLs into absolute URLs when needed.
+   *
+   * @param {string} url - Candidate URL.
+   * @returns {string} Absolute or original URL string.
+   */
+  function normalizeMaybeRelativeChatgptUrl(url) {
     if (!url || typeof url !== "string") return "";
     if (url.startsWith("http://") || url.startsWith("https://")) return url;
     if (url.startsWith("/")) return `https://chatgpt.com${url}`;
@@ -235,7 +258,13 @@
     );
   }
 
-  CGO.extractImageAssetsFromToolMessage = function extractImageAssetsFromToolMessage(message) {
+  /**
+   * Extract generated image metadata from tool-role messages.
+   *
+   * @param {Object} message - Tool message payload.
+   * @returns {Object[]} Normalized image metadata entries.
+   */
+  function extractImageAssetsFromToolMessage(message) {
     if (!message || typeof message !== "object") return [];
     if (message?.author?.role !== "tool") return [];
 
@@ -279,7 +308,13 @@
     return results;
   }
 
-  CGO.extractImageAssetsFromMessageData = function extractImageAssetsFromMessageData(message) {
+  /**
+   * Scan a raw message payload for image-like objects and URLs.
+   *
+   * @param {Object} message - Raw message payload.
+   * @returns {Object[]} Image metadata inferred from nested message data.
+   */
+  function extractImageAssetsFromMessageData(message) {
     if (!message || typeof message !== "object") return [];
 
     const objects = collectObjectsDeep(message, []);
@@ -375,7 +410,13 @@
     }));
   }
 
-  CGO.extractAttachmentsFromMetadataAttachments = function extractAttachmentsFromMetadataAttachments(message) {
+  /**
+   * Extract attachment metadata from `message.metadata.attachments`.
+   *
+   * @param {Object} message - Raw message payload.
+   * @returns {Object[]} Normalized attachment metadata.
+   */
+  function extractAttachmentsFromMetadataAttachments(message) {
     const attachments = message?.metadata?.attachments;
     if (!Array.isArray(attachments)) return [];
 
@@ -399,7 +440,13 @@
     return "sandbox:" + CGO.hash(`${messageId}:${sandboxPath}`);
   }
 
-  CGO.extractSandboxArtifacts = function extractSandboxArtifacts(message) {
+  /**
+   * Discover interpreter sandbox file references embedded in rendered message text.
+   *
+   * @param {Object} message - Normalized export message.
+   * @returns {Object[]} Attachment-like records for sandbox artifacts.
+   */
+  function extractSandboxArtifacts(message) {
     const text = message.text
     const source = typeof text === "string" ? text : "";
     const matches = source.match(/sandbox:\/mnt\/data\/[^\s)\]]+/g);
@@ -433,7 +480,14 @@
     return match ? match[1] : "";
   }
 
-  CGO.getAttachmentIcon = function getAttachmentIcon(kind, isSandboxArtifact = false) {
+  /**
+   * Return a UI icon glyph for an attachment kind.
+   *
+   * @param {string} kind - Attachment category.
+   * @param {boolean} [isSandboxArtifact=false] - Whether the attachment is a sandbox artifact.
+   * @returns {string} Icon glyph.
+   */
+  function getAttachmentIcon(kind, isSandboxArtifact = false) {
     if (isSandboxArtifact) return "🧪";
 
     switch (kind) {
@@ -452,7 +506,14 @@
     }
   }
 
-  CGO.guessAttachmentKind = function guessAttachmentKind(name, mimeType) {
+  /**
+   * Infer a high-level attachment kind from filename and MIME type.
+   *
+   * @param {string} name - Attachment filename.
+   * @param {string} mimeType - Attachment MIME type.
+   * @returns {"archive"|"pdf"|"image"|"text"|"code"|"attachment"} Attachment kind.
+   */
+  function guessAttachmentKind(name, mimeType) {
     const fileName = String(name || "").toLowerCase();
     const mime = String(mimeType || "").toLowerCase();
 
@@ -498,7 +559,13 @@
     return "attachment";
   }
 
-  CGO.dedupeAttachments = function dedupeAttachments(attachments) {
+  /**
+   * Remove duplicate attachments while preserving their original order.
+   *
+   * @param {Object[]} attachments - Candidate attachment list.
+   * @returns {Object[]} Deduplicated attachments.
+   */
+  function dedupeAttachments(attachments) {
     const out = [];
     const seen = new Set();
 
@@ -518,7 +585,14 @@
     return out;
   }
 
-  CGO.createHttpError = function createHttpError(response, context = "") {
+  /**
+   * Build a normalized error object for failed HTTP requests.
+   *
+   * @param {Response} response - Fetch response.
+   * @param {string} [context=""] - Human-readable request context.
+   * @returns {Error} Error enriched with status and classification fields.
+   */
+  function createHttpError(response, context = "") {
     const contentType = response.headers.get("content-type") || "";
 
     const error = new Error(
@@ -546,14 +620,26 @@
     return error;
   }
 
-  CGO.classifyFetchError = function classifyFetchError(error) {
+  /**
+   * Reduce different fetch failure shapes into a small export-oriented error code set.
+   *
+   * @param {Error} error - Error thrown by fetch or a helper.
+   * @returns {string} Normalized error code.
+   */
+  function classifyFetchError(error) {
     if (!error) return "unknown";
     if (error.code) return error.code;
     if (error.name === "AbortError") return "aborted";
     return "network";
   }
 
-  CGO.formatBytes = function formatBytes(bytes) {
+  /**
+   * Format a byte count into a short human-readable string.
+   *
+   * @param {number} bytes - Byte count.
+   * @returns {string} Formatted size label.
+   */
+  function formatBytes(bytes) {
     if (!bytes || isNaN(bytes)) return '0 B';
     
     const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -582,7 +668,13 @@
     return `${value.toFixed(2)} ${units[i]}`;
   }
 
-  CGO.extractAttachmentsFromMessageData = function extractAttachmentsFromMessageData(message) {
+  /**
+   * Extract file attachments from message parts and content references.
+   *
+   * @param {Object} message - Raw message payload.
+   * @returns {Object[]} Deduplicated attachment metadata.
+   */
+  function extractAttachmentsFromMessageData(message) {
     const results = [];
     const parts = Array.isArray(message?.content?.parts) ? message.content.parts : [];
 
@@ -778,7 +870,13 @@
     return `CGO_INLINE_IMAGE_${String(messageId || "msg").replace(/[^A-Za-z0-9_-]+/g, "_")}_${index}__`;
   }
 
-  CGO.prepareInlineImageData = function prepareInlineImageData(message) {
+  /**
+   * Match inline image placeholders in message text with image/attachment metadata.
+   *
+   * @param {Object} message - Normalized export message.
+   * @returns {Object} The same message object with inline image fields populated.
+   */
+  function prepareInlineImageData(message) {
     const sourceText = typeof message?.text === "string" ? message.text : "";
     const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
     const images = Array.isArray(message?.images) ? message.images : [];
@@ -919,7 +1017,14 @@
     return message;
   }
 
-  CGO.normalizeMessagesForExport = function normalizeMessagesForExport(chain, mapping) {
+  /**
+   * Convert raw conversation messages into the normalized export message structure.
+   *
+   * @param {Object[]} chain - Ordered message chain.
+   * @param {Object} mapping - Full conversation node map.
+   * @returns {Object[]} Normalized export messages.
+   */
+  function normalizeMessagesForExport(chain, mapping) {
     const normalized = [];
     const byId = new Map();
     const pendingThoughts = [];
@@ -1053,7 +1158,13 @@
     return false;
   }
 
-  CGO.extractImageHintsFromMessage = function extractImageHintsFromMessage(message) {
+  /**
+   * Collect short image-generation hints from message text and metadata.
+   *
+   * @param {Object} message - Raw message payload.
+   * @returns {string[]} Unique hint strings.
+   */
+  function extractImageHintsFromMessage(message) {
     if (!isLikelyImageGenerationMessage(message)) {
       return [];
     }
@@ -1099,11 +1210,23 @@
     return [...new Set(hints)];
   }
 
-  CGO.isNonEmptyArray = function isNonEmptyArray(value) {
+  /**
+   * Test whether a value is an array with at least one item.
+   *
+   * @param {*} value - Value to inspect.
+   * @returns {boolean} `true` when the value is a non-empty array.
+   */
+  function isNonEmptyArray(value) {
     return Array.isArray(value) && value.length > 0;
   }
 
-  CGO.dedupeImages = function dedupeImages(images) {
+  /**
+   * Remove duplicate images while preserving order.
+   *
+   * @param {Object[]} images - Candidate image list.
+   * @returns {Object[]} Deduplicated image metadata.
+   */
+  function dedupeImages(images) {
     const out = [];
     const seen = new Set();
 
@@ -1144,7 +1267,13 @@
     };
   }
 
-  CGO.normalizeImageMeta = function normalizeImageMeta(image) {
+  /**
+   * Normalize an image metadata object by applying defaults and numeric coercions.
+   *
+   * @param {Object} image - Partial image metadata.
+   * @returns {Object} Normalized image metadata.
+   */
+  function normalizeImageMeta(image) {
     return {
       ...createEmptyImageMeta(),
       ...(image || {}),
@@ -1187,7 +1316,14 @@
     };
   }
 
-  CGO.mergeImageListsPreferData = function mergeImageListsPreferData(dataImages, domImages) {
+  /**
+   * Merge API-derived and DOM-derived image metadata, preferring richer data entries.
+   *
+   * @param {Object[]} dataImages - Images extracted from message data.
+   * @param {Object[]} domImages - Images extracted from the rendered DOM.
+   * @returns {Object[]} Merged image list.
+   */
+  function mergeImageListsPreferData(dataImages, domImages) {
     const map = new Map();
 
     for (const image of dataImages || []) {
@@ -1233,7 +1369,15 @@
     );
   }
 
-  CGO.runWithConcurrency = async function runWithConcurrency(items, worker, concurrency = 3) {
+  /**
+   * Process items with a bounded number of concurrent worker executions.
+   *
+   * @param {Array} items - Items to process.
+   * @param {Function} worker - Async worker invoked with `(item, index)`.
+   * @param {number} [concurrency=3] - Maximum concurrent workers.
+   * @returns {Promise<void>} Resolves when all items are processed.
+   */
+  async function runWithConcurrency(items, worker, concurrency = 3) {
     const safeConcurrency = Math.max(1, Math.min(concurrency, items.length || 1));
     let index = 0;
 
@@ -1257,7 +1401,13 @@
     );
   }
 
-  CGO.extractMessageIdFromTurn = function extractMessageIdFromTurn(turnEl) {
+  /**
+   * Extract a message id from a rendered conversation turn element.
+   *
+   * @param {Element} turnEl - Conversation turn element.
+   * @returns {?string} Message id or `null`.
+   */
+  function extractMessageIdFromTurn(turnEl) {
     const imageContainer = turnEl.querySelector('[id^="image-"]');
     if (imageContainer?.id) {
       return imageContainer.id.replace(/^image-/, "");
@@ -1266,7 +1416,12 @@
     return null;
   }
 
-  CGO.getTurnArticlesForExport = function getTurnArticlesForExport() {
+  /**
+   * Collect visible conversation turn articles from the page for export-time DOM scraping.
+   *
+   * @returns {Element[]} Connected conversation turn elements.
+   */
+  function getTurnArticlesForExport() {
     const root = document.querySelector("main");
     if (!root) return [];
     
@@ -1284,7 +1439,13 @@
     }
   }
 
-  CGO.extractImagesFromTurn = function extractImagesFromTurn(turnEl) {
+  /**
+   * Extract rendered image metadata from a conversation turn DOM node.
+   *
+   * @param {Element} turnEl - Conversation turn element.
+   * @returns {Object[]} Deduplicated image metadata from the DOM.
+   */
+  function extractImagesFromTurn(turnEl) {
     const byUrl = new Map();
     const imgNodes = turnEl.querySelectorAll("img");
 
@@ -1321,7 +1482,13 @@
     return Array.from(byUrl.values()).map(({ score, ...item }) => item);
   }
 
-  CGO.extractUserImagesFromMessage = function extractUserImagesFromMessage(message) {
+  /**
+   * Extract user-uploaded image assets from a raw user message payload.
+   *
+   * @param {Object} message - Raw message payload.
+   * @returns {Object[]} User image metadata.
+   */
+  function extractUserImagesFromMessage(message) {
     const parts = message?.content?.parts;
     if (!Array.isArray(parts)) return [];
 
@@ -1349,7 +1516,13 @@
     return images;
   }
 
-  CGO.extractAttachmentsFromTurn = function extractAttachmentsFromTurn(turnEl) {
+  /**
+   * Extract downloadable attachment links from a rendered conversation turn.
+   *
+   * @param {Element} turnEl - Conversation turn element.
+   * @returns {Object[]} Attachment link metadata.
+   */
+  function extractAttachmentsFromTurn(turnEl) {
     const results = [];
     const seen = new Set();
 
@@ -1393,7 +1566,13 @@
     return /"size"\s*:|"n"\s*:|"quality"\s*:|"background"\s*:|"prompt"\s*:/i.test(trimmed);
   }
 
-  CGO.getTurnRoleFromDom = function getTurnRoleFromDom(turnEl) {
+  /**
+   * Infer whether a rendered conversation turn belongs to the user or assistant.
+   *
+   * @param {Element} turnEl - Conversation turn element.
+   * @returns {?string} `"user"`, `"assistant"`, or `null`.
+   */
+  function getTurnRoleFromDom(turnEl) {
     if (!turnEl) return null;
 
     const directRole =
@@ -1426,7 +1605,16 @@
     }
   }
 
-  CGO.resolveSandboxDownloadUrl = async function resolveSandboxDownloadUrl(
+  /**
+   * Resolve a signed download URL for an interpreter sandbox file.
+   *
+   * @param {string} conversationId - Conversation id.
+   * @param {string} messageId - Message id that owns the sandbox file.
+   * @param {string} sandboxPath - Sandbox file path.
+   * @param {string} [authorization=""] - Optional authorization header.
+   * @returns {Promise<string>} Signed download URL or an empty string.
+   */
+  async function resolveSandboxDownloadUrl(
     conversationId,
     messageId,
     sandboxPath,
@@ -1459,7 +1647,15 @@
     return typeof data?.download_url === "string" ? data.download_url : "";
   };
 
-  CGO.resolveDownloadUrlFromFileId = async function resolveDownloadUrlFromFileId(fileId, conversationId, authorization = "") {
+  /**
+   * Resolve a signed ChatGPT file download URL from a file id.
+   *
+   * @param {string} fileId - File id.
+   * @param {string} conversationId - Conversation id.
+   * @param {string} [authorization=""] - Optional authorization header.
+   * @returns {Promise<string>} Signed download URL or an empty string.
+   */
+  async function resolveDownloadUrlFromFileId(fileId, conversationId, authorization = "") {
     if (!fileId || !conversationId) return "";
 
     const url =
@@ -1512,4 +1708,36 @@
 
     return typeof data?.download_url === "string" ? data.download_url : "";
   }
+
+  CGO.buildExportChain = buildExportChain;
+  CGO.classifyFetchError = classifyFetchError;
+  CGO.createHttpError = createHttpError;
+  CGO.dedupeAttachments = dedupeAttachments;
+  CGO.dedupeImages = dedupeImages;
+  CGO.extractAttachmentsFromMessageData = extractAttachmentsFromMessageData;
+  CGO.extractAttachmentsFromMetadataAttachments = extractAttachmentsFromMetadataAttachments;
+  CGO.extractAttachmentsFromTurn = extractAttachmentsFromTurn;
+  CGO.extractImageAssetsFromMessageData = extractImageAssetsFromMessageData;
+  CGO.extractImageAssetsFromToolMessage = extractImageAssetsFromToolMessage;
+  CGO.extractImageHintsFromMessage = extractImageHintsFromMessage;
+  CGO.extractImagesFromTurn = extractImagesFromTurn;
+  CGO.extractMessageIdFromTurn = extractMessageIdFromTurn;
+  CGO.extractSandboxArtifacts = extractSandboxArtifacts;
+  CGO.extractUserImagesFromMessage = extractUserImagesFromMessage;
+  CGO.formatBytes = formatBytes;
+  CGO.getAttachmentIcon = getAttachmentIcon;
+  CGO.getConversationFromCache = getConversationFromCache;
+  CGO.getConversationIdFromLocation = getConversationIdFromLocation;
+  CGO.getTurnArticlesForExport = getTurnArticlesForExport;
+  CGO.getTurnRoleFromDom = getTurnRoleFromDom;
+  CGO.guessAttachmentKind = guessAttachmentKind;
+  CGO.isNonEmptyArray = isNonEmptyArray;
+  CGO.mergeImageListsPreferData = mergeImageListsPreferData;
+  CGO.normalizeImageMeta = normalizeImageMeta;
+  CGO.normalizeMaybeRelativeChatgptUrl = normalizeMaybeRelativeChatgptUrl;
+  CGO.normalizeMessagesForExport = normalizeMessagesForExport;
+  CGO.prepareInlineImageData = prepareInlineImageData;
+  CGO.resolveDownloadUrlFromFileId = resolveDownloadUrlFromFileId;
+  CGO.resolveSandboxDownloadUrl = resolveSandboxDownloadUrl;
+  CGO.runWithConcurrency = runWithConcurrency;
 })();

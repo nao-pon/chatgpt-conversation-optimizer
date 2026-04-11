@@ -53,12 +53,18 @@
 
   CGO.SETTING_STORAGE_KEY = "cgo_settings";
 
-  CGO.clampKeepDomMessages = function clampKeepDomMessages(value) {
+  function clampKeepDomMessages(value) {
     const n = Number(value);
     if (!Number.isFinite(n)) return CGO.DEFAULT_SETTINGS.keepDomMessages;
     return Math.max(5, Math.min(200, Math.round(n)));
   }
 
+  /**
+   * Normalize persisted settings into a complete configuration object with defaults applied.
+   *
+   * @param {Object} [input={}] - Partial settings loaded from storage or UI input.
+   * @returns {{keepDomMessages: number, autoAdjustEnabled: boolean, htmlDownloadIncludeImages: boolean}} Sanitized settings.
+   */
   function normalizeSettings(input = {}) {
     return {
       keepDomMessages: CGO.clampKeepDomMessages(
@@ -72,6 +78,12 @@
     };
   }
 
+  /**
+   * Apply normalized settings to in-memory state shared across the content scripts.
+   *
+   * @param {Object} [settings={}] - Partial settings to merge into the current configuration.
+   * @returns {Object} The live `CGO.SETTINGS` object after normalization.
+   */
   function applySettings(settings = {}) {
     const normalized = normalizeSettings(settings);
 
@@ -84,7 +96,7 @@
     return CGO.SETTINGS;
   }
 
-  CGO.loadSettings = async function loadSettings() {
+  async function loadSettings() {
     try {
       const stored = await chrome.storage.local.get(CGO.SETTING_STORAGE_KEY);
       const raw = stored?.[CGO.SETTING_STORAGE_KEY] || {};
@@ -95,7 +107,7 @@
     }
   }
 
-  CGO.saveSettings = async function saveSettings(partial = {}) {
+  async function saveSettings(partial = {}) {
     const next = applySettings({
       ...CGO.SETTINGS,
       ...partial,
@@ -116,7 +128,7 @@
 
   CGO.PROJECT_GUIDE_DISMISSED_STORAGE_KEY = "cgo_project_guide_dismissed";
 
-  CGO.getProjectGuideLevel = function getProjectGuideLevel(stats = null) {
+  function getProjectGuideLevel(stats = null) {
     if (!stats) return 0;
 
     const conversationalLength = Number(stats.conversationalLength || 0);
@@ -128,6 +140,11 @@
     return 0;
   }
 
+  /**
+   * Load the per-conversation dismissal state for project guide banners.
+   *
+   * @returns {Promise<Object>} Map keyed by conversation id containing dismissal metadata.
+   */
   async function loadProjectGuideDismissedMap() {
     try {
       const stored = await chrome.storage.local.get(PROJECT_GUIDE_DISMISSED_STORAGE_KEY);
@@ -138,7 +155,7 @@
     }
   }
 
-  CGO.isProjectGuideDismissed = async function isProjectGuideDismissed(conversationId, level = 0) {
+  async function isProjectGuideDismissed(conversationId, level = 0) {
     if (!conversationId || level <= 0) return false;
 
     const map = await loadProjectGuideDismissedMap();
@@ -148,7 +165,7 @@
     return Number(saved.level || 0) >= level;
   }
 
-  CGO.dismissProjectGuide = async function dismissProjectGuide(conversationId, level = 0) {
+  async function dismissProjectGuide(conversationId, level = 0) {
     if (!conversationId || level <= 0) return;
 
     const map = await loadProjectGuideDismissedMap();
@@ -162,7 +179,7 @@
     });
   }
 
-  CGO.clearProjectGuideDismissed = async function clearProjectGuideDismissed(conversationId) {
+  async function clearProjectGuideDismissed(conversationId) {
     if (!conversationId) return;
 
     const map = await loadProjectGuideDismissedMap();
@@ -175,6 +192,11 @@
     });
   }
  
+  /**
+   * Read saved conversation-specific DOM retention overrides from local storage.
+   *
+   * @returns {Promise<Object>} Map of conversation ids to override objects.
+   */
   async function loadConversationOverrides() {
     try {
       const stored = await chrome.storage.local.get(CGO.CONVERSATION_OVERRIDE_STORAGE_KEY);
@@ -185,14 +207,14 @@
     }
   }
 
-  CGO.loadConversationOverride = async function loadConversationOverride(conversationId) {
+  async function loadConversationOverride(conversationId) {
     if (!conversationId) return null;
 
     const map = await loadConversationOverrides();
     return map?.[conversationId] || null;
   }
 
-  CGO.saveConversationOverride = async function saveConversationOverride(conversationId, keepDomMessages) {
+  async function saveConversationOverride(conversationId, keepDomMessages) {
     if (!conversationId) return null;
 
     const map = await loadConversationOverrides();
@@ -209,7 +231,7 @@
     return map[conversationId];
   }
 
-  CGO.clearConversationOverride = async function clearConversationOverride(conversationId) {
+  async function clearConversationOverride(conversationId) {
     if (!conversationId) return;
 
     const map = await loadConversationOverrides();
@@ -220,6 +242,16 @@
     });
   }
 
+  /**
+   * Compute the effective DOM retention count for the active conversation.
+   *
+   * Conversation-specific overrides take precedence, followed by auto-adjusted values from
+   * conversation stats, and finally the global setting.
+   *
+   * @param {?string} [conversationId=null] - Explicit conversation id when already known.
+   * @param {?Object} [stats=null] - Optional conversation statistics used for auto-adjust.
+   * @returns {Promise<number>} Effective number of conversation turns to keep in the DOM.
+   */
   async function getEffectiveKeepDomMessagesForConversation(conversationId = null, stats = null) {
     if (!CGO.SETTINGS.autoAdjustEnabled) {
       return CGO.SETTINGS.keepDomMessages;
@@ -242,7 +274,7 @@
     }
   }
 
-  CGO.postSettingsToPageHook = async function postSettingsToPageHook() {
+  async function postSettingsToPageHook() {
     const keepDomMessages = await getEffectiveKeepDomMessagesForConversation();
     window.postMessage(
       {
@@ -257,6 +289,12 @@
     );
   }
 
+  /**
+   * Derive a smaller DOM retention budget for large conversations based on conversation stats.
+   *
+   * @param {?Object} [stats=null] - Conversation metrics such as turn count and media counts.
+   * @returns {number} Effective keep-dom value after applying auto-adjust thresholds.
+   */
   function getEffectiveKeepDomMessages(stats = null) {
     if (!CGO.SETTINGS.autoAdjustEnabled || !stats) {
       return CGO.SETTINGS.keepDomMessages;
@@ -280,6 +318,11 @@
     return CGO.SETTINGS.keepDomMessages;
   }
 
+  /**
+   * Determine which language-specific detection rules should be used for UI text heuristics.
+   *
+   * @returns {"ja"|"en"} Detection language key.
+   */
   function getDetectionLanguage() {
     const lang = (
       chrome?.i18n?.getUILanguage?.() ||
@@ -296,6 +339,11 @@
 
   CGO.toolbarBase = undefined;
 
+  /**
+   * Return the localized text-pattern bundle used for feature detection heuristics.
+   *
+   * @returns {Object} Pattern set for the currently selected detection language.
+   */
   function getDetectionPatternSet() {
     return (
       CGO.DETECTION_PATTERNS[CGO.DETECTION_LANG] ||
@@ -303,6 +351,9 @@
     );
   }
 
+  /**
+   * Inject the lightweight bootstrap page script that establishes the content/page bridge.
+   */
   function injectPageBootstrapScript() {
     const oldScript = document.getElementById(CGO.PAGE_BOOTSTRAP_ID);
     if (oldScript) {
@@ -325,6 +376,12 @@
     (document.documentElement || document.head).prepend(script);
   }
 
+  /**
+   * Wait for the bootstrap script to acknowledge that the page bridge is alive.
+   *
+   * @param {number} [timeoutMs=1200] - Maximum time to wait for the handshake response.
+   * @returns {Promise<boolean>} `true` when the bootstrap replies with a matching version.
+   */
   function waitForBootstrapPong(timeoutMs = 1200) {
     return new Promise((resolve) => {
       let done = false;
@@ -396,6 +453,12 @@
     });
   }
 
+  /**
+   * Wait for the main page hook to accept initial settings and return its bridge secret.
+   *
+   * @param {number} [timeoutMs=1000] - Maximum time to wait for initialization acknowledgement.
+   * @returns {Promise<boolean>} `true` when the main hook acknowledges the expected version.
+   */
   function waitForMainHookInitAck(timeoutMs = 1000) {
     return new Promise((resolve) => {
       let done = false;
@@ -464,6 +527,11 @@
     });
   }
 
+  /**
+   * Inject the main page hook script into the page context.
+   *
+   * @returns {Promise<void>} Resolves after the script loads successfully.
+   */
   async function injectMainPageHookScript() {
     return new Promise((resolve, reject) => {
       const oldScript = document.getElementById(CGO.PAGE_MAIN_HOOK_ID);
@@ -490,7 +558,7 @@
     });
   }
 
-  CGO.ensurePageHooksInjected = async function ensurePageHooksInjected() {
+  async function ensurePageHooksInjected() {
     const bootstrapAlive = await waitForBootstrapPong();
 
     if (!bootstrapAlive) {
@@ -521,7 +589,7 @@
 
   CGO.LAST_PATHNAME = location.pathname;
 
-  CGO.observeRouteChanges = function observeRouteChanges() {
+  function observeRouteChanges() {
     const observer = new MutationObserver(async () => {
       if (location.pathname !== CGO.LAST_PATHNAME) {
         CGO.LAST_PATHNAME = location.pathname;
@@ -553,22 +621,29 @@
     });
   }
 
+  /**
+   * Test whether a string matches any regular expression in a pattern list.
+   *
+   * @param {string} text - Text to test.
+   * @param {RegExp[]} patterns - Candidate patterns.
+   * @returns {boolean} `true` when at least one pattern matches.
+   */
   function matchesAnyPattern(text, patterns) {
     if (!text || !Array.isArray(patterns)) return false;
     return patterns.some((pattern) => pattern.test(text));
   }
 
-  CGO.matchesGeneratedImagePrefix = function matchesGeneratedImagePrefix(text) {
+  function matchesGeneratedImagePrefix(text) {
     const patterns = getDetectionPatternSet().generatedImagePrefixes;
     return matchesAnyPattern(text, patterns);
   }
 
-  CGO.log = function log(...args) {
+  function log(...args) {
     if (!CGO.CONFIG.debug) return;
     console.log("[CGO]", ...args);
   }
 
-  CGO.t = function t(key, substitutions = []) {
+  function t(key, substitutions = []) {
     if (!Array.isArray(substitutions)) {
       substitutions = [substitutions];
     }
@@ -579,14 +654,14 @@
     }
   }
 
-  CGO.unescapeHtml = function unescapeHtml(str) {
+  function unescapeHtml(str) {
     const textarea = document.createElement("textarea");
     textarea.innerHTML = String(str || "");
     return textarea.value;
   }
 
   // page-hook.js に同名関数あり、変更時は合わせて変更
-  CGO.hash = function hash(str) {
+  function hash(str) {
     let h = 0;
     for (let i = 0; i < str.length; i++) {
       h = (h << 5) - h + str.charCodeAt(i);
@@ -594,4 +669,23 @@
     }
     return (h >>> 0).toString(36);
   }
+
+  CGO.clampKeepDomMessages = clampKeepDomMessages;
+  CGO.clearConversationOverride = clearConversationOverride;
+  CGO.clearProjectGuideDismissed = clearProjectGuideDismissed;
+  CGO.dismissProjectGuide = dismissProjectGuide;
+  CGO.ensurePageHooksInjected = ensurePageHooksInjected;
+  CGO.getProjectGuideLevel = getProjectGuideLevel;
+  CGO.hash = hash;
+  CGO.isProjectGuideDismissed = isProjectGuideDismissed;
+  CGO.loadConversationOverride = loadConversationOverride;
+  CGO.loadSettings = loadSettings;
+  CGO.log = log;
+  CGO.matchesGeneratedImagePrefix = matchesGeneratedImagePrefix;
+  CGO.observeRouteChanges = observeRouteChanges;
+  CGO.postSettingsToPageHook = postSettingsToPageHook;
+  CGO.saveConversationOverride = saveConversationOverride;
+  CGO.saveSettings = saveSettings;
+  CGO.t = t;
+  CGO.unescapeHtml = unescapeHtml;
 })();

@@ -2,7 +2,17 @@
   if (globalThis.__CGO_SKIP__) return;
   const CGO = (globalThis.__CGO ||= {});
 
-  CGO.mergeMessagesWithDomAssets = function mergeMessagesWithDomAssets(messages, domAssets) {
+  /**
+   * Merge message data from the conversation API with images and attachments discovered in the DOM.
+   *
+   * This fills gaps where exported message payloads omit signed URLs or rendered assets that are
+   * already visible in the page.
+   *
+   * @param {Object[]} messages - Normalized export messages.
+   * @param {Object[]} domAssets - Assets scraped from rendered conversation turns.
+   * @returns {Object[]} Messages enriched with images, prompts, and attachments.
+   */
+  function mergeMessagesWithDomAssets(messages, domAssets) {
     const merged = messages.map((message) => ({
       ...message,
       images: [],
@@ -205,6 +215,12 @@
   }
 
 
+  /**
+   * Render prompt or hint text associated with generated images.
+   *
+   * @param {Array<{text: string}>} imagePrompts - Image prompt descriptors.
+   * @returns {string} HTML fragment.
+   */
   function renderImagePrompts(imagePrompts) {
     if (!Array.isArray(imagePrompts) || imagePrompts.length === 0) return "";
 
@@ -221,6 +237,13 @@
       .join("\n");
   }
 
+  /**
+   * Render collapsible thought panels for assistant messages that include reasoning summaries.
+   *
+   * @param {Object[]} thoughts - Thought items attached to a message.
+   * @param {string} [messageId=""] - Message id used to generate stable DOM ids.
+   * @returns {string} HTML fragment.
+   */
   function renderThoughts(thoughts, messageId = "") {
     if (!Array.isArray(thoughts) || thoughts.length === 0) return "";
 
@@ -284,6 +307,12 @@
   </div>`;
   }
 
+  /**
+   * Render human-readable image metadata such as dimensions, size, and MIME type.
+   *
+   * @param {Object} image - Normalized image metadata.
+   * @returns {string} HTML fragment.
+   */
   function renderImageMeta(image) {
     const parts = [];
     
@@ -303,7 +332,14 @@
     return `<div class="cgo-image-meta">${CGO.escapeHtml(parts.join(" · "))}</div>`;
   }
 
-  CGO.renderSingleImageFigure = function renderSingleImageFigure(image, options = {}) {
+  /**
+   * Render a single image figure for HTML or ZIP export modes.
+   *
+   * @param {Object} image - Normalized image metadata.
+   * @param {Object} [options={}] - Rendering options.
+   * @returns {string} HTML fragment for one image figure.
+   */
+  function renderSingleImageFigure(image, options = {}) {
     const mode = options.mode || "html"; // "html" | "zip"
     const noImg = !!options.noImg;
     const alt = CGO.escapeHtml(image.alt || "");
@@ -401,6 +437,11 @@
     return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
+  /**
+   * Promote image attachments into the message image collection so they render in the image gallery.
+   *
+   * @param {Object} message - Normalized export message.
+   */
   function promoteImageAttachmentsToImages(message) {
     const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
     if (!attachments.length) return;
@@ -429,6 +470,14 @@
     ]);
   }
 
+  /**
+   * Replace inline image placeholder tokens in rendered HTML with image figure markup.
+   *
+   * @param {string} bodyHtml - Rendered message HTML.
+   * @param {Object} message - Message containing `inlineImages`.
+   * @param {Object} [options={}] - Rendering options.
+   * @returns {string} HTML with inline placeholders expanded.
+   */
   function renderPreparedInlineImagesInHtml(
     bodyHtml,
     message,
@@ -457,13 +506,24 @@
     return html;
   }
 
-  CGO.loadExtensionTextFile = async function loadExtensionTextFile(path) {
+  /**
+   * Load a packaged text asset from the extension bundle.
+   *
+   * @param {string} path - Extension-relative asset path.
+   * @returns {Promise<string>} Asset text content.
+   */
+  async function loadExtensionTextFile(path) {
     const url = chrome.runtime.getURL(path);
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Failed to load ${path}`);
     return res.text();
   }
 
+  /**
+   * Load syntax-highlighting assets packaged with the extension.
+   *
+   * @returns {Promise<{js: string, css: string}>} Highlight.js script and stylesheet content.
+   */
   async function getHighlightAssets() {
     const [js, css] = await Promise.all([
       CGO.loadExtensionTextFile("vendor/highlight.min.js"),
@@ -473,7 +533,12 @@
   }
 
 
-  CGO.getSharedExportAssets = async function getSharedExportAssets() {
+  /**
+   * Load the shared CSS and UI JavaScript used by exported conversation pages.
+   *
+   * @returns {Promise<{css: string, uiJs: string}>} Shared export assets.
+   */
+  async function getSharedExportAssets() {
     const [css, uiJs] = await Promise.all([
       CGO.loadExtensionTextFile("shared-export.css"),
       CGO.loadExtensionTextFile("shared-export-ui.js"),
@@ -481,7 +546,13 @@
     return { css, uiJs };
   }
 
-  CGO.escapeHtml = function escapeHtml(text) {
+  /**
+   * Escape HTML special characters for safe string interpolation into markup.
+   *
+   * @param {string} text - Raw text.
+   * @returns {string} Escaped HTML string.
+   */
+  function escapeHtml(text) {
     return String(text)
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
@@ -490,6 +561,12 @@
       .replace(/'/g, "&#39;");
   }
 
+  /**
+   * Remove ChatGPT-specific private-use markers and excess spacing before markdown rendering.
+   *
+   * @param {string} text - Raw exported message text.
+   * @returns {string} Cleaned markdown-ish text.
+   */
   function stripChatgptUiArtifacts(text) {
     if (!text) return "";
 
@@ -503,6 +580,12 @@
       .trim();
   }
 
+  /**
+   * Apply final HTML fixes to rendered markdown, such as external-link attributes.
+   *
+   * @param {string} containerHtml - Sanitized markdown HTML.
+   * @returns {string} Post-processed HTML.
+   */
   function postProcessRenderedMarkdown(containerHtml) {
     const wrapper = document.createElement("div");
     wrapper.innerHTML = containerHtml;
@@ -525,6 +608,12 @@
     return String(value ?? "");
   }
 
+  /**
+   * Create a `marked` renderer customized for export-friendly code blocks and inline code.
+   *
+   * @param {Object} [options={}] - Rendering options.
+   * @returns {marked.Renderer} Configured renderer instance.
+   */
   function createMarkedRenderer(options = {}) {
     const interactiveCode = options.interactiveCode !== false;
     
@@ -587,6 +676,13 @@
     return renderer;
   }
 
+  /**
+   * Rewrite sandbox file references inside message text to point at local ZIP paths when available.
+   *
+   * @param {string} text - Message text that may contain sandbox URLs.
+   * @param {Object[]} attachments - Attachments associated with the message.
+   * @returns {string} Rewritten text.
+   */
   function rewriteSandboxLinksForZip(text, attachments) {
     const source = typeof text === "string" ? text : "";
     if (!source) return source;
@@ -613,6 +709,13 @@
     return out;
   }
 
+  /**
+   * Render message markdown into sanitized HTML with the extension's export styling conventions.
+   *
+   * @param {string} text - Raw message text.
+   * @param {Object} [options={}] - Markdown rendering options.
+   * @returns {string} Rendered HTML fragment.
+   */
   function renderMessageTextToHtml(text, options = {}) {
     const source = typeof text === "string" ? text : "";
     if (!source.trim()) return "";
@@ -641,6 +744,12 @@
     }
   }
 
+  /**
+   * Format a ChatGPT message timestamp for display in export output.
+   *
+   * @param {?number} value - Unix timestamp in seconds.
+   * @returns {string} Localized date string or an empty string.
+   */
   function formatExportDate(value) {
     if (!value) return "";
     try {
@@ -668,7 +777,16 @@
     </svg>`;
   };
 
-  CGO.buildConversationExportHtml = function buildConversationExportHtml(
+  /**
+   * Build the complete exported conversation HTML document.
+   *
+   * @param {string} title - Document title.
+   * @param {string} conversationId - Conversation id.
+   * @param {Object[]} messages - Export messages to render.
+   * @param {Object} [options={}] - Export rendering options.
+   * @returns {string} Full HTML document string.
+   */
+  function buildConversationExportHtml(
     title,
     conversationId,
     messages,
@@ -781,6 +899,13 @@
   </html>`;
   }
 
+  /**
+   * Trigger a browser download for an in-memory text payload.
+   *
+   * @param {string} filename - Download filename.
+   * @param {string} text - File contents.
+   * @param {string} [mimeType="text/plain;charset=utf-8"] - Blob MIME type.
+   */
   function downloadTextFile(filename, text, mimeType = "text/plain;charset=utf-8") {
     const blob = new Blob([text], { type: mimeType });
     const url = URL.createObjectURL(blob);
@@ -818,7 +943,14 @@
     window.open(viewerUrl, "_blank", "noopener,noreferrer");
   }
 
-  CGO.buildSafeFilename = function buildSafeFilename(baseName, ext = "html") {
+  /**
+   * Build a timestamped filename that is safe for browser downloads.
+   *
+   * @param {string} baseName - Desired base filename.
+   * @param {string} [ext="html"] - File extension without dot.
+   * @returns {string} Safe filename.
+   */
+  function buildSafeFilename(baseName, ext = "html") {
     const safeBase = (baseName || "chatgpt_conversation")
       .replace(/[\\/:*?"<>|]/g, "_")
       .replace(/\s+/g, " ")
@@ -829,7 +961,12 @@
     return `${safeBase || "chatgpt_conversation"}_${stamp}.${ext}`;
   }
 
-  CGO.getCurrentVisibleMessageId = function getCurrentVisibleMessageId() {
+  /**
+   * Return the message id whose turn is closest to the viewport center.
+   *
+   * @returns {string} Visible message id or an empty string.
+   */
+  function getCurrentVisibleMessageId() {
     const turns = Array.from(
       document.querySelectorAll(
         'article[data-testid^="conversation-turn-"], section[data-testid^="conversation-turn-"]'
@@ -862,6 +999,13 @@
     );
   };
 
+  /**
+   * Resolve a DOM-selected message id to the corresponding exported message id.
+   *
+   * @param {Object[]} messages - Export message list.
+   * @param {string} domMessageId - Message id captured from the live DOM.
+   * @returns {string} Matching export message id, if found.
+   */
   function resolveExportMessageIdFromDomId(messages, domMessageId) {
     if (!domMessageId || !Array.isArray(messages)) return "";
 
@@ -871,7 +1015,14 @@
     return "";
   }
 
-  CGO.exportCurrentConversationAsHtml = async function exportCurrentConversationAsHtml(button, action = "download") {
+  /**
+   * Export the current conversation either as a downloadable HTML file or a lightweight viewer tab.
+   *
+   * @param {HTMLButtonElement} button - Toolbar button used to display progress text.
+   * @param {string} [action="download"] - Export mode or selected message id for lightweight view.
+   * @returns {Promise<void>} Resolves after the export action completes.
+   */
+  async function exportCurrentConversationAsHtml(button, action = "download") {
     try {
       const conversationId = CGO.getConversationIdFromLocation();
       if (!conversationId) {
@@ -1020,4 +1171,14 @@
       throw error;
     }
   }
+
+  CGO.buildConversationExportHtml = buildConversationExportHtml;
+  CGO.buildSafeFilename = buildSafeFilename;
+  CGO.escapeHtml = escapeHtml;
+  CGO.exportCurrentConversationAsHtml = exportCurrentConversationAsHtml;
+  CGO.getCurrentVisibleMessageId = getCurrentVisibleMessageId;
+  CGO.getSharedExportAssets = getSharedExportAssets;
+  CGO.loadExtensionTextFile = loadExtensionTextFile;
+  CGO.mergeMessagesWithDomAssets = mergeMessagesWithDomAssets;
+  CGO.renderSingleImageFigure = renderSingleImageFigure;
 })();

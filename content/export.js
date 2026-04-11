@@ -2,7 +2,14 @@
   if (globalThis.__CGO_SKIP__) return;
   const CGO = (globalThis.__CGO ||= {});
 
-  CGO.extractProjectNameFromDocumentTitle = function extractProjectNameFromDocumentTitle(
+  /**
+   * Derive a project name from the browser document title when ChatGPT prefixes the conversation title.
+   *
+   * @param {string} docTitle - Current document title.
+   * @param {string} conversationTitle - Conversation title from data payload.
+   * @returns {string} Project name or an empty string.
+   */
+  function extractProjectNameFromDocumentTitle(
     docTitle,
     conversationTitle
   ) {
@@ -20,7 +27,13 @@
     return "";
   }
 
-  CGO.getLastAuthorizationFromPage = function getLastAuthorizationFromPage(timeoutMs = 800) {
+  /**
+   * Ask the page hook for the latest authorization header observed in network requests.
+   *
+   * @param {number} [timeoutMs=800] - Maximum wait time for the page response.
+   * @returns {Promise<string>} Authorization header value or an empty string.
+   */
+  function getLastAuthorizationFromPage(timeoutMs = 800) {
     return new Promise((resolve) => {
       let done = false;
       const requestId =
@@ -79,7 +92,17 @@
   // Resolve signed image URLs and embed image data with limited concurrency.
   // Full parallelism is intentionally avoided to reduce burst traffic and
   // keep export stable on large conversations.
-  CGO.resolveImageUrlsWithDownloadApi = async function resolveImageUrlsWithDownloadApi(
+  /**
+   * Resolve signed download URLs for message images using cache-first lookup and the download API.
+   *
+   * @param {Object[]} messages - Messages containing images to resolve.
+   * @param {string} conversationId - Conversation id.
+   * @param {string} [authorization=""] - Optional authorization header.
+   * @param {Function} onProgress - Progress callback.
+   * @param {number} [concurrency=3] - Maximum concurrent resolutions.
+   * @returns {Promise<void>} Resolves when all candidate images are processed.
+   */
+  async function resolveImageUrlsWithDownloadApi(
     messages,
     conversationId,
     authorization = "",
@@ -157,7 +180,17 @@
     );
   }
 
-  CGO.resolveAttachmentUrlsWithDownloadApi = async function resolveAttachmentUrlsWithDownloadApi(
+  /**
+   * Resolve signed download URLs for file attachments and sandbox artifacts.
+   *
+   * @param {Object[]} messages - Messages containing attachments to resolve.
+   * @param {string} conversationId - Conversation id.
+   * @param {string} [authorization=""] - Optional authorization header.
+   * @param {Function} onProgress - Progress callback.
+   * @param {number} [concurrency=3] - Maximum concurrent resolutions.
+   * @returns {Promise<void>} Resolves when all candidate attachments are processed.
+   */
+  async function resolveAttachmentUrlsWithDownloadApi(
     messages,
     conversationId,
     authorization = "",
@@ -242,6 +275,14 @@
     );
   }
 
+  /**
+   * Query the page hook for a cached signed download URL for a file asset.
+   *
+   * @param {string} fileId - ChatGPT file id.
+   * @param {string} conversationId - Conversation id used by the cache lookup.
+   * @param {number} [timeoutMs=800] - Time to wait for a cache response.
+   * @returns {Promise<?Object>} Cached download metadata or `null`.
+   */
   function getFileDownloadCacheEntry(fileId, conversationId, timeoutMs = 800) {
     return new Promise((resolve) => {
       const requestId =
@@ -283,7 +324,13 @@
     });
   }
 
-  CGO.buildDomImageUrlIndex = function buildDomImageUrlIndex(domAssets) {
+  /**
+   * Build a lookup table from image file ids to the signed URLs already present in the DOM.
+   *
+   * @param {Object[]} domAssets - DOM asset map entries.
+   * @returns {Map<string, string>} File-id to URL index.
+   */
+  function buildDomImageUrlIndex(domAssets) {
     const map = new Map();
 
     for (const asset of domAssets || []) {
@@ -301,7 +348,12 @@
     return map;
   }
 
-  CGO.buildDomAssetMap = function buildDomAssetMap() {
+  /**
+   * Build a per-turn asset snapshot from the live DOM to supplement export data.
+   *
+   * @returns {Object[]} DOM asset descriptors for rendered conversation turns.
+   */
+  function buildDomAssetMap() {
     const turns = CGO.getTurnArticlesForExport();
     const items = [];
 
@@ -331,6 +383,12 @@
     return items;
   }
 
+  /**
+   * Fetch an image and convert it to a data URL for self-contained HTML exports.
+   *
+   * @param {string} url - Resolved image URL.
+   * @returns {Promise<string>} Data URL representation of the fetched image.
+   */
   async function imageUrlToDataUrl(url) {
     const blob = await fetchBlobWithAuth(url, "image");
 
@@ -357,7 +415,15 @@
   // Resolve signed image URLs and embed image data with limited concurrency.
   // Full parallelism is intentionally avoided to reduce burst traffic and
   // keep export stable on large conversations.
-  CGO.embedImagesInMessages = async function embedImagesInMessages(messages, onProgress, concurrency = 3) {
+  /**
+   * Embed resolved image URLs as data URLs for standalone HTML exports.
+   *
+   * @param {Object[]} messages - Messages containing images.
+   * @param {Function} onProgress - Progress callback.
+   * @param {number} [concurrency=3] - Maximum concurrent embeddings.
+   * @returns {Promise<Object[]>} The same message list after embedding.
+   */
+  async function embedImagesInMessages(messages, onProgress, concurrency = 3) {
     const allImages = messages.flatMap((m) => m.images || []);
     const total = allImages.length;
     const includeImages = CGO.SETTINGS.htmlDownloadIncludeImages !== false;
@@ -398,6 +464,12 @@
     return messages;
   }
 
+  /**
+   * Extract the image-generation prompt from a JSON-only user message when present.
+   *
+   * @param {Object} message - Raw conversation message payload.
+   * @returns {string} Prompt text or an empty string.
+   */
   function extractPromptFromJsonParamMessage(message) {
     const text = Array.isArray(message?.content?.parts)
       ? message.content.parts.filter((v) => typeof v === "string").join("\n").trim()
@@ -413,7 +485,7 @@
     }
   }
 
-  CGO.extractImageAssetsFromContentReferences = function extractImageAssetsFromContentReferences(message) {
+  function extractImageAssetsFromContentReferences(message) {
     const refs = Array.isArray(message?.metadata?.content_references)
       ? message.metadata.content_references
       : [];
@@ -455,7 +527,7 @@
     return results;
   }
 
-  CGO.isProbablyExternalImage = function isProbablyExternalImage(image) {
+  function isProbablyExternalImage(image) {
     const source = String(image?.source || "");
     const url = String(image?.url || "");
 
@@ -474,6 +546,12 @@
     }
   }
 
+  /**
+   * Return the original external image URL that should be exposed as a source link.
+   *
+   * @param {Object} image - Normalized image metadata.
+   * @returns {string} External source URL or an empty string for internal assets.
+   */
   function getImageSourceHref(image) {
     const url = String(image?.url || "");
     if (!url) return "";
@@ -492,7 +570,7 @@
     }
   }
 
-  CGO.renderImageSourceLink = function renderImageSourceLink(image) {
+  function renderImageSourceLink(image) {
     const href = getImageSourceHref(image);
     if (!href) return "";
 
@@ -503,7 +581,7 @@
     </div>`;
   }
 
-  CGO.getToolMessageIds = function getToolMessageIds(message) {
+  function getToolMessageIds(message) {
     if (!Array.isArray(message?.toolMessages)) return [];
     return message.toolMessages
       .map((msg) => msg?.id)
@@ -517,7 +595,7 @@
     );
   }
 
-  CGO.isImageCandidateMessage = function isImageCandidateMessage(message) {
+  function isImageCandidateMessage(message) {
     return (
       hasToolGeneratedImages(message) ||
       CGO.extractImageAssetsFromContentReferences(message?.rawMessage || {}).length > 0 ||
@@ -525,7 +603,7 @@
     );
   }
 
-  CGO.extractPromptHintsFromMessage = function extractPromptHintsFromMessage(message) {
+  function extractPromptHintsFromMessage(message) {
     const prompts = [];
 
     const jsonPrompt = extractPromptFromJsonParamMessage(message?.rawMessage || {});
@@ -549,7 +627,7 @@
     return prompts;
   }
 
-  CGO.buildAssistantDomImagePools = function buildAssistantDomImagePools(domAssets) {
+  function buildAssistantDomImagePools(domAssets) {
     const byMessageId = new Map();
     const anonymous = [];
 
@@ -567,10 +645,22 @@
     return { byMessageId, anonymous };
   }
 
+  /**
+   * Convert a blob into an ArrayBuffer for ZIP packaging.
+   *
+   * @param {Blob} blob - Blob to convert.
+   * @returns {Promise<ArrayBuffer>} Blob contents as an array buffer.
+   */
   function blobToArrayBuffer(blob) {
     return blob.arrayBuffer();
   }
 
+  /**
+   * Guess a file extension from a MIME type for exported ZIP entries.
+   *
+   * @param {string} mimeType - MIME type to inspect.
+   * @returns {string} Best-effort file extension without a leading dot.
+   */
   function guessExtensionFromMimeType(mimeType) {
     const mime = (mimeType || "").toLowerCase();
 
@@ -586,6 +676,12 @@
     return "bin";
   }
 
+  /**
+   * Sanitize a filename so it is safe to store inside the generated ZIP archive.
+   *
+   * @param {string} name - Candidate filename.
+   * @returns {string} Filesystem-safe filename.
+   */
   function sanitizeZipFileName(name) {
     return String(name || "file")
       .replace(/[\\/:*?"<>|]+/g, "_")
@@ -593,6 +689,14 @@
       .trim();
   }
 
+  /**
+   * Fetch a blob while conditionally forwarding ChatGPT authorization headers for trusted origins.
+   *
+   * @param {string} url - Resource URL.
+   * @param {string} [type=""] - Resource category used to choose the Accept header.
+   * @param {number} [timeoutMs=30000] - Request timeout in milliseconds.
+   * @returns {Promise<Blob>} Fetched blob.
+   */
   async function fetchBlobWithAuth(url, type = "", timeoutMs = 30000) {
     const authorization = await CGO.getLastAuthorizationFromPage();
 
@@ -655,6 +759,15 @@
     }
   }
 
+  /**
+   * Download exportable images and store them under the ZIP image folder structure.
+   *
+   * @param {Object[]} messages - Messages containing normalized image metadata.
+   * @param {JSZip} zip - ZIP archive being assembled.
+   * @param {Function} onProgress - Progress callback.
+   * @param {number} [concurrency=3] - Maximum concurrent downloads.
+   * @param {string} [projectFolderName=""] - Optional root folder inside the ZIP.
+   */
   async function saveImagesToZip(
     messages,
     zip,
@@ -714,6 +827,12 @@
     );
   }
 
+  /**
+   * Choose the ZIP subfolder that should contain a given attachment type.
+   *
+   * @param {Object} attachment - Attachment metadata.
+   * @returns {string} Relative folder path inside the archive.
+   */
   function getZipSubfolderForAttachment(attachment) {
     switch (attachment.kind) {
       case "archive":
@@ -729,7 +848,7 @@
     }
   }
 
-  CGO.getImageSkipLabel = function getImageSkipLabel(image) {
+  function getImageSkipLabel(image) {
     const rawSkipReason = image?.skipReason || "";
     const [skipReason] = String(rawSkipReason).split(":");
 
@@ -753,6 +872,12 @@
     }
   }
 
+  /**
+   * Convert an attachment skip reason into a localized user-facing label.
+   *
+   * @param {Object} attachment - Attachment metadata with an optional `skipReason`.
+   * @returns {string} Localized explanation or an empty string.
+   */
   function getAttachmentSkipLabel(attachment) {
     const rawSkipReason = attachment?.skipReason || "";
     const [skipReason, skipValue] = String(rawSkipReason).split(":");
@@ -783,6 +908,16 @@
     }
   }
 
+  /**
+   * Download eligible attachments and store them in categorized ZIP folders.
+   *
+   * @param {Object[]} messages - Messages containing normalized attachments.
+   * @param {JSZip} zip - ZIP archive being assembled.
+   * @param {Function} onProgress - Progress callback.
+   * @param {number} [concurrency=3] - Maximum concurrent downloads.
+   * @param {number} [maxBytes=10 * 1024 * 1024] - Per-attachment size limit.
+   * @param {string} [projectFolderName=""] - Optional root folder inside the ZIP.
+   */
   async function saveAttachmentsToZip(
     messages,
     zip,
@@ -866,6 +1001,12 @@
     );
   }
 
+  /**
+   * Render image galleries for ZIP exports, separating embedded and external images.
+   *
+   * @param {Object[]} images - Images to render.
+   * @returns {string} HTML fragment.
+   */
   function renderImagesForZip(images) {
     if (!Array.isArray(images) || images.length === 0) return "";
 
@@ -893,6 +1034,12 @@
   }
 
 
+  /**
+   * Render attachment cards for ZIP exports, preferring local archive paths when available.
+   *
+   * @param {Object[]} attachments - Attachments to render.
+   * @returns {string} HTML fragment.
+   */
   function renderAttachmentsForZip(attachments) {
     if (!Array.isArray(attachments) || attachments.length === 0) return "";
 
@@ -935,7 +1082,13 @@
     return `<div class="cgo-attachments">${items.join("\n")}</div>`;
   }
 
-  CGO.renderAttachments = function renderAttachments(attachments) {
+  /**
+   * Render attachment cards for HTML exports.
+   *
+   * @param {Object[]} attachments - Attachments to render.
+   * @returns {string} HTML fragment.
+   */
+  function renderAttachments(attachments) {
     if (!Array.isArray(attachments) || attachments.length === 0) return "";
 
     const items = attachments.map((attachment) => {
@@ -978,7 +1131,13 @@
     return `<div class="cgo-attachments">${items.join("\n")}</div>`;
   }
 
-  CGO.exportCurrentConversationAsZip = async function exportCurrentConversationAsZip(exportButton) {
+  /**
+   * Export the current conversation as a ZIP archive with HTML, images, and attachments.
+   *
+   * @param {HTMLButtonElement} exportButton - Toolbar button used to display progress text.
+   * @returns {Promise<void>} Resolves after the ZIP download is triggered.
+   */
+  async function exportCurrentConversationAsZip(exportButton) {
     if (typeof JSZip === "undefined") {
       throw new Error("JSZip is not loaded");
     }
@@ -1133,4 +1292,22 @@
 
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   }
+
+  CGO.buildAssistantDomImagePools = buildAssistantDomImagePools;
+  CGO.buildDomAssetMap = buildDomAssetMap;
+  CGO.buildDomImageUrlIndex = buildDomImageUrlIndex;
+  CGO.embedImagesInMessages = embedImagesInMessages;
+  CGO.exportCurrentConversationAsZip = exportCurrentConversationAsZip;
+  CGO.extractImageAssetsFromContentReferences = extractImageAssetsFromContentReferences;
+  CGO.extractProjectNameFromDocumentTitle = extractProjectNameFromDocumentTitle;
+  CGO.extractPromptHintsFromMessage = extractPromptHintsFromMessage;
+  CGO.getImageSkipLabel = getImageSkipLabel;
+  CGO.getLastAuthorizationFromPage = getLastAuthorizationFromPage;
+  CGO.getToolMessageIds = getToolMessageIds;
+  CGO.isImageCandidateMessage = isImageCandidateMessage;
+  CGO.isProbablyExternalImage = isProbablyExternalImage;
+  CGO.renderAttachments = renderAttachments;
+  CGO.renderImageSourceLink = renderImageSourceLink;
+  CGO.resolveAttachmentUrlsWithDownloadApi = resolveAttachmentUrlsWithDownloadApi;
+  CGO.resolveImageUrlsWithDownloadApi = resolveImageUrlsWithDownloadApi;
 })();
