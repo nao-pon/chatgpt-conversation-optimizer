@@ -1,12 +1,13 @@
 # Privacy Policy
 
-Conversation Optimizer for ChatGPT does not collect, transmit, or sell personal data.
+Conversation Optimizer for ChatGPT runs entirely locally in the user's browser.
 
-This extension runs entirely locally in the browser and does not send conversation content or other data to external servers.
+This extension does not collect, transmit, sell, or share personal data, conversation content, or other user data with the developer or any third parties.
 
-The extension stores only minimal local settings required for functionality, such as optimizer mode, panel state, and debug mode.  
-These settings are stored using Chrome's extension storage and remain on the user's device.
+It operates only on ChatGPT pages in order to provide its user-facing features, such as conversation optimization, copy support, and export functions.
 
-No tracking, analytics, or external network requests are used.
+The extension stores only minimal local settings required for functionality, such as optimizer mode, panel state, and debug mode. These settings are stored using Chrome's extension storage and remain on the user's device.
 
-This extension is not affiliated with OpenAI or ChatGPT.
+No tracking, analytics, remote code, or external network requests are used.
+
+This extension is not affiliated with, endorsed by, or sponsored by OpenAI or ChatGPT.
