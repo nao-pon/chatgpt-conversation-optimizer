@@ -870,6 +870,95 @@
     return `CGO_INLINE_IMAGE_${String(messageId || "msg").replace(/[^A-Za-z0-9_-]+/g, "_")}_${index}__`;
   }
 
+  function getContentReferenceReplacement(ref) {
+    if (!ref || typeof ref !== "object") return "";
+
+    if (ref.type === "entity" || ref.type === "alt_text") {
+      const candidates = [ref.alt, ref.prompt_text, ref.name];
+
+      for (const value of candidates) {
+        if (typeof value === "string" && value.trim()) {
+          return value.trim();
+        }
+      }
+
+      return "";
+    }
+
+    if (ref.type === "grouped_webpages") {
+      const items = Array.isArray(ref.items) ? ref.items : [];
+      const primary = items[0];
+      if (!primary || typeof primary !== "object") return "";
+
+      const url = typeof primary.url === "string" ? primary.url.trim() : "";
+      if (!url) return "";
+
+      const labelCandidates = [primary.attribution, primary.title, "Source"];
+      let label = "Source";
+
+      for (const value of labelCandidates) {
+        if (typeof value === "string" && value.trim()) {
+          label = value.trim();
+          break;
+        }
+      }
+
+      const safeLabel = label.replace(/\\/g, "\\\\").replace(/\]/g, "\\]");
+      return `[${safeLabel}](${url})`;
+    }
+
+    return "";
+  }
+
+  /**
+   * Replace ChatGPT content reference markers in text with readable text or links.
+   *
+   * @param {string} text - Raw message text.
+   * @param {Object} rawMessage - Raw message payload.
+   * @returns {string} Text with supported content references applied.
+   */
+  function applyContentReferencesToText(text, rawMessage) {
+    const sourceText = typeof text === "string" ? text : "";
+    if (!sourceText) return sourceText;
+
+    const refs = Array.isArray(rawMessage?.metadata?.content_references)
+      ? rawMessage.metadata.content_references
+      : [];
+
+    if (!refs.length) return sourceText;
+
+    const replacements = [];
+
+    for (const ref of refs) {
+      if (!ref || typeof ref !== "object") continue;
+
+      const matchedText = typeof ref.matched_text === "string"
+        ? ref.matched_text
+        : "";
+      if (!matchedText) continue;
+
+      const replacement = getContentReferenceReplacement(ref);
+      if (!replacement) continue;
+
+      replacements.push({
+        matchedText,
+        replacement,
+      });
+    }
+
+    if (!replacements.length) return sourceText;
+
+    replacements.sort((a, b) => b.matchedText.length - a.matchedText.length);
+
+    let result = sourceText;
+
+    for (const { matchedText, replacement } of replacements) {
+      result = result.split(matchedText).join(replacement);
+    }
+
+    return result;
+  }
+
   /**
    * Match inline image placeholders in message text with image/attachment metadata.
    *
@@ -1047,6 +1136,7 @@
         : [];
 
       let text = parts.join("\n");
+      text = applyContentReferencesToText(text, msg);
 
       if (
         isLikelyImageGenerationMessage(msg) &&
