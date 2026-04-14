@@ -827,6 +827,94 @@
     animation: cgoPulseOnce 1.2s ease-out 1;
   }
 
+  .cgo-dom-trim-notice {
+    box-sizing: border-box;
+    width: fit-content;
+    max-width: min(720px, calc(100% - 96px));
+    margin: 8px auto 32px;
+    padding: 10px 14px;
+    border: 1px dashed rgba(255,255,255,0.14);
+    border-radius: 12px;
+    background: rgba(255,255,255,0.03);
+    color: rgba(245,245,245,0.92);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    text-align: center;
+  }
+
+  .cgo-dom-trim-notice-text {
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .cgo-dom-trim-notice-link {
+    appearance: none;
+    padding: 6px 10px;
+    border: 1px solid rgba(255,255,255,0.16);
+    border-radius: 999px;
+    background: rgba(255,255,255,0.06);
+    color: #f5f5f5;
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .cgo-dom-trim-notice-link:hover {
+    background: rgba(255,255,255,0.12);
+  }
+
+  .cgo-dom-trim-notice-link:disabled {
+    opacity: 0.7;
+    cursor: progress;
+  }
+
+  .cgo-dom-initial-message {
+    box-sizing: border-box;
+    max-width: min(980px, calc(100% - 96px));
+    margin: 8px 64px 8px;
+    padding: 12px 14px;
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 14px;
+    background: rgba(255,255,255,0.04);
+    color: #f5f5f5;
+  }
+
+  .cgo-dom-initial-message-user {
+    background: rgba(59, 130, 246, 0.08);
+    border-color: rgba(96, 165, 250, 0.22);
+  }
+
+  .cgo-dom-initial-message-assistant {
+    background: rgba(34, 197, 94, 0.08);
+    border-color: rgba(74, 222, 128, 0.2);
+  }
+
+  .cgo-dom-initial-message-header {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 8px;
+    font-size: 12px;
+  }
+
+  .cgo-dom-initial-message-role {
+    font-weight: 700;
+  }
+
+  .cgo-dom-initial-message-date {
+    color: rgba(245,245,245,0.68);
+  }
+
+  .cgo-dom-initial-message-body {
+    font-size: 16px;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+  }
+
   @keyframes cgoPulseOnce {
     0% {
       transform: scale(1);

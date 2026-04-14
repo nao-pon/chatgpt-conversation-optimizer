@@ -253,5 +253,11 @@
   },
   "copy_failed_button": {
     "message": "Failed"
+  },
+  "dom_trim_omitted_notice": {
+    "message": "$1 messages are hidden."
+  },
+  "dom_trim_open_lightweight_link": {
+    "message": "View in light page"
   }
 }

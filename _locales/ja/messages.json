@@ -253,5 +253,11 @@
   },
   "copy_failed_button": {
     "message": "失敗"
+  },
+  "dom_trim_omitted_notice": {
+    "message": "$1件のメッセージが省略されています。"
+  },
+  "dom_trim_open_lightweight_link": {
+    "message": "軽量ページで確認"
   }
 }

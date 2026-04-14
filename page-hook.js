@@ -549,6 +549,24 @@
   }
 
   /**
+   * Notify the content layer about initial-response pruning metadata so it can restore a DOM omission notice.
+   *
+   * @param {string} conversationId - Conversation identifier.
+   * @param {{omittedCount?: number, firstMessageId?: string, firstKeptId?: string, firstMessage?: Object|null}} meta - Initial prune display metadata.
+   */
+  function postInitialPruneMeta(conversationId, meta) {
+    window.postMessage(
+      {
+        source: "cgo-prune-runtime",
+        type: "initialPruneMeta",
+        conversationId,
+        meta: meta || {},
+      },
+      "*"
+    );
+  }
+
+  /**
    * Builds a linear chain of node ids from the root to the specified current node by following parent links.
    *
    * @param {Object} mapping - Map of node id to node object; nodes may include a `parent` property referencing another node id.
@@ -935,6 +953,63 @@
   }
 
   /**
+   * Return the first meaningful kept conversation node id in the kept chain.
+   *
+   * @param {Object<string, any>} mapping - Conversation node mapping.
+   * @param {string[]} keptChain - Ordered kept root-to-current chain.
+   * @returns {string} First meaningful kept node id, or an empty string.
+   */
+  function getFirstKeptConversationNodeId(mapping, keptChain) {
+    for (const id of keptChain) {
+      if (isMeaningfulConversationNode(mapping[id])) {
+        return id;
+      }
+    }
+    return "";
+  }
+
+  /**
+   * Return the first meaningful conversation node id in the current linear chain.
+   *
+   * @param {Object<string, any>} mapping - Conversation node mapping.
+   * @param {string[]} chain - Ordered root-to-current chain.
+   * @returns {string} First meaningful node id, or an empty string.
+   */
+  function getFirstConversationNodeId(mapping, chain) {
+    for (const id of chain) {
+      if (isMeaningfulConversationNode(mapping[id])) {
+        return id;
+      }
+    }
+    return "";
+  }
+
+  /**
+   * Extract a compact, serializable message payload for DOM-side restoration.
+   *
+   * @param {Object<string, any>} mapping - Conversation node mapping.
+   * @param {string} messageId - Message node id.
+   * @returns {{id: string, role: string, createTime: number|null, text: string, renderText: string}|null} Minimal message payload.
+   */
+  function buildInitialMessagePayload(mapping, messageId) {
+    const message = mapping?.[messageId]?.message;
+    if (!message || typeof message !== "object") return null;
+
+    const parts = Array.isArray(message?.content?.parts)
+      ? message.content.parts.filter((value) => typeof value === "string")
+      : [];
+    const text = parts.join("\n");
+
+    return {
+      id: messageId,
+      role: String(message?.author?.role || "user"),
+      createTime: message?.create_time ?? null,
+      text,
+      renderText: text,
+    };
+  }
+
+  /**
    * Produce a pruned copy of a conversation payload that retains a recent suffix of turns and their descendant nodes while preserving structural integrity.
    *
    * The function selects a suffix of conversational nodes (limited by `turnCount`), expands that set to include all descendant nodes, and constructs a new `mapping` containing only those nodes. It always preserves the configured root node, reconnects the first kept chain node as a direct child of the root, and adjusts parent pointers for any kept node whose parent was removed so the mapping remains consistent. If `data.current_node` is missing or invalid, the original `data` is returned unchanged.
@@ -956,6 +1031,32 @@
       mapping,
       pickRecentSuffixKeepSet(mapping, chain, turnCount)
     );
+    const firstConversationId = getFirstConversationNodeId(mapping, chain);
+    const keptChain = chain.filter((id) => keepSet.has(id));
+    const firstKeptId = keptChain[0] || "";
+    const firstKeptConversationId = getFirstKeptConversationNodeId(mapping, keptChain);
+
+    const conversationalIds = getConversationalIds(mapping, chain);
+    const firstConversationIndex = conversationalIds.indexOf(firstConversationId);
+    const firstKeptConversationIndex = conversationalIds.indexOf(firstKeptConversationId);
+
+    const omittedCount =
+      firstConversationId &&
+        firstKeptConversationId &&
+        firstConversationIndex >= 0 &&
+        firstKeptConversationIndex > firstConversationIndex
+        ? Math.max(0, firstKeptConversationIndex - firstConversationIndex - 1)
+        : 0;
+
+    data.__cgoInitialPruneMeta = {
+      omittedCount,
+      firstMessageId: firstConversationId,
+      firstKeptId: firstKeptConversationId,
+      firstMessage:
+        omittedCount > 0
+          ? buildInitialMessagePayload(mapping, firstConversationId)
+          : null,
+    };
 
     const prunedMapping = {};
 
@@ -986,16 +1087,15 @@
     }
 
     // 3) 先頭 keep node を root 直下につなぎ直す
-    const keptChain = chain.filter((id) => keepSet.has(id));
-    const firstKeptId = keptChain[0];
+    const reconnectHeadId = keptChain[0];
 
-    if (firstKeptId && prunedMapping[firstKeptId] && prunedMapping[rootId]) {
-      prunedMapping[firstKeptId] = {
-        ...prunedMapping[firstKeptId],
+    if (reconnectHeadId && prunedMapping[reconnectHeadId] && prunedMapping[rootId]) {
+      prunedMapping[reconnectHeadId] = {
+        ...prunedMapping[reconnectHeadId],
         parent: rootId,
       };
 
-      prunedMapping[rootId].children = [firstKeptId];
+      prunedMapping[rootId].children = [reconnectHeadId];
     }
 
     // 4) parent が消えてしまった node は root か kept 親へ補正
@@ -1006,7 +1106,7 @@
       if (!parentId || !prunedMapping[parentId]) {
         prunedMapping[id] = {
           ...node,
-          parent: id === firstKeptId ? (rootNode ? rootId : null) : node.parent,
+          parent: id === reconnectHeadId ? (rootNode ? rootId : null) : node.parent,
         };
       }
     }
@@ -1015,7 +1115,10 @@
       originalCount: Object.keys(mapping).length,
       prunedCount: Object.keys(prunedMapping).length,
       rootChildren: prunedMapping[rootId]?.children || [],
+      firstConversationId,
       firstKeptId,
+      firstKeptConversationId,
+      omittedCount,
       currentNode,
     });
 
@@ -2132,6 +2235,14 @@
     }
 
     const pruned = pruneConversationData(data, effectiveKeepDomMessages);
+    const pruneMeta = data.__cgoInitialPruneMeta || null;
+    try {
+      delete data.__cgoInitialPruneMeta;
+    } catch (_) {}
+
+    if (pruneMeta && Number(pruneMeta.omittedCount || 0) > 0) {
+      postInitialPruneMeta(data.conversation_id || "", pruneMeta);
+    }
 
     log("pruned conversation response", {
       url,
@@ -2139,6 +2250,7 @@
       prunedMappingCount: Object.keys(pruned.mapping || {}).length,
       currentNode: pruned.current_node,
       title: pruned.title,
+      omittedCount: Number(pruneMeta?.omittedCount || 0),
     });
 
     // new_branch など conversation ラッパー付きレスポンス

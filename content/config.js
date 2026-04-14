@@ -32,6 +32,10 @@
 
   CGO.STATE = {
     trimScheduled: false,
+    initialPruneMeta: null,
+    initialPruneNoticeScheduled: false,
+    initialPruneNoticeTimer: null,
+    initialPruneNoticeRetryCount: 0,
     lastStopVisible: false,
     projectGuide: {
       conversationId: "",
@@ -125,8 +129,7 @@
   }
 
   CGO.CONVERSATION_OVERRIDE_STORAGE_KEY = "cgo_conversation_overrides";
-
-  CGO.PROJECT_GUIDE_DISMISSED_STORAGE_KEY = "cgo_project_guide_dismissed";
+  const PROJECT_GUIDE_DISMISSED_STORAGE_KEY = "cgo_project_guide_dismissed";
 
   function getProjectGuideLevel(stats = null) {
     if (!stats) return 0;
@@ -600,6 +603,7 @@
           stats: null,
           level: 0,
         };
+        CGO.resetInitialPruneNoticeState?.(true);
 
         CGO.updateExportButtonVisibility?.(false);
         CGO.injectExportButtonIntoHeader?.();
