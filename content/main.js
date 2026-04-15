@@ -5,7 +5,6 @@
   async function main() {
     await CGO.loadSettings();
     CGO.observeWindowMessages();
-    //observeConversationStats();
     const ok = await CGO.ensurePageHooksInjected();
     if (!ok) {
       CGO.log("[warn] page-hook is unavailable");

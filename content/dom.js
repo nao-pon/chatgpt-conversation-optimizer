@@ -492,7 +492,6 @@
     });
   }
 
-  CGO.observeStreamCompletion = observeStreamCompletion;
   CGO.observeWindowMessages = observeWindowMessages;
   CGO.ensureInitialPruneNotice = ensureInitialPruneNotice;
   CGO.resetInitialPruneNoticeState = resetInitialPruneNoticeState;
