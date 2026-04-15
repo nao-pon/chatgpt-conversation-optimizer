@@ -21,6 +21,14 @@ Conversation Optimizer for ChatGPT is a Chrome extension designed to keep long c
 
 ---
 
+## Compatibility
+
+Conversation Optimizer for ChatGPT is designed for Google Chrome and confirmed to work on Microsoft Edge.
+
+It may also work on other Chromium-based browsers, but compatibility can vary depending on browser behavior and changes to the ChatGPT web interface.
+
+---
+
 ## 🖼 Screenshots
 
 ### Conversation header tools
