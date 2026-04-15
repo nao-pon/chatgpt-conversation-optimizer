@@ -26,17 +26,17 @@
 
   CGO.CONFIG = {
     keepDomMessages: 40,
-    domTrimDelayMs: 1200,
+    domTrimDelayMs: 5000,
     debug: true,
   };
 
   CGO.STATE = {
-    trimScheduled: false,
+    domTrimTimer: null,
+    domTrimTicket: 0,
     initialPruneMeta: null,
     initialPruneNoticeScheduled: false,
     initialPruneNoticeTimer: null,
     initialPruneNoticeRetryCount: 0,
-    lastStopVisible: false,
     projectGuide: {
       conversationId: "",
       projectName: "",

@@ -369,39 +369,22 @@
    * @param {number} [delayMs=CGO.CONFIG.domTrimDelayMs] - Delay before trimming begins.
    */
   function scheduleDomTrim(delayMs = CGO.CONFIG.domTrimDelayMs) {
-    if (CGO.STATE.trimScheduled) return;
-    CGO.STATE.trimScheduled = true;
+    if (CGO.STATE.domTrimTimer) {
+      clearTimeout(CGO.STATE.domTrimTimer);
+    }
 
-    setTimeout(() => {
+    const ticket = (CGO.STATE.domTrimTicket || 0) + 1;
+    CGO.STATE.domTrimTicket = ticket;
+
+    CGO.STATE.domTrimTimer = setTimeout(() => {
+      CGO.STATE.domTrimTimer = null;
+
       runWhenIdle(() => {
-        CGO.STATE.trimScheduled = false;
+        if (CGO.STATE.domTrimTicket !== ticket) return;
+
         trimOldDomTurns();
       }, 2000);
     }, delayMs);
-  }
-
-  function observeStreamCompletion() {
-    const observer = new MutationObserver(() => {
-      if (!/^(\/g\/[^/]+)?\/c\/([^/?#]+)/i.test(location.pathname)) return;
-
-      const stopButton = document.querySelector('button[data-testid="stop-button"]');
-      const stopVisible = !!stopButton;
-
-      if (CGO.STATE.lastStopVisible && !stopVisible) {
-        scheduleDomTrim();
-      }
-
-      if (CGO.STATE.initialPruneMeta && !document.getElementById("cgo-dom-trim-notice")) {
-        scheduleInitialPruneNotice();
-      }
-
-      CGO.STATE.lastStopVisible = stopVisible;
-    });
-
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-    });
   }
 
   /**
@@ -478,6 +461,12 @@
 
     if (data.type === "streamNotify") {
       CGO.updateExportButtonVisibility?.(true);
+
+      scheduleDomTrim();
+
+      if (CGO.STATE.initialPruneMeta && !document.getElementById("cgo-dom-trim-notice")) {
+        scheduleInitialPruneNotice();
+      }
       CGO.log("[streamNotify]", data.message);
       return;
     }

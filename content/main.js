@@ -17,7 +17,6 @@
       CGO.injectExportButtonStyle();
       CGO.startHeaderButtonObserver();
       CGO.observeRouteChanges();
-      CGO.observeStreamCompletion();
       document.addEventListener("click", () => {
         CGO.closeSettingsPanel?.();
       });
