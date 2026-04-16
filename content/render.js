@@ -398,6 +398,13 @@
     </figure>`;
   }
 
+  /**
+   * Render an image gallery, optionally suppressing inline `<img>` output.
+   *
+   * @param {Object[]} images - Images to render.
+   * @param {boolean} [noImg=false] - Whether to hide actual image tags.
+   * @returns {string} HTML fragment.
+   */
   function renderImagesBase(images, noImg = false) {
     if (!Array.isArray(images) || images.length === 0) return "";
 
@@ -424,17 +431,25 @@
     ].join("\n");
   }
 
+  /**
+   * Render images for normal HTML exports.
+   *
+   * @param {Object[]} images - Images to render.
+   * @returns {string} HTML fragment.
+   */
   function renderImages(images) {
     return renderImagesBase(images);
   }
 
+  /**
+   * Render image placeholders without embedding image tags.
+   *
+   * @param {Object[]} images - Images to render.
+   * @returns {string} HTML fragment.
+   */
   function renderImagesNoImg(images) {
     const noImg = true;
     return renderImagesBase(images, noImg);
-  }
-
-  function escapeRegExp(value) {
-    return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
   /**
@@ -598,6 +613,12 @@
     return wrapper.innerHTML;
   }
 
+  /**
+   * Extract plain text from the different token shapes emitted by `marked`.
+   *
+   * @param {*} value - Token or raw string value.
+   * @returns {string} Extracted text.
+   */
   function getMarkedTextValue(value) {
     if (typeof value === "string") return value;
     if (value && typeof value === "object") {
@@ -759,6 +780,11 @@
     }
   }
 
+  /**
+   * Return the SVG markup used for the exported thought-toggle icon.
+   *
+   * @returns {string} SVG markup string.
+   */
   function getThoughtIconSvg() {
     return `
     <svg viewBox="0 0 24 24" aria-hidden="true" class="cgo-thought-icon">
@@ -767,6 +793,11 @@
   `;
   };
 
+  /**
+   * Return the SVG markup used for the exported markdown-copy button icon.
+   *
+   * @returns {string} SVG markup string.
+   */
   function getMarkdownCopyIconSvg() {
     return `
     <svg viewBox="0 0 24 24" aria-hidden="true" class="cgo-markdown-copy-icon">

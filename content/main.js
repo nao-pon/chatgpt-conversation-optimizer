@@ -2,6 +2,11 @@
   if (globalThis.__CGO_SKIP__) return;
   const CGO = (globalThis.__CGO ||= {});
 
+  /**
+   * Initialize the content-script side of CGO and wire page hooks plus UI observers.
+   *
+   * @returns {Promise<void>}
+   */
   async function main() {
     await CGO.loadSettings();
     CGO.observeWindowMessages();

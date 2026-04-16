@@ -83,21 +83,6 @@
     );
   }
 
-  /**
-   * Sends an error notification via window.postMessage for the CGO prune runtime.
-   * @param {*} error - The error value to report; it will be converted to a string.
-   */
-  function postError(error) {
-    window.postMessage(
-      {
-        source: "cgo-prune-runtime",
-        type: "error",
-        error: String(error),
-      },
-      "*"
-    );
-  }
-
   // =========================================================
   // HANDSHAKE
   // =========================================================
@@ -573,6 +558,12 @@
     );
   }
 
+  /**
+   * Post metadata about the preserved conversation head to the content layer.
+   *
+   * @param {string} conversationId - Conversation identifier.
+   * @param {Object} meta - First-message metadata payload.
+   */
   function postConversationHeadMeta(conversationId, meta) {
     window.postMessage(
       {
@@ -585,6 +576,12 @@
     );
   }
 
+  /**
+   * Build the metadata needed to recreate the original first conversation message after pruning.
+   *
+   * @param {Object} data - Conversation payload.
+   * @returns {?Object} Head metadata or `null` when unavailable.
+   */
   function buildConversationHeadMeta(data) {
     const mapping = getMapping(data);
     const currentNode = getCurrentNode(data);

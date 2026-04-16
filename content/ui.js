@@ -2,19 +2,13 @@
   if (globalThis.__CGO_SKIP__) return;
   const CGO = (globalThis.__CGO ||= {});
 
-  function createHeaderButton(html, text, callback) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "cgo-btn";
-    button.title = text
-    button.ariaLabel = text
-    button.innerHTML = html;
-     
-    button.addEventListener("click", callback);
-     
-    return button;
-  }
-
+  /**
+   * Create an SVG icon element for toolbar buttons.
+   *
+   * @param {string} pathD - SVG path `d` attribute.
+   * @param {string} [viewBox="0 0 24 24"] - SVG viewBox.
+   * @returns {SVGSVGElement} SVG element.
+   */
   function createSvgIcon(pathD, viewBox = "0 0 24 24") {
     const svgNS = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(svgNS, "svg");
@@ -29,6 +23,12 @@
     return svg;
   }
 
+  /**
+   * Resolve the toolbar icon SVG for a named button kind.
+   *
+   * @param {string} kind - Toolbar icon kind.
+   * @returns {SVGSVGElement} SVG icon element.
+   */
   function getButtonIconSvg(kind) {
     switch (kind) {
       case "settings":
@@ -96,6 +96,11 @@
     }
   }
 
+  /**
+   * Create the lightweight-view export button.
+   *
+   * @returns {HTMLButtonElement} Configured toolbar button.
+   */
   function createOpenNewTabButton() {
     const button = buildToolbarButton({
       title: CGO.t("open_new_tab_button"),
@@ -117,6 +122,11 @@
     return button;
   }
 
+  /**
+   * Create the HTML download export button.
+   *
+   * @returns {HTMLButtonElement} Configured toolbar button.
+   */
   function createExportButton() {
     const button = buildToolbarButton({
       title: CGO.t("download_button"),
@@ -138,6 +148,11 @@
     return button;
   }
 
+  /**
+   * Create the ZIP export button.
+   *
+   * @returns {HTMLButtonElement} Configured toolbar button.
+   */
   function createZipExportButton() {
     const button = buildToolbarButton({
       title: CGO.t("zip_download_button"),
@@ -183,6 +198,11 @@
     panel.hidden = true;
   }
 
+  /**
+   * Create the toolbar button that opens the settings panel.
+   *
+   * @returns {HTMLButtonElement} Configured toolbar button.
+   */
   function createSettingsButton() {
     const button = buildToolbarButton({
       title: CGO.t("settings_button") || "Settings",
@@ -198,6 +218,11 @@
     return button;
   }
 
+  /**
+   * Create the alert button used to reopen a dismissed large-conversation guide.
+   *
+   * @returns {HTMLButtonElement} Configured toolbar button.
+   */
   function createProjectGuideAlertButton() {
     const title =
       CGO.t("project_guide_alert_tooltip") ||

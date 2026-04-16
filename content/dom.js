@@ -498,6 +498,9 @@
     }
   }
 
+  /**
+   * Subscribe to bridge messages posted from the page hook and route them to the DOM handler.
+   */
   function observeWindowMessages() {
     window.addEventListener("message", (event) => {
       if (event.source !== window) return;

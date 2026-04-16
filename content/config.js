@@ -6,7 +6,6 @@
 
 
   CGO.PAGE_HOOK_VERSION = "2";
-  CGO.PAGE_BOOTSTRAP_ID = "cgo-page-bootstrap";
   CGO.PAGE_MAIN_HOOK_ID = "cgo-page-hook-script";
 
   CGO.DETECTION_PATTERNS = {
@@ -65,6 +64,12 @@
 
   CGO.SETTING_STORAGE_KEY = "cgo_settings";
 
+  /**
+   * Clamp the keep-dom setting to the supported integer range.
+   *
+   * @param {*} value - Candidate keep-dom value.
+   * @returns {number} Normalized keep-dom count.
+   */
   function clampKeepDomMessages(value) {
     const n = Number(value);
     if (!Number.isFinite(n)) return CGO.DEFAULT_SETTINGS.keepDomMessages;
@@ -113,6 +118,11 @@
     return CGO.SETTINGS;
   }
 
+  /**
+   * Load persisted extension settings from local storage and apply them in memory.
+   *
+   * @returns {Promise<Object>} Active settings after normalization.
+   */
   async function loadSettings() {
     try {
       const stored = await chrome.storage.local.get(CGO.SETTING_STORAGE_KEY);
@@ -124,6 +134,12 @@
     }
   }
 
+  /**
+   * Persist a partial settings update and return the normalized result.
+   *
+   * @param {Object} [partial={}] - Settings fields to update.
+   * @returns {Promise<Object>} Saved settings object.
+   */
   async function saveSettings(partial = {}) {
     const next = applySettings({
       ...CGO.SETTINGS,
@@ -145,6 +161,12 @@
   CGO.CONVERSATION_OVERRIDE_STORAGE_KEY = "cgo_conversation_overrides";
   const PROJECT_GUIDE_DISMISSED_STORAGE_KEY = "cgo_project_guide_dismissed";
 
+  /**
+   * Compute the project-guide warning level for a conversation.
+   *
+   * @param {?Object} [stats=null] - Conversation statistics.
+   * @returns {number} Warning level from `0` to `3`.
+   */
   function getProjectGuideLevel(stats = null) {
     if (!stats) return 0;
 
@@ -172,6 +194,13 @@
     }
   }
 
+  /**
+   * Check whether the project guide has been dismissed for a conversation and level.
+   *
+   * @param {string} conversationId - Conversation identifier.
+   * @param {number} [level=0] - Warning level being evaluated.
+   * @returns {Promise<boolean>} `true` when the guide is already dismissed.
+   */
   async function isProjectGuideDismissed(conversationId, level = 0) {
     if (!conversationId || level <= 0) return false;
 
@@ -182,6 +211,13 @@
     return Number(saved.level || 0) >= level;
   }
 
+  /**
+   * Persist dismissal state for the project guide of a conversation.
+   *
+   * @param {string} conversationId - Conversation identifier.
+   * @param {number} [level=0] - Warning level being dismissed.
+   * @returns {Promise<void>}
+   */
   async function dismissProjectGuide(conversationId, level = 0) {
     if (!conversationId || level <= 0) return;
 
@@ -196,6 +232,12 @@
     });
   }
 
+  /**
+   * Remove any saved project-guide dismissal state for a conversation.
+   *
+   * @param {string} conversationId - Conversation identifier.
+   * @returns {Promise<void>}
+   */
   async function clearProjectGuideDismissed(conversationId) {
     if (!conversationId) return;
 
@@ -224,6 +266,12 @@
     }
   }
 
+  /**
+   * Load the DOM-retention override for a specific conversation.
+   *
+   * @param {string} conversationId - Conversation identifier.
+   * @returns {Promise<?Object>} Saved override record or `null`.
+   */
   async function loadConversationOverride(conversationId) {
     if (!conversationId) return null;
 
@@ -231,6 +279,13 @@
     return map?.[conversationId] || null;
   }
 
+  /**
+   * Save a conversation-specific keep-dom override.
+   *
+   * @param {string} conversationId - Conversation identifier.
+   * @param {*} keepDomMessages - Desired keep-dom value.
+   * @returns {Promise<?Object>} Saved override record or `null`.
+   */
   async function saveConversationOverride(conversationId, keepDomMessages) {
     if (!conversationId) return null;
 
@@ -248,6 +303,12 @@
     return map[conversationId];
   }
 
+  /**
+   * Delete the saved keep-dom override for a conversation.
+   *
+   * @param {string} conversationId - Conversation identifier.
+   * @returns {Promise<void>}
+   */
   async function clearConversationOverride(conversationId) {
     if (!conversationId) return;
 
@@ -291,6 +352,11 @@
     }
   }
 
+  /**
+   * Post the current effective settings to the injected page hook.
+   *
+   * @returns {Promise<void>}
+   */
   async function postSettingsToPageHook() {
     const keepDomMessages = await getEffectiveKeepDomMessagesForConversation();
     window.postMessage(
@@ -367,31 +433,6 @@
       CGO.DETECTION_PATTERNS[CGO.DETECTION_LANG] ||
       CGO.DETECTION_PATTERNS.en
     );
-  }
-
-  /**
-   * Inject the lightweight bootstrap page script that establishes the content/page bridge.
-   */
-  function injectPageBootstrapScript() {
-    const oldScript = document.getElementById(CGO.PAGE_BOOTSTRAP_ID);
-    if (oldScript) {
-      oldScript.remove();
-    }
-
-    const script = document.createElement("script");
-    script.id = CGO.PAGE_BOOTSTRAP_ID;
-    script.src = chrome.runtime.getURL("page-bootstrap.js");
-    script.dataset.cgoVersion = CGO.PAGE_HOOK_VERSION;
-
-    script.onload = () => {
-      CGO.log("page bootstrap loaded");
-    };
-
-    script.onerror = (error) => {
-      CGO.log("[error] page bootstrap load failed", error);
-    };
-
-    (document.documentElement || document.head).prepend(script);
   }
 
   /**
@@ -577,6 +618,11 @@
     });
   }
 
+  /**
+   * Ensure both bridge scripts are responsive and reinject the main hook when needed.
+   *
+   * @returns {Promise<boolean>} `true` when the page hooks are ready.
+   */
   async function ensurePageHooksInjected() {
     const bootstrapAlive = await waitForBootstrapPong();
 
@@ -608,6 +654,9 @@
 
   CGO.LAST_PATHNAME = location.pathname;
 
+  /**
+   * Watch SPA route changes and refresh CGO state when the conversation changes.
+   */
   function observeRouteChanges() {
     const observer = new MutationObserver(async () => {
       if (location.pathname !== CGO.LAST_PATHNAME) {
@@ -653,16 +702,34 @@
     return patterns.some((pattern) => pattern.test(text));
   }
 
+  /**
+   * Detect whether text matches a localized generated-image lead-in.
+   *
+   * @param {string} text - Text to inspect.
+   * @returns {boolean} `true` when the text matches a known generated-image prefix.
+   */
   function matchesGeneratedImagePrefix(text) {
     const patterns = getDetectionPatternSet().generatedImagePrefixes;
     return matchesAnyPattern(text, patterns);
   }
 
+  /**
+   * Emit a debug log only when extension debug mode is enabled.
+   *
+   * @param {...any} args - Values to log.
+   */
   function log(...args) {
     if (!CGO.CONFIG.debug) return;
     console.log("[CGO]", ...args);
   }
 
+  /**
+   * Resolve a localized message key with optional substitutions.
+   *
+   * @param {string} key - Translation key.
+   * @param {Array|*} [substitutions=[]] - Replacement values for the message.
+   * @returns {string} Localized text or the key when missing.
+   */
   function t(key, substitutions = []) {
     if (!Array.isArray(substitutions)) {
       substitutions = [substitutions];
@@ -674,6 +741,12 @@
     }
   }
 
+  /**
+   * Decode HTML entities into plain text.
+   *
+   * @param {*} str - Escaped text value.
+   * @returns {string} Decoded text.
+   */
   function unescapeHtml(str) {
     const textarea = document.createElement("textarea");
     textarea.innerHTML = String(str || "");
@@ -681,6 +754,12 @@
   }
 
   // page-hook.js に同名関数あり、変更時は合わせて変更
+  /**
+   * Compute a compact stable hash string for cache keys and ids.
+   *
+   * @param {string} str - Source text.
+   * @returns {string} Unsigned base-36 hash.
+   */
   function hash(str) {
     let h = 0;
     for (let i = 0; i < str.length; i++) {

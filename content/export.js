@@ -485,6 +485,12 @@
     }
   }
 
+  /**
+   * Extract image metadata from `content_references.image_group` entries.
+   *
+   * @param {Object} message - Raw message payload.
+   * @returns {Object[]} Normalized referenced image metadata.
+   */
   function extractImageAssetsFromContentReferences(message) {
     const refs = Array.isArray(message?.metadata?.content_references)
       ? message.metadata.content_references
@@ -527,6 +533,12 @@
     return results;
   }
 
+  /**
+   * Determine whether an image should be treated as an external reference.
+   *
+   * @param {Object} image - Normalized image metadata.
+   * @returns {boolean} `true` when the image source is external to ChatGPT.
+   */
   function isProbablyExternalImage(image) {
     const source = String(image?.source || "");
     const url = String(image?.url || "");
@@ -570,6 +582,12 @@
     }
   }
 
+  /**
+   * Render the optional external-source link block for an image.
+   *
+   * @param {Object} image - Normalized image metadata.
+   * @returns {string} HTML fragment or an empty string.
+   */
   function renderImageSourceLink(image) {
     const href = getImageSourceHref(image);
     if (!href) return "";
@@ -581,6 +599,12 @@
     </div>`;
   }
 
+  /**
+   * Collect ids from tool messages associated with an export message.
+   *
+   * @param {Object} message - Normalized export message.
+   * @returns {string[]} Tool message ids.
+   */
   function getToolMessageIds(message) {
     if (!Array.isArray(message?.toolMessages)) return [];
     return message.toolMessages
@@ -588,6 +612,12 @@
       .filter((id) => typeof id === "string" && id);
   }
 
+  /**
+   * Check whether a message has related tool outputs that contain generated images.
+   *
+   * @param {Object} message - Normalized export message.
+   * @returns {boolean} `true` when tool messages expose image assets.
+   */
   function hasToolGeneratedImages(message) {
     if (!Array.isArray(message?.toolMessages)) return false;
     return message.toolMessages.some(
@@ -595,6 +625,12 @@
     );
   }
 
+  /**
+   * Decide whether a message should be treated as an image-generation candidate.
+   *
+   * @param {Object} message - Normalized export message.
+   * @returns {boolean} `true` when the message likely represents image output or prompts.
+   */
   function isImageCandidateMessage(message) {
     return (
       hasToolGeneratedImages(message) ||
@@ -603,6 +639,12 @@
     );
   }
 
+  /**
+   * Extract prompt-like hint text for generated-image messages.
+   *
+   * @param {Object} message - Normalized export message.
+   * @returns {Array<{text: string, source: string}>} Prompt descriptors.
+   */
   function extractPromptHintsFromMessage(message) {
     const prompts = [];
 
@@ -627,6 +669,12 @@
     return prompts;
   }
 
+  /**
+   * Partition assistant DOM image assets into keyed and anonymous pools.
+   *
+   * @param {Object[]} domAssets - DOM asset entries.
+   * @returns {{byMessageId: Map<string, Object>, anonymous: Object[]}} Assistant image pools.
+   */
   function buildAssistantDomImagePools(domAssets) {
     const byMessageId = new Map();
     const anonymous = [];
@@ -848,6 +896,12 @@
     }
   }
 
+  /**
+   * Convert an image skip reason into a localized user-facing label.
+   *
+   * @param {Object} image - Image metadata with an optional `skipReason`.
+   * @returns {string} Localized explanation or an empty string.
+   */
   function getImageSkipLabel(image) {
     const rawSkipReason = image?.skipReason || "";
     const [skipReason] = String(rawSkipReason).split(":");

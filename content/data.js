@@ -99,6 +99,12 @@
     return chain.reverse();
   }
 
+  /**
+   * Decide whether a raw message should be included in export output.
+   *
+   * @param {Object} message - Raw conversation message.
+   * @returns {boolean} `true` when the message has exportable content.
+   */
   function isExportableMessage(message) {
     const role = message?.author?.role;
 
@@ -142,6 +148,13 @@
     return text.length > 0;
   }
 
+  /**
+   * Collect tool-role child messages for a given message node.
+   *
+   * @param {Object} mapping - Conversation node map.
+   * @param {string} messageId - Parent message id.
+   * @returns {Object[]} Tool messages attached to the node.
+   */
   function findChildToolMessages(mapping, messageId) {
     if (!mapping || !messageId) return [];
 
@@ -153,6 +166,12 @@
       .filter((msg) => msg && msg.author?.role === "tool");
   }
 
+  /**
+   * Extract a ChatGPT file id from an asset pointer string.
+   *
+   * @param {string} assetPointer - Asset pointer URI.
+   * @returns {string} File id or an empty string.
+   */
   function extractFileIdFromAssetPointer(assetPointer) {
     if (typeof assetPointer !== "string") return "";
 
@@ -160,6 +179,12 @@
     return match ? match[1] : "";
   }
 
+  /**
+   * Build the estuary content URL for a file id.
+   *
+   * @param {string} fileId - ChatGPT file id.
+   * @returns {string} Estuary URL or an empty string.
+   */
   function buildEstuaryUrlFromFileId(fileId) {
     if (!fileId || typeof fileId !== "string") return "";
     if (!/^file_/i.test(fileId)) return "";
@@ -167,6 +192,12 @@
     return `https://chatgpt.com/backend-api/estuary/content?id=${encodeURIComponent(fileId)}`;
   }
 
+  /**
+   * Check whether a URL points to a ChatGPT-hosted asset endpoint.
+   *
+   * @param {string} url - Candidate URL.
+   * @returns {boolean} `true` when the URL looks like a ChatGPT asset.
+   */
   function isLikelyChatgptAssetUrl(url) {
     return (
       typeof url === "string" &&
@@ -190,6 +221,13 @@
     return url;
   }
 
+  /**
+   * Recursively collect nested objects from an arbitrary value tree.
+   *
+   * @param {*} value - Value to traverse.
+   * @param {Object[]} [out=[]] - Accumulator for discovered objects.
+   * @returns {Object[]} Collected object references.
+   */
   function collectObjectsDeep(value, out = []) {
     if (!value) return out;
 
@@ -210,6 +248,13 @@
     return out;
   }
 
+  /**
+   * Derive a useful alt/caption label from an image-like object and message context.
+   *
+   * @param {Object} obj - Candidate image-like object.
+   * @param {Object} message - Parent message.
+   * @returns {string} Best-effort alt text.
+   */
   function deriveImageAltFromObject(obj, message) {
     if (!obj || typeof obj !== "object") return "";
 
@@ -233,14 +278,32 @@
     return "";
   }
 
+  /**
+   * Test whether a MIME type is an image MIME.
+   *
+   * @param {*} value - Candidate MIME type.
+   * @returns {boolean} `true` when the value starts with `image/`.
+   */
   function looksLikeImageMime(value) {
     return typeof value === "string" && /^image\//i.test(value);
   }
 
+  /**
+   * Test whether a filename has a common image extension.
+   *
+   * @param {*} value - Candidate filename.
+   * @returns {boolean} `true` when the filename looks image-like.
+   */
   function looksLikeImageFilename(value) {
     return typeof value === "string" && /\.(png|jpg|jpeg|webp|gif|bmp|svg)$/i.test(value);
   }
 
+  /**
+   * Check whether an object looks like it describes an image asset.
+   *
+   * @param {Object} obj - Candidate object.
+   * @returns {boolean} `true` when the object appears image-related.
+   */
   function looksLikeImageObject(obj) {
     if (!obj || typeof obj !== "object") return false;
 
@@ -435,6 +498,13 @@
   }
 
   // page-hook.js に同名関数あり、変更時は合わせて変更
+  /**
+   * Build a stable synthetic file id for sandbox artifacts.
+   *
+   * @param {string} messageId - Message identifier.
+   * @param {string} sandboxPath - Sandbox file path.
+   * @returns {string} Synthetic sandbox file id or an empty string.
+   */
   function buildSandboxFileId(messageId, sandboxPath) {
     if (!messageId || !sandboxPath) return "";
     return "sandbox:" + CGO.hash(`${messageId}:${sandboxPath}`);
@@ -473,6 +543,12 @@
     });
   }
 
+  /**
+   * Extract a file id from either sediment or file-service asset pointers.
+   *
+   * @param {string} assetPointer - Asset pointer URI.
+   * @returns {string} File id or an empty string.
+   */
   function normalizeFileIdFromAssetPointer(assetPointer) {
     if (typeof assetPointer !== "string") return "";
 
@@ -611,6 +687,14 @@
     return error;
   }
 
+  /**
+   * Create an error object from an API detail code and message.
+   *
+   * @param {string} code - Normalized error code.
+   * @param {string} [detail=""] - API detail text.
+   * @param {string} [context=""] - Human-readable request context.
+   * @returns {Error} Error carrying `code` and `detail`.
+   */
   function createDetailError(code, detail = "", context = "") {
     const error = new Error(
       `${context || "Request"} failed${detail ? `: ${detail}` : ""}`
@@ -755,6 +839,13 @@
     return CGO.dedupeAttachments(results);
   }
 
+  /**
+   * Gather image assets reachable from a message and its related tool messages.
+   *
+   * @param {Object} message - Normalized export message.
+   * @param {Object[]} [toolMessages=[]] - Related tool-role messages.
+   * @returns {Object[]} Deduplicated image metadata.
+   */
   function collectImageAssetsFromMessage(message, toolMessages = []) {
     const results = [];
 
@@ -768,6 +859,12 @@
     return CGO.dedupeImages(results.map(CGO.normalizeImageMeta));
   }
 
+  /**
+   * Normalize exported thought items into a consistent array shape.
+   *
+   * @param {Object} message - Raw message payload.
+   * @returns {Object[]} Normalized thought entries.
+   */
   function normalizeThoughtsForExport(message) {
     const thoughts = Array.isArray(message?.content?.thoughts)
       ? message.content.thoughts
@@ -784,6 +881,13 @@
     }));
   }
 
+  /**
+   * Resolve the assistant message id that a thought message should attach to.
+   *
+   * @param {string} messageId - Thought message id.
+   * @param {Object} mapping - Conversation node map.
+   * @returns {string} Target assistant message id or an empty string.
+   */
   function findThoughtTargetMessageId(messageId, mapping) {
     if (!messageId || !mapping || !mapping[messageId]) return "";
 
@@ -853,6 +957,12 @@
     return "";
   }
 
+  /**
+   * Normalize a filename-like label for inline asset matching.
+   *
+   * @param {*} value - Candidate asset name.
+   * @returns {string} Normalized asset name.
+   */
   function normalizeInlineAssetName(value) {
     return String(value || "")
       .toLowerCase()
@@ -862,14 +972,33 @@
       .trim();
   }
 
+  /**
+   * Escape a string for safe use inside a regular-expression literal.
+   *
+   * @param {*} value - Raw text.
+   * @returns {string} Escaped text.
+   */
   function escapeRegExpLiteral(value) {
     return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
+  /**
+   * Create the placeholder token used for inline exported images.
+   *
+   * @param {string} messageId - Message identifier.
+   * @param {number} index - Image index within the message.
+   * @returns {string} Placeholder token.
+   */
   function buildInlineImageToken(messageId, index) {
     return `CGO_INLINE_IMAGE_${String(messageId || "msg").replace(/[^A-Za-z0-9_-]+/g, "_")}_${index}__`;
   }
 
+  /**
+   * Convert a content-reference entry into replacement text for export rendering.
+   *
+   * @param {Object} ref - Content-reference descriptor.
+   * @returns {string} Replacement text.
+   */
   function getContentReferenceReplacement(ref) {
     if (!ref || typeof ref !== "object") return "";
 
@@ -1198,6 +1327,12 @@
     return normalized;
   }
 
+  /**
+   * Test whether text looks like a JSON blob.
+   *
+   * @param {string} text - Candidate text.
+   * @returns {boolean} `true` when the text looks like JSON.
+   */
   function looksLikeJsonBlob(text) {
     const trimmed = text.trim();
 
@@ -1207,6 +1342,12 @@
     );
   }
 
+  /**
+   * Detect image-generation signals inside message metadata.
+   *
+   * @param {Object} message - Raw message payload.
+   * @returns {boolean} `true` when metadata suggests image generation.
+   */
   function hasImageMetadataSignature(message) {
     const metadata = message?.metadata;
     if (!metadata || typeof metadata !== "object") return false;
@@ -1216,6 +1357,12 @@
     return /image[_-]?gen|generated[_-]?image|estuary|image_asset|asset_pointer/i.test(json);
   }
 
+  /**
+   * Detect JSON parameter blobs that resemble image-generation requests.
+   *
+   * @param {string} text - Candidate JSON text.
+   * @returns {boolean} `true` when the JSON shape looks image-related.
+   */
   function hasJsonImageParamShape(text) {
     if (!text) return false;
     const trimmed = text.trim();
@@ -1224,6 +1371,12 @@
     return /"size"\s*:|"n"\s*:|"quality"\s*:|"background"\s*:|"prompt"\s*:/i.test(trimmed);
   }
 
+  /**
+   * Decide whether a message most likely represents an image-generation interaction.
+   *
+   * @param {Object} message - Raw message payload.
+   * @returns {boolean} `true` when the message looks image-generation related.
+   */
   function isLikelyImageGenerationMessage(message) {
     if (!message || typeof message !== "object") return false;
 
@@ -1337,6 +1490,11 @@
     return out;
   }
 
+  /**
+   * Create an empty normalized image metadata object.
+   *
+   * @returns {Object} Blank image metadata template.
+   */
   function createEmptyImageMeta() {
     return {
       url: "",
@@ -1374,6 +1532,12 @@
     };
   }
 
+  /**
+   * Build a merge key used to identify equivalent image records.
+   *
+   * @param {Object} image - Image metadata.
+   * @returns {string} Merge key string.
+   */
   function getImageMergeKey(image) {
     return (
       image?.fileId ||
@@ -1382,6 +1546,13 @@
     );
   }
 
+  /**
+   * Merge two image metadata records, preferring populated fields from the primary record.
+   *
+   * @param {Object} primary - Preferred image metadata.
+   * @param {Object} fallback - Fallback image metadata.
+   * @returns {Object} Merged image metadata.
+   */
   function mergeImageMeta(primary, fallback) {
     const a = CGO.normalizeImageMeta(primary);
     const b = CGO.normalizeImageMeta(fallback);
@@ -1451,14 +1622,6 @@
     return Array.from(map.values());
   }
 
-  function isLikelyDomImageAsset(asset) {
-    return !!(
-      asset &&
-      asset.role === "assistant" &&
-      CGO.isNonEmptyArray(asset.images)
-    );
-  }
-
   /**
    * Process items with a bounded number of concurrent worker executions.
    *
@@ -1520,6 +1683,12 @@
     ).filter((node) => node && node.isConnected);
   }
 
+  /**
+   * Guess a filename from a URL path.
+   *
+   * @param {string} url - Candidate URL.
+   * @returns {string} Filename or an empty string.
+   */
   function guessFileNameFromUrl(url) {
     try {
       const u = new URL(url, location.origin);
@@ -1644,6 +1813,12 @@
     return results;
   }
 
+  /**
+   * Detect whether text is a pure JSON image-parameter blob.
+   *
+   * @param {string} text - Candidate text.
+   * @returns {boolean} `true` when the text looks like image params only.
+   */
   function isPureJsonParamText(text) {
     if (!text) return false;
 
@@ -1683,6 +1858,12 @@
     return null;
   }
 
+  /**
+   * Extract the estuary file id from a ChatGPT estuary URL.
+   *
+   * @param {string} url - Candidate estuary URL.
+   * @returns {string} File id or an empty string.
+   */
   function extractFileIdFromEstuaryUrl(url) {
     if (typeof url !== "string") return "";
 
