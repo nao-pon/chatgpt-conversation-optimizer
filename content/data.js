@@ -4,11 +4,11 @@
   /**
    * Request the current conversation payload from the page hook's in-memory cache.
    *
+   * @param {string} [conversationId=CGO.getConversationIdFromLocation()] - Conversation id to request from the page cache.
    * @returns {Promise<Object>} Cached conversation data used for export.
    */
-  function getConversationFromCache() {
+  function getConversationFromCache(conversationId = CGO.getConversationIdFromLocation()) {
     return new Promise((resolve, reject) => {
-      const conversationId = CGO.getConversationIdFromLocation();
       const requestId = "cgo_export_" + Date.now();
 
       const timer = setTimeout(() => {

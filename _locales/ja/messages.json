@@ -62,6 +62,15 @@
   "export_retry": {
     "message": "リトライ"
   },
+  "voice_export_guard_active": {
+    "message": "音声チャット中"
+  },
+  "voice_export_guard_syncing": {
+    "message": "音声チャットを同期中..."
+  },
+  "voice_export_guard_still_syncing": {
+    "message": "音声チャットはまだ同期中です"
+  },
   "zip_download_button": {
     "message": "ZIPで保存"
   },

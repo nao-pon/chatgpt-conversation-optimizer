@@ -49,6 +49,16 @@
       stats: null,
       level: 0,
     },
+
+    voiceExportGuard: {
+      state: "normal",
+      conversationId: "",
+      syncRetryCount: 0,
+      syncRetryTimer: null,
+      syncCheckInFlight: false,
+      lastChangedAt: 0,
+      reason: "",
+    },
   };
 
   CGO.DEFAULT_SETTINGS = {
@@ -669,6 +679,7 @@
           level: 0,
         };
         CGO.resetInitialPruneNoticeState?.(true);
+        CGO.handleConversationRouteChanged?.(CGO.getConversationIdFromLocation?.() || "");
 
         CGO.updateExportButtonVisibility?.(false);
         CGO.injectExportButtonIntoHeader?.();

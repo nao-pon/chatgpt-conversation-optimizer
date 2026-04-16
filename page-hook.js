@@ -32,6 +32,11 @@
   const WS_STREAM_PARSER_STATE = new Map();
 
   let LAST_STREAM_CONVERSATION_ID = null;
+  const VOICE_SESSION_STATE = {
+    state: "idle",
+    conversationId: "",
+    lastChangedAt: 0,
+  };
 
   // =========================================================
   // LOGGING / POST HELPERS
@@ -81,6 +86,139 @@
       },
       "*"
     );
+  }
+
+  /**
+   * Notify the content layer about the current voice-session lock state.
+   * @param {string} conversationId - Best-effort conversation identifier, or an empty string when unknown.
+   * @param {"active"|"syncing"|"idle"} state - Voice-session state used by the content layer to lock export actions.
+   * @param {object} [extra={}] - Optional metadata forwarded alongside the state update.
+   */
+  function postVoiceSessionState(conversationId, state, extra = {}) {
+    window.postMessage(
+      {
+        ...extra,
+        source: "cgo-prune-runtime",
+        type: "voiceSessionState",
+        conversationId,
+        state,
+      },
+      "*"
+    );
+  }
+
+  /**
+   * Extract a conversation identifier from a realtime voice request URL when one is present.
+   * @param {string} url - Request URL associated with the voice session.
+   * @returns {string} Conversation identifier, or an empty string when not present.
+   */
+  function getConversationIdFromVoiceUrl(url) {
+    try {
+      const parsed = new URL(url, location.origin);
+      return (
+        parsed.searchParams.get("conversation_id") ||
+        parsed.searchParams.get("conversationId") ||
+        ""
+      );
+    } catch {
+      return "";
+    }
+  }
+
+  /**
+   * Resolve the best available conversation id for voice-session state updates.
+   * @param {string} [url=""] - Optional URL that may contain a conversation id query parameter.
+   * @returns {string} Resolved conversation identifier, or an empty string when still unknown.
+   */
+  function resolveVoiceSessionConversationId(url = "") {
+    return (
+      getConversationIdFromVoiceUrl(url) ||
+      LAST_STREAM_CONVERSATION_ID ||
+      VOICE_SESSION_STATE.conversationId ||
+      ""
+    );
+  }
+
+  /**
+   * Update the deduplicated voice-session state and notify the content layer only when it changes.
+   * @param {"active"|"syncing"|"idle"} nextState - Next voice-session state.
+   * @param {string} [conversationId=""] - Best-effort conversation identifier.
+   * @param {object} [extra={}] - Optional metadata forwarded with the notification.
+   */
+  function updateVoiceSessionState(nextState, conversationId = "", extra = {}) {
+    const resolvedConversationId =
+      conversationId ||
+      resolveVoiceSessionConversationId(extra?.url || "");
+
+    if (
+      VOICE_SESSION_STATE.state === nextState &&
+      VOICE_SESSION_STATE.conversationId === resolvedConversationId
+    ) {
+      return;
+    }
+
+    VOICE_SESSION_STATE.state = nextState;
+    VOICE_SESSION_STATE.conversationId = resolvedConversationId;
+    VOICE_SESSION_STATE.lastChangedAt = Date.now();
+
+    postVoiceSessionState(resolvedConversationId, nextState, extra);
+  }
+
+  /**
+   * Determine whether a fetch URL is the lightweight voice-session bootstrap request.
+   * @param {string} url - Fetch request URL.
+   * @returns {boolean} `true` when the URL matches the realtime voice bootstrap endpoint.
+   */
+  function isRealtimeVoiceBootstrapRequest(url) {
+    try {
+      return new URL(url, location.origin).pathname === "/realtime/vp";
+    } catch {
+      return /\/realtime\/vp(?:[/?#]|$)/.test(String(url || ""));
+    }
+  }
+
+  /**
+   * Attach minimal lifecycle listeners to a RTC data channel without inspecting message payloads.
+   * @param {RTCDataChannel|object} channel - Data channel instance to observe.
+   * @param {RTCPeerConnection|object} peerConnection - Peer connection associated with the channel.
+   * @returns {*} The same channel instance.
+   */
+  function attachVoiceSessionChannelStateHandlers(channel, peerConnection) {
+    if (!channel || channel.__CGO_VOICE_SESSION_STATE_ATTACHED__) return channel;
+
+    channel.__CGO_VOICE_SESSION_STATE_ATTACHED__ = true;
+    channel.addEventListener("open", () => {
+      if (VOICE_SESSION_STATE.state !== "active" && !peerConnection.__CGO_VOICE_SESSION_LIVE__) {
+        return;
+      }
+
+      peerConnection.__CGO_VOICE_SESSION_LIVE__ = true;
+      updateVoiceSessionState(
+        "active",
+        resolveVoiceSessionConversationId(),
+        {
+          source: "rtc-datachannel-open",
+          label: channel.label || "",
+        }
+      );
+    });
+
+    channel.addEventListener("close", () => {
+      if (!peerConnection.__CGO_VOICE_SESSION_LIVE__ && VOICE_SESSION_STATE.state !== "active") {
+        return;
+      }
+
+      updateVoiceSessionState(
+        "syncing",
+        resolveVoiceSessionConversationId(),
+        {
+          source: "rtc-datachannel-close",
+          label: channel.label || "",
+        }
+      );
+    });
+
+    return channel;
   }
 
   // =========================================================
@@ -2298,6 +2436,14 @@
     const orgResponse = response;
     const shouldObserveEventStream =
       isStreamingConversationRequest(url) || isEventStreamResponse(orgResponse);
+    const isVoiceBootstrapRequest = isRealtimeVoiceBootstrapRequest(url);
+
+    if (isVoiceBootstrapRequest) {
+      updateVoiceSessionState("active", resolveVoiceSessionConversationId(url), {
+        source: "fetch",
+        url,
+      });
+    }
 
     if (
       !isFileDownloadRequest(url) &&
@@ -2448,10 +2594,102 @@
     return buildResponseFromJson(clonedResponse, pruned);
   }
 
+  /**
+   * Patch `RTCPeerConnection` with minimal lifecycle observers used only for voice-session lock state.
+   *
+   * The patch does not inspect RTC payloads. It only watches connection/datachannel open-close
+   * transitions so the content layer can keep export actions disabled while voice chat is active
+   * and leave them disabled in a `syncing` state until the normal conversation fetch completes.
+   */
+  function patchRTCPeerConnection() {
+    const NativeRTCPeerConnection = window.RTCPeerConnection;
+    if (!NativeRTCPeerConnection || window.__CGO_RTCPEERCONNECTION_PATCHED__) return;
+
+    window.__CGO_ORIGINAL_RTCPEERCONNECTION__ =
+      window.__CGO_ORIGINAL_RTCPEERCONNECTION__ || NativeRTCPeerConnection;
+
+    function CGORTCPeerConnection(...args) {
+      const pc = new NativeRTCPeerConnection(...args);
+
+      const markActive = (source, extra = {}) => {
+        if (VOICE_SESSION_STATE.state !== "active" && !pc.__CGO_VOICE_SESSION_LIVE__) {
+          return;
+        }
+
+        pc.__CGO_VOICE_SESSION_LIVE__ = true;
+        updateVoiceSessionState("active", resolveVoiceSessionConversationId(), {
+          source,
+          ...extra,
+        });
+      };
+
+      const markSyncing = (source, reason = "", extra = {}) => {
+        if (!pc.__CGO_VOICE_SESSION_LIVE__ && VOICE_SESSION_STATE.state !== "active") {
+          return;
+        }
+
+        updateVoiceSessionState("syncing", resolveVoiceSessionConversationId(), {
+          source,
+          reason,
+          ...extra,
+        });
+      };
+
+      try {
+        const originalCreateDataChannel = pc.createDataChannel;
+        if (typeof originalCreateDataChannel === "function") {
+          pc.createDataChannel = function (...channelArgs) {
+            const channel = originalCreateDataChannel.apply(this, channelArgs);
+            return attachVoiceSessionChannelStateHandlers(channel, pc);
+          };
+        }
+
+        pc.addEventListener("datachannel", (event) => {
+          attachVoiceSessionChannelStateHandlers(event?.channel, pc);
+        });
+
+        pc.addEventListener("connectionstatechange", () => {
+          const state = pc.connectionState || "";
+          if (state === "connecting" || state === "connected") {
+            markActive("rtc-connection-state", { rtcConnectionState: state });
+            return;
+          }
+
+          if (state === "closed" || state === "disconnected" || state === "failed") {
+            markSyncing("rtc-connection-state", state, { rtcConnectionState: state });
+          }
+        });
+
+        pc.addEventListener("iceconnectionstatechange", () => {
+          const state = pc.iceConnectionState || "";
+          if (state === "checking" || state === "connected" || state === "completed") {
+            markActive("rtc-ice-connection-state", { rtcIceConnectionState: state });
+            return;
+          }
+
+          if (state === "closed" || state === "disconnected" || state === "failed") {
+            markSyncing("rtc-ice-connection-state", state, { rtcIceConnectionState: state });
+          }
+        });
+      } catch (error) {
+        log("rtc peer connection state patch failed", String(error));
+      }
+
+      return pc;
+    }
+
+    CGORTCPeerConnection.prototype = NativeRTCPeerConnection.prototype;
+    Object.setPrototypeOf(CGORTCPeerConnection, NativeRTCPeerConnection);
+
+    window.RTCPeerConnection = CGORTCPeerConnection;
+    window.__CGO_RTCPEERCONNECTION_PATCHED__ = true;
+  }
+
   window.__CGO_MAIN_HOOK_API__ = {
     handleFetchResponse,
   };
 
+  patchRTCPeerConnection();
   patchWebSocket();
   patchEventSource();
 
