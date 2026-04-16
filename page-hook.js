@@ -198,15 +198,155 @@
   }
 
   /**
-   * Compute the combined character length of string parts in a conversation node's message content.
+   * Build a best-effort text fallback for a message from cached CGO metadata or raw string parts.
+   *
+   * @param {object} message - Conversation message object.
+   * @returns {string} Derived text fallback.
+   */
+  function getMessageTextFallback(message) {
+    const cgoText = message?.metadata?.cgo?.text_fallback;
+    if (typeof cgoText === "string" && cgoText.length > 0) {
+      return cgoText;
+    }
+
+    const parts = Array.isArray(message?.content?.parts)
+      ? message.content.parts.filter((value) => typeof value === "string")
+      : [];
+
+    return parts.join("\n");
+  }
+
+  /**
+   * Extract lightweight CGO-specific derived message metadata from raw content parts.
+   *
+   * @param {object} message - Conversation message object.
+   * @returns {{text_fallback: string, is_voice_transcription: boolean, voice_direction: string, has_voice_audio: boolean}} Derived metadata payload.
+   */
+  function extractCgoMessageMeta(message) {
+    const parts = Array.isArray(message?.content?.parts)
+      ? message.content.parts
+      : [];
+
+    const textParts = [];
+    let isVoiceTranscription = false;
+    let voiceDirection = "";
+    let hasVoiceAudio = false;
+
+    for (const part of parts) {
+      if (typeof part === "string") {
+        if (part.trim()) {
+          textParts.push(part);
+        }
+        continue;
+      }
+
+      if (!part || typeof part !== "object") continue;
+
+      const contentType = String(part.content_type || "");
+
+      if (contentType === "audio_transcription") {
+        isVoiceTranscription = true;
+
+        if (typeof part.text === "string" && part.text.trim()) {
+          textParts.push(part.text);
+        }
+
+        const direction = String(part.direction || "").toLowerCase();
+        if (!voiceDirection && (direction === "in" || direction === "out")) {
+          voiceDirection = direction;
+        }
+        continue;
+      }
+
+      if (contentType === "audio_asset_pointer") {
+        hasVoiceAudio = true;
+        continue;
+      }
+
+      if (
+        contentType === "real_time_user_audio_video_asset_pointer" &&
+        part.audio_asset_pointer
+      ) {
+        hasVoiceAudio = true;
+      }
+    }
+
+    return {
+      text_fallback: textParts.join("\n"),
+      is_voice_transcription: isVoiceTranscription,
+      voice_direction: voiceDirection,
+      has_voice_audio: hasVoiceAudio,
+    };
+  }
+
+  /**
+   * Annotate a raw message with lightweight CGO-derived metadata under `message.metadata.cgo`.
+   *
+   * @param {object} message - Conversation message object.
+   * @returns {object} The same message instance.
+   */
+  function annotateMessageForCgo(message) {
+    if (!message || typeof message !== "object") return message;
+
+    const nextMeta = extractCgoMessageMeta(message);
+    const prevMeta =
+      message?.metadata?.cgo && typeof message.metadata.cgo === "object"
+        ? message.metadata.cgo
+        : null;
+
+    if (
+      !prevMeta &&
+      !nextMeta.text_fallback &&
+      !nextMeta.is_voice_transcription &&
+      !nextMeta.voice_direction &&
+      !nextMeta.has_voice_audio
+    ) {
+      return message;
+    }
+
+    const metadata =
+      message.metadata && typeof message.metadata === "object"
+        ? message.metadata
+        : {};
+
+    message.metadata = metadata;
+    message.metadata.cgo = {
+      ...(prevMeta || {}),
+      text_fallback: nextMeta.text_fallback,
+      is_voice_transcription: nextMeta.is_voice_transcription,
+      voice_direction: nextMeta.voice_direction,
+      has_voice_audio: nextMeta.has_voice_audio,
+    };
+
+    return message;
+  }
+
+  /**
+   * Annotate every cached message in a conversation payload with lightweight CGO metadata.
+   *
+   * @param {object} data - Conversation payload containing a `mapping`.
+   * @returns {object} The same conversation payload instance.
+   */
+  function annotateConversationForCgo(data) {
+    const mapping = getMapping(data);
+
+    for (const node of Object.values(mapping)) {
+      if (node?.message) {
+        annotateMessageForCgo(node.message);
+      }
+    }
+
+    return data;
+  }
+
+  /**
+   * Compute the combined character length of a conversation node's best-effort text content.
    *
    * @param {object} node - Conversation node object; expected shape may include `node.message.content.parts` as an array of parts.
-   * @returns {number} The number of characters in the concatenation of all string elements from `parts`, joined by newline; returns `0` if `parts` is missing or contains no string elements.
+   * @returns {number} The number of characters in the derived text fallback; returns `0` when no text is available.
    */
   function getTextLength(node) {
-    const parts = node?.message?.content?.parts;
-    if (!Array.isArray(parts)) return 0;
-    return parts.filter((v) => typeof v === "string").join("\n").length;
+    return getMessageTextFallback(node?.message).length;
   }
 
   /**
@@ -1022,16 +1162,16 @@
    *
    * @param {Object<string, any>} mapping - Conversation node mapping.
    * @param {string} messageId - Message node id.
-   * @returns {{id: string, role: string, createTime: number|null, text: string, renderText: string}|null} Minimal message payload.
+   * @returns {{id: string, role: string, createTime: number|null, text: string, renderText: string, isVoiceTranscription: boolean, voiceDirection: string, hasVoiceAudio: boolean}|null} Minimal message payload.
    */
   function buildInitialMessagePayload(mapping, messageId) {
     const message = mapping?.[messageId]?.message;
     if (!message || typeof message !== "object") return null;
 
-    const parts = Array.isArray(message?.content?.parts)
-      ? message.content.parts.filter((value) => typeof value === "string")
-      : [];
-    const text = parts.join("\n");
+    annotateMessageForCgo(message);
+
+    const text = getMessageTextFallback(message);
+    const cgoMeta = message?.metadata?.cgo || {};
 
     return {
       id: messageId,
@@ -1039,6 +1179,9 @@
       createTime: message?.create_time ?? null,
       text,
       renderText: text,
+      isVoiceTranscription: !!cgoMeta.is_voice_transcription,
+      voiceDirection: cgoMeta.voice_direction || "",
+      hasVoiceAudio: !!cgoMeta.has_voice_audio,
     };
   }
 
@@ -1632,6 +1775,7 @@
     const conversationId = data?.conversation_id;
     if (!conversationId) return;
 
+    annotateConversationForCgo(data);
     applyProjectNameToConversation(data);
 
     EXPORT_CACHE.set(conversationId, structuredClone(data));
@@ -1703,6 +1847,8 @@
    */
   function upsertMessageNode(cache, message, parentId) {
     if (!message?.id) return;
+
+    annotateMessageForCgo(message);
 
     if (!cache.mapping[message.id]) {
       cache.mapping[message.id] = {
@@ -1819,6 +1965,8 @@
         msg.metadata.token_count = op.v;
       }
     }
+
+    annotateMessageForCgo(msg);
 
     if (msg.end_turn) {
       postStreamNotify(msg);

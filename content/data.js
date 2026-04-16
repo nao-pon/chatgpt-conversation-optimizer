@@ -140,12 +140,36 @@
       return true;
     }
 
-    const text = parts
-      .filter((v) => typeof v === "string")
-      .join("")
-      .trim();
+    const cgoMeta = message?.metadata?.cgo || {};
+    if (cgoMeta.is_voice_transcription) {
+      return true;
+    }
+
+    const text = getMessageTextForExport(message).trim();
 
     return text.length > 0;
+  }
+
+  /**
+   * Resolve the best-effort message text used by export normalization.
+   *
+   * Prefers `message.metadata.cgo.text_fallback` when present so page-hook-derived
+   * transcription text can flow through export and lightweight viewer rendering.
+   *
+   * @param {Object} message - Raw conversation message.
+   * @returns {string} Best-effort export text.
+   */
+  function getMessageTextForExport(message) {
+    const cgoText = message?.metadata?.cgo?.text_fallback;
+    if (typeof cgoText === "string" && cgoText.length > 0) {
+      return cgoText;
+    }
+
+    const parts = Array.isArray(message?.content?.parts)
+      ? message.content.parts.filter((value) => typeof value === "string")
+      : [];
+
+    return parts.join("\n");
   }
 
   /**
@@ -905,11 +929,7 @@
       if (!msg || msg?.author?.role !== "assistant") return false;
       if (msg?.content?.content_type === "thoughts") return false;
 
-      const parts = Array.isArray(msg?.content?.parts)
-        ? msg.content.parts
-        : [];
-
-      return parts.some((v) => typeof v === "string" && v.trim());
+      return getMessageTextForExport(msg).trim().length > 0;
     }
 
     // 1) parent を再帰的に辿る
@@ -1260,11 +1280,8 @@
         continue;
       }
 
-      const parts = Array.isArray(msg?.content?.parts)
-        ? msg.content.parts.filter((v) => typeof v === "string")
-        : [];
-
-      let text = parts.join("\n");
+      const cgoMeta = msg?.metadata?.cgo || {};
+      let text = getMessageTextForExport(msg);
       text = applyContentReferencesToText(text, msg);
 
       if (
@@ -1290,6 +1307,9 @@
         renderText: text,
         visibleAttachments: [],
         visibleImages: [],
+        isVoiceTranscription: !!cgoMeta.is_voice_transcription,
+        voiceDirection: cgoMeta.voice_direction || "",
+        hasVoiceAudio: !!cgoMeta.has_voice_audio,
       };
 
       normalized.push(item);
@@ -1321,6 +1341,9 @@
         renderText: "",
         visibleAttachments: [],
         visibleImages: [],
+        isVoiceTranscription: !!mapping?.[entry.id]?.message?.metadata?.cgo?.is_voice_transcription,
+        voiceDirection: mapping?.[entry.id]?.message?.metadata?.cgo?.voice_direction || "",
+        hasVoiceAudio: !!mapping?.[entry.id]?.message?.metadata?.cgo?.has_voice_audio,
       });
     }
 

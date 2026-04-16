@@ -809,6 +809,31 @@
   };
 
   /**
+   * Get the inline SVG markup used for the voice-transcription badge icon.
+   * @returns {string} SVG markup string for the voice badge.
+   */
+  function getVoiceTranscriptionIconSvg() {
+    return `
+    <svg viewBox="0 0 24 24" aria-hidden="true" class="cgo-voice-badge-icon">
+      <path d="M12 4.75a2.75 2.75 0 0 0-2.75 2.75v4.9a2.75 2.75 0 0 0 5.5 0V7.5A2.75 2.75 0 0 0 12 4.75Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M7.75 11.9a4.25 4.25 0 0 0 8.5 0M12 16.15v3.1M9.35 19.25h5.3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`;
+  }
+
+  /**
+   * Render a small badge for voice-transcription messages.
+   *
+   * @param {Object} message - Export message.
+   * @returns {string} HTML string for the badge or an empty string.
+   */
+  function renderVoiceTranscriptionBadge(message) {
+    if (!message?.isVoiceTranscription) return "";
+
+    const label = CGO.escapeHtml(CGO.t("voice_transcription_label"));
+    return `<span class="cgo-voice-badge" role="img" aria-label="${label}" title="${label}">${getVoiceTranscriptionIconSvg()}</span>`;
+  }
+
+  /**
    * Build the complete exported conversation HTML document.
    *
    * @param {string} title - Document title.
@@ -869,6 +894,7 @@
     <div class="message-header">
       <div class="message-header-main">
         <span class="message-role">${CGO.escapeHtml(roleLabel)}</span>
+        ${renderVoiceTranscriptionBadge(message)}
         <span class="message-date">${CGO.escapeHtml(dateText)}</span>
       </div>
       <div class="message-header-actions">
@@ -1180,6 +1206,9 @@
             createTime: message.createTime,
             text: message.text || "",
             renderText: typeof message.renderText === "string" ? message.renderText : (message.text || ""),
+            isVoiceTranscription: !!message.isVoiceTranscription,
+            voiceDirection: message.voiceDirection || "",
+            hasVoiceAudio: !!message.hasVoiceAudio,
             thoughts: message.thoughts || [],
             images: message.images || [],
             visibleImages: message.visibleImages || [],

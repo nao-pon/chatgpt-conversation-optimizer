@@ -5,6 +5,9 @@
   "role_assistant": {
     "message": "アシスタント"
   },
+  "voice_transcription_label": {
+    "message": "音声書き起こし"
+  },
   "attachments": {
     "message": "添付ファイル"
   },

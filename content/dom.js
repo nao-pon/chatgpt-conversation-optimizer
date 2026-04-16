@@ -207,9 +207,34 @@
   }
 
   /**
+   * Build the inline voice-transcription badge HTML for the lightweight initial message card.
+   *
+   * @param {{isVoiceTranscription?: boolean}} message - Initial message payload.
+   * @returns {string} Badge HTML string or an empty string.
+   */
+  function getVoiceTranscriptionBadgeHtml(message) {
+    if (!message?.isVoiceTranscription) return "";
+
+    const label = escapeHtml(CGO.t("voice_transcription_label"));
+    return `
+      <span
+        class="cgo-dom-voice-badge"
+        role="img"
+        aria-label="${label}"
+        title="${label}"
+        style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:999px;border:1px solid rgba(148,163,184,0.22);background:rgba(255,255,255,0.08);color:rgba(226,232,240,0.92);flex:0 0 auto;"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true" style="display:block;width:11px;height:11px;">
+          <path d="M12 4.75a2.75 2.75 0 0 0-2.75 2.75v4.9a2.75 2.75 0 0 0 5.5 0V7.5A2.75 2.75 0 0 0 12 4.75Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"></path>
+          <path d="M7.75 11.9a4.25 4.25 0 0 0 8.5 0M12 16.15v3.1M9.35 19.25h5.3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"></path>
+        </svg>
+      </span>`;
+  }
+
+  /**
    * Build a lightweight DOM card for the original first message kept outside the pruned data payload.
    *
-   * @param {{role?: string, text?: string, createTime?: number|null}} message - Initial message payload.
+   * @param {{role?: string, text?: string, createTime?: number|null, isVoiceTranscription?: boolean}} message - Initial message payload.
    * @returns {HTMLDivElement} Render-ready card element.
    */
   function createInitialMessageCard(message) {
@@ -217,6 +242,7 @@
     const roleLabel = role === "assistant" ? CGO.t("role_assistant") : CGO.t("role_user");
     const dateText = formatCreateTime(message?.createTime);
     const text = escapeHtml(String(message?.renderText || message?.text || ""));
+    const voiceBadge = getVoiceTranscriptionBadgeHtml(message);
 
     const card = document.createElement("div");
     card.id = "cgo-dom-initial-message";
@@ -224,6 +250,7 @@
     card.innerHTML = `
       <div class="cgo-dom-initial-message-header">
         <span class="cgo-dom-initial-message-role">${escapeHtml(roleLabel)}</span>
+        ${voiceBadge}
         <span class="cgo-dom-initial-message-date">${escapeHtml(dateText)}</span>
       </div>
       <div class="cgo-dom-initial-message-body">${text.replace(/\n/g, "<br>")}</div>

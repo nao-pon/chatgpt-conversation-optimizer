@@ -5,6 +5,9 @@
   "role_assistant": {
     "message": "Assistant"
   },
+  "voice_transcription_label": {
+    "message": "Voice transcription"
+  },
   "attachments": {
     "message": "Attachments"
   },

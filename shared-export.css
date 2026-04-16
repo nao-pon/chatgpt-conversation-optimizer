@@ -96,6 +96,25 @@ body {
   white-space: nowrap;
 }
 
+.cgo-voice-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 999px;
+  background: rgba(20, 184, 166, 0.1);
+  color: #0f766e;
+}
+
+.cgo-voice-badge svg {
+  display: block;
+  width: 12px;
+  height: 12px;
+}
+
 .message-body {
   overflow-wrap: anywhere;
 }
@@ -685,6 +704,12 @@ code {
   .message.assistant {
     background: #052e16;
     border-color: #15803d;
+  }
+
+  .cgo-voice-badge {
+    border-color: rgba(153, 246, 228, 0.2);
+    background: rgba(45, 212, 191, 0.12);
+    color: #99f6e4;
   }
 
   .cgo-icon-btn {
