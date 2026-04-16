@@ -179,6 +179,9 @@
   "html_include_images_label": {
     "message": "HTMLダウンロードでイメージを埋め込む"
   },
+  "debug_logging_label": {
+    "message": "デバッグログを有効にする"
+  },
   "save_button": {
     "message": "保存"
   },

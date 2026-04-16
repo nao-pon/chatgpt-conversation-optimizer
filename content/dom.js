@@ -472,10 +472,12 @@
 
     if (data.type === "analysis") {
       CGO.updateExportButtonVisibility?.(true)
-      console.group("[CGO prune analysis]");
-      console.log("url:", data.url);
-      console.log("summary:", data.summary);
-      console.groupEnd();
+      if (CGO.CONFIG.debug) {
+        console.group("[CGO prune analysis]");
+        console.log("url:", data.url);
+        console.log("summary:", data.summary);
+        console.groupEnd();
+      }
       return;
     }
 

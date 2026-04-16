@@ -16,7 +16,7 @@
   const CONFIG = {
     turnCount: 40,
     enablePrune: true,
-    debug: true,
+    debug: false,
     rootNodeId: "client-created-root",
     targetPathFragment: "/backend-api/conversation/",
   };
@@ -130,6 +130,7 @@
       }
 
       CONFIG.autoAdjustEnabled = !!settings.autoAdjustEnabled;
+      CONFIG.debug = !!settings.debugEnabled;
 
       window.postMessage(
         {
@@ -141,6 +142,7 @@
           applied: {
             turnCount: CONFIG.turnCount,
             autoAdjustEnabled: CONFIG.autoAdjustEnabled,
+            debugEnabled: CONFIG.debug,
           },
         },
         "*"
@@ -160,9 +162,14 @@
         CONFIG.autoAdjustEnabled = settings.autoAdjustEnabled;
       }
 
+      if (typeof settings.debugEnabled === "boolean") {
+        CONFIG.debug = settings.debugEnabled;
+      }
+
       log("page-hook settings updated", {
         turnCount: CONFIG.turnCount,
         autoAdjustEnabled: CONFIG.autoAdjustEnabled,
+        debugEnabled: CONFIG.debug,
       });
     }
   });

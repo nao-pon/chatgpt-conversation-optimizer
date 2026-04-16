@@ -269,6 +269,11 @@
           <span>${CGO.escapeHtml(CGO.t("html_include_images_label"))}</span>
         </label>
 
+        <label class="cgo-settings-row cgo-settings-check">
+          <input id="cgo-setting-debug-enabled" type="checkbox">
+          <span>${CGO.escapeHtml(CGO.t("debug_logging_label"))}</span>
+        </label>
+
         <div class="cgo-settings-actions">
           <button type="button" class="cgo-settings-save-btn">${CGO.escapeHtml(CGO.t("save_button"))}</button>
           <button type="button" class="cgo-settings-cancel-btn">${CGO.escapeHtml(CGO.t("cancel_button"))}</button>
@@ -279,6 +284,7 @@
     const autoAdjustInput = panel.querySelector("#cgo-setting-auto-adjust-enabled");
     const autoAdjustLabel = panel.querySelector("#cgo-setting-auto-adjust-label");
     const htmlImagesInput = panel.querySelector("#cgo-setting-html-include-images");
+    const debugEnabledInput = panel.querySelector("#cgo-setting-debug-enabled");
     const saveBtn = panel.querySelector(".cgo-settings-save-btn");
     const cancelBtn = panel.querySelector(".cgo-settings-cancel-btn");
 
@@ -331,6 +337,7 @@
       keepInput.value = String(CGO.SETTINGS.keepDomMessages ?? CGO.CONFIG.keepDomMessages ?? 40);
       autoAdjustInput.checked = !!CGO.SETTINGS.autoAdjustEnabled;
       htmlImagesInput.checked = CGO.SETTINGS.htmlDownloadIncludeImages !== false;
+      debugEnabledInput.checked = !!CGO.SETTINGS.debugEnabled;
       await updateAutoAdjustLabel();
     }
 
@@ -344,6 +351,7 @@
           keepDomMessages: keepInput.value,
           autoAdjustEnabled: nextAutoAdjustEnabled,
           htmlDownloadIncludeImages: htmlImagesInput.checked,
+          debugEnabled: debugEnabledInput.checked,
         });
 
         if (wasAutoAdjustEnabled && !nextAutoAdjustEnabled && conversationId) {

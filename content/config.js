@@ -27,7 +27,7 @@
   CGO.CONFIG = {
     keepDomMessages: 40,
     domTrimDelayMs: 5000,
-    debug: true,
+    debug: false,
   };
 
   CGO.STATE = {
@@ -56,6 +56,7 @@
     keepDomMessages: 40,
     autoAdjustEnabled: true,
     htmlDownloadIncludeImages: true,
+    debugEnabled: false,
   };
 
   CGO.SETTINGS = {
@@ -74,7 +75,7 @@
    * Normalize persisted settings into a complete configuration object with defaults applied.
    *
    * @param {Object} [input={}] - Partial settings loaded from storage or UI input.
-   * @returns {{keepDomMessages: number, autoAdjustEnabled: boolean, htmlDownloadIncludeImages: boolean}} Sanitized settings.
+   * @returns {{keepDomMessages: number, autoAdjustEnabled: boolean, htmlDownloadIncludeImages: boolean, debugEnabled: boolean}} Sanitized settings.
    */
   function normalizeSettings(input = {}) {
     return {
@@ -86,6 +87,9 @@
       ),
       htmlDownloadIncludeImages:
         input.htmlDownloadIncludeImages !== false,
+      debugEnabled: Boolean(
+        input.debugEnabled ?? CGO.DEFAULT_SETTINGS.debugEnabled
+      ),
     };
   }
 
@@ -101,8 +105,10 @@
     CGO.SETTINGS.keepDomMessages = normalized.keepDomMessages;
     CGO.SETTINGS.autoAdjustEnabled = normalized.autoAdjustEnabled;
     CGO.SETTINGS.htmlDownloadIncludeImages = normalized.htmlDownloadIncludeImages;
+    CGO.SETTINGS.debugEnabled = normalized.debugEnabled;
 
     CGO.CONFIG.keepDomMessages = normalized.keepDomMessages;
+    CGO.CONFIG.debug = normalized.debugEnabled;
 
     return CGO.SETTINGS;
   }
@@ -129,6 +135,7 @@
         keepDomMessages: next.keepDomMessages,
         autoAdjustEnabled: next.autoAdjustEnabled,
         htmlDownloadIncludeImages: next.htmlDownloadIncludeImages,
+        debugEnabled: next.debugEnabled,
       },
     });
 
@@ -293,6 +300,7 @@
         settings: {
           keepDomMessages: keepDomMessages,
           autoAdjustEnabled: CGO.SETTINGS.autoAdjustEnabled,
+          debugEnabled: CGO.SETTINGS.debugEnabled,
         },
       },
       "*"
@@ -492,7 +500,7 @@
        * Send the current extension settings to the page hook via window.postMessage.
        *
        * The posted message has shape { source: "CGO_CONTENT", type: "CGO_INIT_SETTINGS", version, settings }
-       * where `settings` contains `keepDomMessages` and `autoAdjustEnabled`.
+       * where `settings` contains `keepDomMessages`, `autoAdjustEnabled`, and `debugEnabled`.
        */
       function sendInit() {
         window.postMessage(
@@ -503,6 +511,7 @@
             settings: {
               keepDomMessages: CGO.SETTINGS.keepDomMessages,
               autoAdjustEnabled: CGO.SETTINGS.autoAdjustEnabled,
+              debugEnabled: CGO.SETTINGS.debugEnabled,
             },
           },
           "*"
