@@ -1,3 +1,6 @@
+# pwsh -File .\scripts\package.ps1 -Target store -Clean
+# pwsh -File .\scripts\package.ps1 -Target release -Clean
+
 param(
     [ValidateSet("store", "release")]
     [string]$Target = "store",
