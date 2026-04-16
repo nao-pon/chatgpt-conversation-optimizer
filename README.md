@@ -1,6 +1,8 @@
 # Conversation Optimizer for ChatGPT
 
-[![Version](https://img.shields.io/badge/version-2.0.0-blue)](../../releases)
+[![Available in the Chrome Web Store](https://developer.chrome.com/static/docs/webstore/branding/image/tbyBjqi7Zu733AAKA5n4.png)](https://chromewebstore.google.com/detail/conversation-optimizer-fo/chmaignkjgccgmacmlfgnmbfbnnfmnpl)
+[![Chrome Web Store Version](https://img.shields.io/chrome-web-store/v/chmaignkjgccgmacmlfgnmbfbnnfmnpl?logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/conversation-optimizer-fo/chmaignkjgccgmacmlfgnmbfbnnfmnpl)
+[![Version](https://img.shields.io/badge/version-2.0.1-blue)](../../releases)
 [![Manifest](https://img.shields.io/badge/manifest-v3-green)](./manifest.json)
 [![Platform](https://img.shields.io/badge/platform-Chrome-orange)](https://www.google.com/chrome/)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey)](./LICENSE)
