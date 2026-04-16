@@ -121,8 +121,9 @@
       return true;
     }
 
-    const parts = message?.content?.parts;
-    if (!Array.isArray(parts)) return false;
+    const parts = Array.isArray(message?.content?.parts)
+      ? message.content.parts
+      : [];
 
     // Check for asset pointers (attachments/uploads)
     const hasAssetPointer = parts.some((part) => {
