@@ -566,6 +566,35 @@
     );
   }
 
+  function postConversationHeadMeta(conversationId, meta) {
+    window.postMessage(
+      {
+        source: "cgo-prune-runtime",
+        type: "conversationHeadMeta",
+        conversationId,
+        meta: meta || {},
+      },
+      "*"
+    );
+  }
+
+  function buildConversationHeadMeta(data) {
+    const mapping = getMapping(data);
+    const currentNode = getCurrentNode(data);
+
+    if (!currentNode || !mapping[currentNode]) return null;
+
+    const chain = buildLinearChain(mapping, currentNode);
+    const firstConversationId = getFirstConversationNodeId(mapping, chain);
+
+    if (!firstConversationId) return null;
+
+    return {
+      firstMessageId: firstConversationId,
+      firstMessage: buildInitialMessagePayload(mapping, firstConversationId),
+    };
+  }
+
   /**
    * Builds a linear chain of node ids from the root to the specified current node by following parent links.
    *
@@ -1050,12 +1079,7 @@
 
     data.__cgoInitialPruneMeta = {
       omittedCount,
-      firstMessageId: firstConversationId,
       firstKeptId: firstKeptConversationId,
-      firstMessage:
-        omittedCount > 0
-          ? buildInitialMessagePayload(mapping, firstConversationId)
-          : null,
     };
 
     const prunedMapping = {};
@@ -2224,6 +2248,11 @@
     if (summary?.error) {
       log("skip prune: summary error", summary.error);
       return orgResponse;
+    }
+
+    const headMeta = buildConversationHeadMeta(data);
+    if (headMeta) {
+      postConversationHeadMeta(data.conversation_id || "", headMeta);
     }
 
     if (shouldSkipPrune(summary)) {

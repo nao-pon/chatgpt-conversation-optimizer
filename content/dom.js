@@ -110,7 +110,11 @@
     CGO.STATE.initialPruneNoticeRetryCount = 0;
 
     if (clearMeta) {
-      CGO.STATE.initialPruneMeta = null;
+      CGO.STATE.conversationHeadMeta = null;
+      CGO.STATE.domTrimState = {
+        omittedCount: 0,
+        firstKeptId: "",
+      };
       removeTrimNotice();
       removeInitialMessageCard();
     }
@@ -234,12 +238,14 @@
    * @returns {"done"|"retry"} `retry` when the DOM is not ready yet.
    */
   function ensureInitialPruneNotice() {
-    const meta = CGO.STATE.initialPruneMeta;
-    if (!meta || Number(meta.omittedCount || 0) <= 0) return "done";
+    const head = CGO.STATE.conversationHeadMeta;
+    const trim = CGO.STATE.domTrimState;
+
+    if (!trim || Number(trim.omittedCount || 0) <= 0) return "done";
     if (document.getElementById("cgo-dom-trim-notice")) return "done";
 
     const conversationId = CGO.getConversationIdFromLocation?.() || "";
-    if (meta.conversationId && conversationId && meta.conversationId !== conversationId) {
+    if (head?.conversationId && conversationId && head.conversationId !== conversationId) {
       return "done";
     }
 
@@ -248,21 +254,21 @@
 
     const preservedHead = nodes[0] || null;
     const preservedTailFirst =
-      nodes.find((node) => getTurnMessageId(node) === meta.firstKeptId) ||
+      nodes.find((node) => getTurnMessageId(node) === trim.firstKeptId) ||
       nodes[0] ||
       null;
 
     if (!preservedHead || !preservedTailFirst) return "retry";
 
-    if (meta.firstMessage && !document.getElementById("cgo-dom-initial-message")) {
-      const initialCard = createInitialMessageCard(meta.firstMessage);
+    if (head?.firstMessage && !document.getElementById("cgo-dom-initial-message")) {
+      const initialCard = createInitialMessageCard(head.firstMessage);
       preservedHead.insertAdjacentElement("beforebegin", initialCard);
     }
 
     const anchor = document.getElementById("cgo-dom-initial-message") || preservedHead;
     if (!anchor || !anchor.isConnected) return "retry";
 
-    const notice = createTrimNotice(Number(meta.omittedCount || 0), meta.firstKeptId || "");
+    const notice = createTrimNotice(Number(trim.omittedCount || 0), trim.firstKeptId || "");
     anchor.insertAdjacentElement("afterend", notice);
     return "done";
   }
@@ -273,14 +279,15 @@
    * @param {number} [delayMs=INITIAL_PRUNE_NOTICE_DEBOUNCE_MS] - Delay before the next attempt.
    */
   function scheduleInitialPruneNotice(delayMs = INITIAL_PRUNE_NOTICE_DEBOUNCE_MS) {
-    const meta = CGO.STATE.initialPruneMeta;
-    if (!meta || Number(meta.omittedCount || 0) <= 0) {
+    const trim = CGO.STATE.domTrimState;
+
+    if (!trim || Number(trim.omittedCount || 0) <= 0) {
       resetInitialPruneNoticeState();
       return;
     }
 
     if (document.getElementById("cgo-dom-trim-notice")) {
-      resetInitialPruneNoticeState();
+      resetInitialPruneNoticeState(false);
       return;
     }
 
@@ -315,37 +322,45 @@
    * Remove the oldest visible turns once the DOM exceeds the configured retention budget.
    */
   function trimOldDomTurns() {
-    removeTrimNotice();
-    removeInitialMessageCard();
-
     const nodes = getTurnBlocks();
-    const removeCount = nodes.length - CGO.CONFIG.keepDomMessages;
-
+    const removeCount = nodes.length - CGO.SETTINGS.keepDomMessages;
     if (removeCount <= 0 || !nodes.length) return;
 
-    const root = getConversationRoot();
-    const keepTailCount = Math.max(0, CGO.CONFIG.keepDomMessages - 1);
-    const tailStartIndex = Math.max(1, nodes.length - keepTailCount);
-    const removedNodes = nodes.slice(1, tailStartIndex);
-    const preservedHead = nodes[0] || null;
+    const keepCount = Math.max(1, CGO.SETTINGS.keepDomMessages);
+    const tailStartIndex = Math.max(0, nodes.length - keepCount);
+    const removedNodes = nodes.slice(0, tailStartIndex);
     const preservedTailFirst = nodes[tailStartIndex] || null;
-    const anchorMessageId = getTurnMessageId(preservedTailFirst);
 
     for (const node of removedNodes) {
       node.remove();
     }
 
-    if (root && preservedHead && preservedTailFirst && removedNodes.length > 0) {
-      const notice = createTrimNotice(removedNodes.length, anchorMessageId);
-      preservedHead.insertAdjacentElement("afterend", notice);
+    if (preservedTailFirst && removedNodes.length > 0) {
+      CGO.STATE.domTrimState.omittedCount =
+        Number(CGO.STATE.domTrimState?.omittedCount || 0) + removedNodes.length;
+
+      CGO.STATE.domTrimState.firstKeptId =
+        getTurnMessageId(preservedTailFirst) || CGO.STATE.domTrimState.firstKeptId || "";
+
+      const notice = document.getElementById("cgo-dom-trim-notice");
+      const textEl = notice?.querySelector(".cgo-dom-trim-notice-text");
+
+      if (textEl) {
+        textEl.textContent = CGO.t(
+          "dom_trim_omitted_notice",
+          String(CGO.STATE.domTrimState.omittedCount)
+        );
+      } else {
+        scheduleInitialPruneNotice(0);
+      }
     }
 
     CGO.log("DOM trim", {
       total: nodes.length,
       removed: removedNodes.length,
-      kept: CGO.CONFIG.keepDomMessages,
-      preservedFirst: !!preservedHead,
-      preservedTailFirstMessageId: anchorMessageId || null,
+      kept: CGO.SETTINGS.keepDomMessages,
+      omittedCount: CGO.STATE.domTrimState.omittedCount,
+      firstKeptId: CGO.STATE.domTrimState.firstKeptId,
     });
   }
 
@@ -435,18 +450,23 @@
       return;
     }
 
+    if (data.type === "conversationHeadMeta") {
+      CGO.STATE.conversationHeadMeta = {
+        conversationId: data.conversationId || "",
+        firstMessageId: data.meta?.firstMessageId || "",
+        firstMessage: data.meta?.firstMessage || null,
+      };
+      return;
+    }
+
     if (data.type === "initialPruneMeta") {
       resetInitialPruneNoticeState();
-      CGO.STATE.initialPruneMeta = {
-        conversationId: data.conversationId || "",
+      CGO.STATE.domTrimState = {
         omittedCount: Number(data.meta?.omittedCount || 0),
-        firstMessageId: data.meta?.firstMessageId || "",
         firstKeptId: data.meta?.firstKeptId || "",
-        firstMessage: data.meta?.firstMessage || null,
       };
 
       scheduleInitialPruneNotice(0);
-
       return;
     }
 
@@ -461,12 +481,7 @@
 
     if (data.type === "streamNotify") {
       CGO.updateExportButtonVisibility?.(true);
-
       scheduleDomTrim();
-
-      if (CGO.STATE.initialPruneMeta && !document.getElementById("cgo-dom-trim-notice")) {
-        scheduleInitialPruneNotice();
-      }
       CGO.log("[streamNotify]", data.message);
       return;
     }

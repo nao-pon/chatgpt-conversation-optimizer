@@ -33,10 +33,17 @@
   CGO.STATE = {
     domTrimTimer: null,
     domTrimTicket: 0,
-    initialPruneMeta: null,
+
+    conversationHeadMeta: null,
+    domTrimState: {
+      omittedCount: 0,
+      firstKeptId: "",
+    },
+
     initialPruneNoticeScheduled: false,
     initialPruneNoticeTimer: null,
     initialPruneNoticeRetryCount: 0,
+
     projectGuide: {
       conversationId: "",
       projectName: "",
