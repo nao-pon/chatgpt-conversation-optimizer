@@ -312,10 +312,12 @@
     message.metadata = metadata;
     message.metadata.cgo = {
       ...(prevMeta || {}),
-      text_fallback: nextMeta.text_fallback,
-      is_voice_transcription: nextMeta.is_voice_transcription,
-      voice_direction: nextMeta.voice_direction,
-      has_voice_audio: nextMeta.has_voice_audio,
+      text_fallback: nextMeta.text_fallback || prevMeta?.text_fallback || "",
+      is_voice_transcription:
+        !!nextMeta.is_voice_transcription || !!prevMeta?.is_voice_transcription,
+      voice_direction: nextMeta.voice_direction || prevMeta?.voice_direction || "",
+      has_voice_audio:
+        !!nextMeta.has_voice_audio || !!prevMeta?.has_voice_audio,
     };
 
     return message;
