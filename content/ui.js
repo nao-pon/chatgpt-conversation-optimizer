@@ -98,15 +98,62 @@
   }
 
   /**
+   * Register an export-related button so lock updates can target it directly.
+   *
+   * @param {string} key - Stable button key.
+   * @param {HTMLButtonElement} button - Button element to track.
+   * @returns {HTMLButtonElement} The same button for call-site convenience.
+   */
+  function registerExportButton(key, button) {
+    if (!key || !button) return button;
+    CGO.DOMS ??= { exportButtons: {} };
+    CGO.DOMS.exportButtons ??= {};
+    CGO.DOMS.exportButtons[key] = button;
+    return button;
+  }
+
+  /**
+   * Remove a tracked export button when its owning UI is unmounted.
+   *
+   * @param {string} key - Registered button key.
+   * @param {HTMLButtonElement|null} [button=null] - Optional button identity check.
+   */
+  function unregisterExportButton(key, button = null) {
+    const buttons = CGO.DOMS?.exportButtons;
+    if (!buttons || !key) return;
+    if (!button || buttons[key] === button) {
+      delete buttons[key];
+    }
+  }
+
+  /**
+   * Return currently tracked export buttons, dropping stale disconnected entries.
+   *
+   * @returns {HTMLButtonElement[]} Connected export buttons.
+   */
+  function getRegisteredExportButtons() {
+    const buttons = CGO.DOMS?.exportButtons;
+    if (!buttons) return [];
+
+    for (const [key, button] of Object.entries(buttons)) {
+      if (!button || !button.isConnected) {
+        delete buttons[key];
+      }
+    }
+
+    return Object.values(buttons);
+  }
+
+  /**
    * Create the lightweight-view export button.
    *
    * @returns {HTMLButtonElement} Configured toolbar button.
    */
   function createOpenNewTabButton() {
-    const button = buildToolbarButton({
+    const button = registerExportButton("lightweight", buildToolbarButton({
       title: CGO.t("open_new_tab_button"),
       iconKind: "light",
-    });
+    }));
     button.dataset.cgoExportKind = "lightweight";
 
     button.addEventListener("click", async () => {
@@ -130,10 +177,10 @@
    * @returns {HTMLButtonElement} Configured toolbar button.
    */
   function createExportButton() {
-    const button = buildToolbarButton({
+    const button = registerExportButton("html", buildToolbarButton({
       title: CGO.t("download_button"),
       iconKind: "html",
-    });
+    }));
     button.dataset.cgoExportKind = "html";
 
     button.addEventListener("click", async () => {
@@ -157,10 +204,10 @@
    * @returns {HTMLButtonElement} Configured toolbar button.
    */
   function createZipExportButton() {
-    const button = buildToolbarButton({
+    const button = registerExportButton("zip", buildToolbarButton({
       title: CGO.t("zip_download_button"),
       iconKind: "zip",
-    });
+    }));
     button.dataset.cgoExportKind = "zip";
 
     button.addEventListener("click", async () => {
@@ -1078,7 +1125,7 @@
       CGO.STATE.voiceExportGuard.reason = locked ? reason : "";
     }
 
-    const buttons = Array.from(document.querySelectorAll(".cgo-btn[data-cgo-export-kind]"));
+    const buttons = getRegisteredExportButtons();
     for (const button of buttons) {
       if (locked) {
         applyVoiceExportGuardToButton(button);
@@ -1149,10 +1196,13 @@
   CGO.injectExportButtonIntoHeader = injectExportButtonIntoHeader;
   CGO.injectExportButtonStyle = injectExportButtonStyle;
   CGO.onDomReady = onDomReady;
+  CGO.applyVoiceExportGuardToButton = applyVoiceExportGuardToButton;
   CGO.refreshExportButtonsLockState = refreshExportButtonsLockState;
+  CGO.registerExportButton = registerExportButton;
   CGO.setExportButtonsLocked = setExportButtonsLocked;
   CGO.setToolbarButtonText = setToolbarButtonText;
   CGO.startHeaderButtonObserver = startHeaderButtonObserver;
+  CGO.unregisterExportButton = unregisterExportButton;
   CGO.updateExportButtonVisibility = updateExportButtonVisibility;
   CGO.updateProjectGuideAlertVisibility = updateProjectGuideAlertVisibility;
   CGO.updateProjectGuideVisibility = updateProjectGuideVisibility;

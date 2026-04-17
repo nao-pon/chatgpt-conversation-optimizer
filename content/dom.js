@@ -86,7 +86,10 @@
    * Remove the custom omission notice inserted between the preserved first turn and newer turns.
    */
   function removeTrimNotice() {
-    document.getElementById("cgo-dom-trim-notice")?.remove();
+    const notice = document.getElementById("cgo-dom-trim-notice");
+    const button = notice?.querySelector("[data-cgo-export-button-key='trim_notice_lightweight']") || null;
+    CGO.unregisterExportButton?.("trim_notice_lightweight", button);
+    notice?.remove();
   }
 
   /**
@@ -159,6 +162,13 @@
     button.type = "button";
     button.className = "cgo-dom-trim-notice-link";
     button.textContent = CGO.t("dom_trim_open_lightweight_link");
+    button.title = button.textContent;
+    button.setAttribute("aria-label", button.textContent);
+    button.dataset.baseTitle = button.textContent;
+    button.dataset.cgoExportKind = "lightweight";
+    button.dataset.cgoExportButtonKey = "trim_notice_lightweight";
+    CGO.registerExportButton?.("trim_notice_lightweight", button);
+    CGO.applyVoiceExportGuardToButton?.(button);
 
     button.addEventListener("click", async () => {
       if (typeof CGO.exportCurrentConversationAsHtml !== "function") return;
@@ -170,6 +180,8 @@
         CGO.log("[warn] lightweight viewer from trim notice failed", String(error));
       } finally {
         button.disabled = false;
+        button.setAttribute("aria-disabled", "false");
+        CGO.applyVoiceExportGuardToButton?.(button);
       }
     });
 

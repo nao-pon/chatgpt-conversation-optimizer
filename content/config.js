@@ -61,6 +61,10 @@
     },
   };
 
+  CGO.DOMS = {
+    exportButtons: {},
+  };
+
   CGO.DEFAULT_SETTINGS = {
     keepDomMessages: 40,
     autoAdjustEnabled: true,
