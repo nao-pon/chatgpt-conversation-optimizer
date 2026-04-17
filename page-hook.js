@@ -133,8 +133,9 @@
   function resolveVoiceSessionConversationId(url = "") {
     return (
       getConversationIdFromVoiceUrl(url) ||
-      LAST_STREAM_CONVERSATION_ID ||
       VOICE_SESSION_STATE.conversationId ||
+      getConversationIdFromLocation() ||
+      LAST_STREAM_CONVERSATION_ID ||
       ""
     );
   }
@@ -719,6 +720,24 @@
 
     return null;
   }
+
+  /**
+   * Extract the current conversation id from the active ChatGPT URL.
+   *
+   * @returns {?string} Conversation id or "" when the page is not a conversation route.
+   */
+  function getConversationIdFromLocation() {
+    const path = location.pathname;
+
+    // 通常会話 /c/<id> だが、WEB:... のような ":" 含みも許可
+    let m = path.match(/\/c\/([^/?#]+)/i);
+    if (m) return m[1];
+
+    // プロジェクト内チャット
+    m = path.match(/\/g\/[^/]+\/c\/([a-z0-9-]+)/i);
+    return m ? m[1] : "";
+  }
+
 
   // =========================================================
   // ANALYZE / PRUNE HELPERS
@@ -2438,7 +2457,7 @@
       isStreamingConversationRequest(url) || isEventStreamResponse(orgResponse);
     const isVoiceBootstrapRequest = isRealtimeVoiceBootstrapRequest(url);
 
-    if (isVoiceBootstrapRequest) {
+    if (isVoiceBootstrapRequest && orgResponse.ok) {
       updateVoiceSessionState("active", resolveVoiceSessionConversationId(url), {
         source: "fetch",
         url,
