@@ -32,6 +32,11 @@
   const WS_STREAM_PARSER_STATE = new Map();
 
   let LAST_STREAM_CONVERSATION_ID = null;
+  const VOICE_SESSION_STATE = {
+    state: "idle",
+    conversationId: "",
+    lastChangedAt: 0,
+  };
 
   // =========================================================
   // LOGGING / POST HELPERS
@@ -81,6 +86,140 @@
       },
       "*"
     );
+  }
+
+  /**
+   * Notify the content layer about the current voice-session lock state.
+   * @param {string} conversationId - Best-effort conversation identifier, or an empty string when unknown.
+   * @param {"active"|"syncing"|"idle"} state - Voice-session state used by the content layer to lock export actions.
+   * @param {object} [extra={}] - Optional metadata forwarded alongside the state update.
+   */
+  function postVoiceSessionState(conversationId, state, extra = {}) {
+    window.postMessage(
+      {
+        ...extra,
+        source: "cgo-prune-runtime",
+        type: "voiceSessionState",
+        conversationId,
+        state,
+      },
+      "*"
+    );
+  }
+
+  /**
+   * Extract a conversation identifier from a realtime voice request URL when one is present.
+   * @param {string} url - Request URL associated with the voice session.
+   * @returns {string} Conversation identifier, or an empty string when not present.
+   */
+  function getConversationIdFromVoiceUrl(url) {
+    try {
+      const parsed = new URL(url, location.origin);
+      return (
+        parsed.searchParams.get("conversation_id") ||
+        parsed.searchParams.get("conversationId") ||
+        ""
+      );
+    } catch {
+      return "";
+    }
+  }
+
+  /**
+   * Resolve the best available conversation id for voice-session state updates.
+   * @param {string} [url=""] - Optional URL that may contain a conversation id query parameter.
+   * @returns {string} Resolved conversation identifier, or an empty string when still unknown.
+   */
+  function resolveVoiceSessionConversationId(url = "") {
+    return (
+      getConversationIdFromVoiceUrl(url) ||
+      VOICE_SESSION_STATE.conversationId ||
+      getConversationIdFromLocation() ||
+      LAST_STREAM_CONVERSATION_ID ||
+      ""
+    );
+  }
+
+  /**
+   * Update the deduplicated voice-session state and notify the content layer only when it changes.
+   * @param {"active"|"syncing"|"idle"} nextState - Next voice-session state.
+   * @param {string} [conversationId=""] - Best-effort conversation identifier.
+   * @param {object} [extra={}] - Optional metadata forwarded with the notification.
+   */
+  function updateVoiceSessionState(nextState, conversationId = "", extra = {}) {
+    const resolvedConversationId =
+      conversationId ||
+      resolveVoiceSessionConversationId(extra?.url || "");
+
+    if (
+      VOICE_SESSION_STATE.state === nextState &&
+      VOICE_SESSION_STATE.conversationId === resolvedConversationId
+    ) {
+      return;
+    }
+
+    VOICE_SESSION_STATE.state = nextState;
+    VOICE_SESSION_STATE.conversationId = resolvedConversationId;
+    VOICE_SESSION_STATE.lastChangedAt = Date.now();
+
+    postVoiceSessionState(resolvedConversationId, nextState, extra);
+  }
+
+  /**
+   * Determine whether a fetch URL is the lightweight voice-session bootstrap request.
+   * @param {string} url - Fetch request URL.
+   * @returns {boolean} `true` when the URL matches the realtime voice bootstrap endpoint.
+   */
+  function isRealtimeVoiceBootstrapRequest(url) {
+    try {
+      return new URL(url, location.origin).pathname === "/realtime/vp";
+    } catch {
+      return /\/realtime\/vp(?:[/?#]|$)/.test(String(url || ""));
+    }
+  }
+
+  /**
+   * Attach minimal lifecycle listeners to a RTC data channel without inspecting message payloads.
+   * @param {RTCDataChannel|object} channel - Data channel instance to observe.
+   * @param {RTCPeerConnection|object} peerConnection - Peer connection associated with the channel.
+   * @returns {*} The same channel instance.
+   */
+  function attachVoiceSessionChannelStateHandlers(channel, peerConnection) {
+    if (!channel || channel.__CGO_VOICE_SESSION_STATE_ATTACHED__) return channel;
+
+    channel.__CGO_VOICE_SESSION_STATE_ATTACHED__ = true;
+    channel.addEventListener("open", () => {
+      if (VOICE_SESSION_STATE.state !== "active" && !peerConnection.__CGO_VOICE_SESSION_LIVE__) {
+        return;
+      }
+
+      peerConnection.__CGO_VOICE_SESSION_LIVE__ = true;
+      updateVoiceSessionState(
+        "active",
+        resolveVoiceSessionConversationId(),
+        {
+          source: "rtc-datachannel-open",
+          label: channel.label || "",
+        }
+      );
+    });
+
+    channel.addEventListener("close", () => {
+      if (!peerConnection.__CGO_VOICE_SESSION_LIVE__ && VOICE_SESSION_STATE.state !== "active") {
+        return;
+      }
+
+      updateVoiceSessionState(
+        "syncing",
+        resolveVoiceSessionConversationId(),
+        {
+          source: "rtc-datachannel-close",
+          label: channel.label || "",
+        }
+      );
+    });
+
+    return channel;
   }
 
   // =========================================================
@@ -198,15 +337,157 @@
   }
 
   /**
-   * Compute the combined character length of string parts in a conversation node's message content.
+   * Build a best-effort text fallback for a message from cached CGO metadata or raw string parts.
+   *
+   * @param {object} message - Conversation message object.
+   * @returns {string} Derived text fallback.
+   */
+  function getMessageTextFallback(message) {
+    const cgoText = message?.metadata?.cgo?.text_fallback;
+    if (typeof cgoText === "string" && cgoText.length > 0) {
+      return cgoText;
+    }
+
+    const parts = Array.isArray(message?.content?.parts)
+      ? message.content.parts.filter((value) => typeof value === "string")
+      : [];
+
+    return parts.join("\n");
+  }
+
+  /**
+   * Extract lightweight CGO-specific derived message metadata from raw content parts.
+   *
+   * @param {object} message - Conversation message object.
+   * @returns {{text_fallback: string, is_voice_transcription: boolean, voice_direction: string, has_voice_audio: boolean}} Derived metadata payload.
+   */
+  function extractCgoMessageMeta(message) {
+    const parts = Array.isArray(message?.content?.parts)
+      ? message.content.parts
+      : [];
+
+    const textParts = [];
+    let isVoiceTranscription = false;
+    let voiceDirection = "";
+    let hasVoiceAudio = false;
+
+    for (const part of parts) {
+      if (typeof part === "string") {
+        if (part.trim()) {
+          textParts.push(part);
+        }
+        continue;
+      }
+
+      if (!part || typeof part !== "object") continue;
+
+      const contentType = String(part.content_type || "");
+
+      if (contentType === "audio_transcription") {
+        isVoiceTranscription = true;
+
+        if (typeof part.text === "string" && part.text.trim()) {
+          textParts.push(part.text);
+        }
+
+        const direction = String(part.direction || "").toLowerCase();
+        if (!voiceDirection && (direction === "in" || direction === "out")) {
+          voiceDirection = direction;
+        }
+        continue;
+      }
+
+      if (contentType === "audio_asset_pointer") {
+        hasVoiceAudio = true;
+        continue;
+      }
+
+      if (
+        contentType === "real_time_user_audio_video_asset_pointer" &&
+        part.audio_asset_pointer
+      ) {
+        hasVoiceAudio = true;
+      }
+    }
+
+    return {
+      text_fallback: textParts.join("\n"),
+      is_voice_transcription: isVoiceTranscription,
+      voice_direction: voiceDirection,
+      has_voice_audio: hasVoiceAudio,
+    };
+  }
+
+  /**
+   * Annotate a raw message with lightweight CGO-derived metadata under `message.metadata.cgo`.
+   *
+   * @param {object} message - Conversation message object.
+   * @returns {object} The same message instance.
+   */
+  function annotateMessageForCgo(message) {
+    if (!message || typeof message !== "object") return message;
+
+    const nextMeta = extractCgoMessageMeta(message);
+    const prevMeta =
+      message?.metadata?.cgo && typeof message.metadata.cgo === "object"
+        ? message.metadata.cgo
+        : null;
+
+    if (
+      !prevMeta &&
+      !nextMeta.text_fallback &&
+      !nextMeta.is_voice_transcription &&
+      !nextMeta.voice_direction &&
+      !nextMeta.has_voice_audio
+    ) {
+      return message;
+    }
+
+    const metadata =
+      message.metadata && typeof message.metadata === "object"
+        ? message.metadata
+        : {};
+
+    message.metadata = metadata;
+    message.metadata.cgo = {
+      ...(prevMeta || {}),
+      text_fallback: nextMeta.text_fallback || prevMeta?.text_fallback || "",
+      is_voice_transcription:
+        !!nextMeta.is_voice_transcription || !!prevMeta?.is_voice_transcription,
+      voice_direction: nextMeta.voice_direction || prevMeta?.voice_direction || "",
+      has_voice_audio:
+        !!nextMeta.has_voice_audio || !!prevMeta?.has_voice_audio,
+    };
+
+    return message;
+  }
+
+  /**
+   * Annotate every cached message in a conversation payload with lightweight CGO metadata.
+   *
+   * @param {object} data - Conversation payload containing a `mapping`.
+   * @returns {object} The same conversation payload instance.
+   */
+  function annotateConversationForCgo(data) {
+    const mapping = getMapping(data);
+
+    for (const node of Object.values(mapping)) {
+      if (node?.message) {
+        annotateMessageForCgo(node.message);
+      }
+    }
+
+    return data;
+  }
+
+  /**
+   * Compute the combined character length of a conversation node's best-effort text content.
    *
    * @param {object} node - Conversation node object; expected shape may include `node.message.content.parts` as an array of parts.
-   * @returns {number} The number of characters in the concatenation of all string elements from `parts`, joined by newline; returns `0` if `parts` is missing or contains no string elements.
+   * @returns {number} The number of characters in the derived text fallback; returns `0` when no text is available.
    */
   function getTextLength(node) {
-    const parts = node?.message?.content?.parts;
-    if (!Array.isArray(parts)) return 0;
-    return parts.filter((v) => typeof v === "string").join("\n").length;
+    return getMessageTextFallback(node?.message).length;
   }
 
   /**
@@ -439,6 +720,24 @@
 
     return null;
   }
+
+  /**
+   * Extract the current conversation id from the active ChatGPT URL.
+   *
+   * @returns {?string} Conversation id or "" when the page is not a conversation route.
+   */
+  function getConversationIdFromLocation() {
+    const path = location.pathname;
+
+    // 通常会話 /c/<id> だが、WEB:... のような ":" 含みも許可
+    let m = path.match(/\/c\/([^/?#]+)/i);
+    if (m) return m[1];
+
+    // プロジェクト内チャット
+    m = path.match(/\/g\/[^/]+\/c\/([a-z0-9-]+)/i);
+    return m ? m[1] : "";
+  }
+
 
   // =========================================================
   // ANALYZE / PRUNE HELPERS
@@ -1022,16 +1321,16 @@
    *
    * @param {Object<string, any>} mapping - Conversation node mapping.
    * @param {string} messageId - Message node id.
-   * @returns {{id: string, role: string, createTime: number|null, text: string, renderText: string}|null} Minimal message payload.
+   * @returns {{id: string, role: string, createTime: number|null, text: string, renderText: string, isVoiceTranscription: boolean, voiceDirection: string, hasVoiceAudio: boolean}|null} Minimal message payload.
    */
   function buildInitialMessagePayload(mapping, messageId) {
     const message = mapping?.[messageId]?.message;
     if (!message || typeof message !== "object") return null;
 
-    const parts = Array.isArray(message?.content?.parts)
-      ? message.content.parts.filter((value) => typeof value === "string")
-      : [];
-    const text = parts.join("\n");
+    annotateMessageForCgo(message);
+
+    const text = getMessageTextFallback(message);
+    const cgoMeta = message?.metadata?.cgo || {};
 
     return {
       id: messageId,
@@ -1039,6 +1338,9 @@
       createTime: message?.create_time ?? null,
       text,
       renderText: text,
+      isVoiceTranscription: !!cgoMeta.is_voice_transcription,
+      voiceDirection: cgoMeta.voice_direction || "",
+      hasVoiceAudio: !!cgoMeta.has_voice_audio,
     };
   }
 
@@ -1632,6 +1934,7 @@
     const conversationId = data?.conversation_id;
     if (!conversationId) return;
 
+    annotateConversationForCgo(data);
     applyProjectNameToConversation(data);
 
     EXPORT_CACHE.set(conversationId, structuredClone(data));
@@ -1703,6 +2006,8 @@
    */
   function upsertMessageNode(cache, message, parentId) {
     if (!message?.id) return;
+
+    annotateMessageForCgo(message);
 
     if (!cache.mapping[message.id]) {
       cache.mapping[message.id] = {
@@ -1819,6 +2124,8 @@
         msg.metadata.token_count = op.v;
       }
     }
+
+    annotateMessageForCgo(msg);
 
     if (msg.end_turn) {
       postStreamNotify(msg);
@@ -2148,6 +2455,14 @@
     const orgResponse = response;
     const shouldObserveEventStream =
       isStreamingConversationRequest(url) || isEventStreamResponse(orgResponse);
+    const isVoiceBootstrapRequest = isRealtimeVoiceBootstrapRequest(url);
+
+    if (isVoiceBootstrapRequest && orgResponse.ok) {
+      updateVoiceSessionState("active", resolveVoiceSessionConversationId(url), {
+        source: "fetch",
+        url,
+      });
+    }
 
     if (
       !isFileDownloadRequest(url) &&
@@ -2298,10 +2613,102 @@
     return buildResponseFromJson(clonedResponse, pruned);
   }
 
+  /**
+   * Patch `RTCPeerConnection` with minimal lifecycle observers used only for voice-session lock state.
+   *
+   * The patch does not inspect RTC payloads. It only watches connection/datachannel open-close
+   * transitions so the content layer can keep export actions disabled while voice chat is active
+   * and leave them disabled in a `syncing` state until the normal conversation fetch completes.
+   */
+  function patchRTCPeerConnection() {
+    const NativeRTCPeerConnection = window.RTCPeerConnection;
+    if (!NativeRTCPeerConnection || window.__CGO_RTCPEERCONNECTION_PATCHED__) return;
+
+    window.__CGO_ORIGINAL_RTCPEERCONNECTION__ =
+      window.__CGO_ORIGINAL_RTCPEERCONNECTION__ || NativeRTCPeerConnection;
+
+    function CGORTCPeerConnection(...args) {
+      const pc = new NativeRTCPeerConnection(...args);
+
+      const markActive = (source, extra = {}) => {
+        if (VOICE_SESSION_STATE.state !== "active" && !pc.__CGO_VOICE_SESSION_LIVE__) {
+          return;
+        }
+
+        pc.__CGO_VOICE_SESSION_LIVE__ = true;
+        updateVoiceSessionState("active", resolveVoiceSessionConversationId(), {
+          source,
+          ...extra,
+        });
+      };
+
+      const markSyncing = (source, reason = "", extra = {}) => {
+        if (!pc.__CGO_VOICE_SESSION_LIVE__ && VOICE_SESSION_STATE.state !== "active") {
+          return;
+        }
+
+        updateVoiceSessionState("syncing", resolveVoiceSessionConversationId(), {
+          source,
+          reason,
+          ...extra,
+        });
+      };
+
+      try {
+        const originalCreateDataChannel = pc.createDataChannel;
+        if (typeof originalCreateDataChannel === "function") {
+          pc.createDataChannel = function (...channelArgs) {
+            const channel = originalCreateDataChannel.apply(this, channelArgs);
+            return attachVoiceSessionChannelStateHandlers(channel, pc);
+          };
+        }
+
+        pc.addEventListener("datachannel", (event) => {
+          attachVoiceSessionChannelStateHandlers(event?.channel, pc);
+        });
+
+        pc.addEventListener("connectionstatechange", () => {
+          const state = pc.connectionState || "";
+          if (state === "connecting" || state === "connected") {
+            markActive("rtc-connection-state", { rtcConnectionState: state });
+            return;
+          }
+
+          if (state === "closed" || state === "disconnected" || state === "failed") {
+            markSyncing("rtc-connection-state", state, { rtcConnectionState: state });
+          }
+        });
+
+        pc.addEventListener("iceconnectionstatechange", () => {
+          const state = pc.iceConnectionState || "";
+          if (state === "checking" || state === "connected" || state === "completed") {
+            markActive("rtc-ice-connection-state", { rtcIceConnectionState: state });
+            return;
+          }
+
+          if (state === "closed" || state === "disconnected" || state === "failed") {
+            markSyncing("rtc-ice-connection-state", state, { rtcIceConnectionState: state });
+          }
+        });
+      } catch (error) {
+        log("rtc peer connection state patch failed", String(error));
+      }
+
+      return pc;
+    }
+
+    CGORTCPeerConnection.prototype = NativeRTCPeerConnection.prototype;
+    Object.setPrototypeOf(CGORTCPeerConnection, NativeRTCPeerConnection);
+
+    window.RTCPeerConnection = CGORTCPeerConnection;
+    window.__CGO_RTCPEERCONNECTION_PATCHED__ = true;
+  }
+
   window.__CGO_MAIN_HOOK_API__ = {
     handleFetchResponse,
   };
 
+  patchRTCPeerConnection();
   patchWebSocket();
   patchEventSource();
 

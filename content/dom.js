@@ -4,6 +4,7 @@
   const INITIAL_PRUNE_NOTICE_DEBOUNCE_MS = 120;
   const INITIAL_PRUNE_NOTICE_RETRY_DELAY_MS = 180;
   const INITIAL_PRUNE_NOTICE_MAX_RETRIES = 10;
+  const VOICE_SYNC_RETRY_DELAYS_MS = [500, 1000, 2000, 4000];
 
   /**
    * Return the root element that contains the visible conversation turns.
@@ -85,7 +86,10 @@
    * Remove the custom omission notice inserted between the preserved first turn and newer turns.
    */
   function removeTrimNotice() {
-    document.getElementById("cgo-dom-trim-notice")?.remove();
+    const notice = document.getElementById("cgo-dom-trim-notice");
+    const button = notice?.querySelector("[data-cgo-export-button-key='trim_notice_lightweight']") || null;
+    CGO.unregisterExportButton?.("trim_notice_lightweight", button);
+    notice?.remove();
   }
 
   /**
@@ -158,6 +162,13 @@
     button.type = "button";
     button.className = "cgo-dom-trim-notice-link";
     button.textContent = CGO.t("dom_trim_open_lightweight_link");
+    button.title = button.textContent;
+    button.setAttribute("aria-label", button.textContent);
+    button.dataset.baseTitle = button.textContent;
+    button.dataset.cgoExportKind = "lightweight";
+    button.dataset.cgoExportButtonKey = "trim_notice_lightweight";
+    CGO.registerExportButton?.("trim_notice_lightweight", button);
+    CGO.applyVoiceExportGuardToButton?.(button);
 
     button.addEventListener("click", async () => {
       if (typeof CGO.exportCurrentConversationAsHtml !== "function") return;
@@ -169,6 +180,8 @@
         CGO.log("[warn] lightweight viewer from trim notice failed", String(error));
       } finally {
         button.disabled = false;
+        button.setAttribute("aria-disabled", "false");
+        CGO.applyVoiceExportGuardToButton?.(button);
       }
     });
 
@@ -207,9 +220,34 @@
   }
 
   /**
+   * Build the inline voice-transcription badge HTML for the lightweight initial message card.
+   *
+   * @param {{isVoiceTranscription?: boolean}} message - Initial message payload.
+   * @returns {string} Badge HTML string or an empty string.
+   */
+  function getVoiceTranscriptionBadgeHtml(message) {
+    if (!message?.isVoiceTranscription) return "";
+
+    const label = escapeHtml(CGO.t("voice_transcription_label"));
+    return `
+      <span
+        class="cgo-dom-voice-badge"
+        role="img"
+        aria-label="${label}"
+        title="${label}"
+        style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:999px;border:1px solid rgba(148,163,184,0.22);background:rgba(255,255,255,0.08);color:rgba(226,232,240,0.92);flex:0 0 auto;"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true" style="display:block;width:11px;height:11px;">
+          <path d="M12 4.75a2.75 2.75 0 0 0-2.75 2.75v4.9a2.75 2.75 0 0 0 5.5 0V7.5A2.75 2.75 0 0 0 12 4.75Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"></path>
+          <path d="M7.75 11.9a4.25 4.25 0 0 0 8.5 0M12 16.15v3.1M9.35 19.25h5.3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"></path>
+        </svg>
+      </span>`;
+  }
+
+  /**
    * Build a lightweight DOM card for the original first message kept outside the pruned data payload.
    *
-   * @param {{role?: string, text?: string, createTime?: number|null}} message - Initial message payload.
+   * @param {{role?: string, text?: string, createTime?: number|null, isVoiceTranscription?: boolean}} message - Initial message payload.
    * @returns {HTMLDivElement} Render-ready card element.
    */
   function createInitialMessageCard(message) {
@@ -217,6 +255,7 @@
     const roleLabel = role === "assistant" ? CGO.t("role_assistant") : CGO.t("role_user");
     const dateText = formatCreateTime(message?.createTime);
     const text = escapeHtml(String(message?.renderText || message?.text || ""));
+    const voiceBadge = getVoiceTranscriptionBadgeHtml(message);
 
     const card = document.createElement("div");
     card.id = "cgo-dom-initial-message";
@@ -224,6 +263,7 @@
     card.innerHTML = `
       <div class="cgo-dom-initial-message-header">
         <span class="cgo-dom-initial-message-role">${escapeHtml(roleLabel)}</span>
+        ${voiceBadge}
         <span class="cgo-dom-initial-message-date">${escapeHtml(dateText)}</span>
       </div>
       <div class="cgo-dom-initial-message-body">${text.replace(/\n/g, "<br>")}</div>
@@ -403,11 +443,221 @@
   }
 
   /**
+   * Clear any pending retry timer used by the voice export guard.
+   */
+  function clearVoiceSyncRetryTimer() {
+    const guard = CGO.STATE.voiceExportGuard;
+    if (guard?.syncRetryTimer) {
+      clearTimeout(guard.syncRetryTimer);
+    }
+    guard.syncRetryTimer = null;
+  }
+
+  /**
+   * Return the most useful conversation id for the voice export guard, preferring the current route.
+   *
+   * @param {string} [conversationId=""] - Optional conversation id from a runtime event.
+   * @returns {string} Resolved conversation id, or an empty string when unavailable.
+   */
+  function resolveVoiceGuardConversationId(conversationId = "") {
+    return (
+      CGO.getConversationIdFromLocation?.() ||
+      conversationId ||
+      CGO.STATE.voiceExportGuard?.conversationId ||
+      ""
+    );
+  }
+
+  /**
+   * Check whether a cached conversation payload is valid enough to unlock export after voice sync.
+   *
+   * @param {*} data - Cached conversation candidate.
+   * @returns {boolean} `true` when the cache looks usable for export.
+   */
+  function isValidExportCache(data) {
+    return !!(
+      data &&
+      typeof data === "object" &&
+      data.mapping &&
+      typeof data.mapping === "object" &&
+      Object.keys(data.mapping).length > 0
+    );
+  }
+
+  /**
+   * Move the voice export guard into a new state and apply the matching button lock UI.
+   *
+   * @param {"normal"|"voice_active"|"voice_syncing"} state - Next guard state.
+   * @param {string} [conversationId=""] - Best-effort conversation id associated with the state.
+   * @param {string} [reason=""] - Optional user-facing lock reason.
+   */
+  function setVoiceExportGuardState(state, conversationId = "", reason = "") {
+    const guard = CGO.STATE.voiceExportGuard;
+    const resolvedConversationId =
+      state === "normal"
+        ? ""
+        : resolveVoiceGuardConversationId(conversationId);
+    const resolvedReason =
+      reason ||
+      (state === "voice_active"
+        ? CGO.t("voice_export_guard_active")
+        : state === "voice_syncing"
+          ? CGO.t("voice_export_guard_syncing")
+          : "");
+
+    if (
+      guard.state === state &&
+      guard.conversationId === resolvedConversationId &&
+      guard.reason === resolvedReason
+    ) {
+      CGO.setExportButtonsLocked?.(state !== "normal", resolvedReason);
+      return;
+    }
+
+    if (state === "normal") {
+      clearVoiceSyncRetryTimer();
+      guard.syncRetryCount = 0;
+      guard.syncCheckInFlight = false;
+    }
+
+    guard.state = state;
+    guard.conversationId = resolvedConversationId;
+    guard.reason = resolvedReason;
+    guard.lastChangedAt = Date.now();
+
+    CGO.setExportButtonsLocked?.(state !== "normal", resolvedReason);
+  }
+
+  /**
+   * Decide whether a sync-complete notification should trigger an export-cache unlock check.
+   *
+   * @param {string} [conversationId=""] - Conversation id inferred from the incoming runtime message.
+   * @returns {boolean} `true` when the notification matches the guarded conversation.
+   */
+  function shouldTryUnlockForConversation(conversationId = "") {
+    const guard = CGO.STATE.voiceExportGuard;
+    if (guard.state !== "voice_syncing") return false;
+
+    const currentConversationId = CGO.getConversationIdFromLocation?.() || "";
+    const targetConversationId =
+      conversationId ||
+      guard.conversationId ||
+      currentConversationId;
+
+    if (!targetConversationId) return false;
+    if (guard.conversationId && guard.conversationId !== targetConversationId) return false;
+    if (currentConversationId && currentConversationId !== targetConversationId) return false;
+    return true;
+  }
+
+  /**
+   * Retry export-cache validation after voice chat closes until the normal conversation sync becomes available.
+   *
+   * @param {string} [conversationId=""] - Conversation id to validate against the page cache.
+   * @param {number} [delayMs=0] - Delay before the next cache lookup.
+   */
+  function scheduleVoiceSyncCheck(conversationId = "", delayMs = 0) {
+    const guard = CGO.STATE.voiceExportGuard;
+    if (guard.state !== "voice_syncing") return;
+
+    clearVoiceSyncRetryTimer();
+    guard.syncRetryTimer = setTimeout(() => {
+      guard.syncRetryTimer = null;
+      void tryUnlockExportAfterVoiceSync(conversationId);
+    }, Math.max(0, Number(delayMs) || 0));
+  }
+
+  /**
+   * Attempt to unlock export after a voice session by verifying that a normal export cache is now available.
+   *
+   * @param {string} [conversationId=""] - Conversation id to fetch from the page cache.
+   * @returns {Promise<boolean>} `true` when export was unlocked.
+   */
+  async function tryUnlockExportAfterVoiceSync(conversationId = "") {
+    const guard = CGO.STATE.voiceExportGuard;
+    if (guard.state !== "voice_syncing" || guard.syncCheckInFlight) return false;
+
+    const targetConversationId = resolveVoiceGuardConversationId(conversationId);
+    if (!targetConversationId) return false;
+
+    guard.syncCheckInFlight = true;
+    try {
+      const cached = await CGO.getConversationFromCache?.(targetConversationId);
+      if (isValidExportCache(cached)) {
+        setVoiceExportGuardState("normal", targetConversationId, "");
+        return true;
+      }
+    } catch (error) {
+      CGO.log("[voiceExportGuard] cache check failed", String(error));
+    } finally {
+      guard.syncCheckInFlight = false;
+    }
+
+    const retryIndex = Number(guard.syncRetryCount || 0);
+    const retryDelay = VOICE_SYNC_RETRY_DELAYS_MS[retryIndex] ?? 0;
+    guard.syncRetryCount = retryIndex + 1;
+
+    if (retryDelay > 0) {
+      scheduleVoiceSyncCheck(targetConversationId, retryDelay);
+    } else {
+      const lockReason = CGO.t("voice_export_guard_still_syncing");
+      CGO.setExportButtonsLocked?.(true, lockReason);
+      guard.reason = lockReason;
+    }
+
+    return false;
+  }
+
+  /**
+   * Reset or preserve the voice export guard when the active conversation route changes.
+   *
+   * @param {string} [conversationId=""] - New route conversation id.
+   */
+  function handleConversationRouteChanged(conversationId = "") {
+    const guard = CGO.STATE.voiceExportGuard;
+    const nextConversationId = conversationId || CGO.getConversationIdFromLocation?.() || "";
+
+    if (
+      guard.state !== "normal" &&
+      guard.conversationId &&
+      nextConversationId &&
+      guard.conversationId === nextConversationId
+    ) {
+      CGO.setExportButtonsLocked?.(true, guard.reason || "");
+      return;
+    }
+
+    setVoiceExportGuardState("normal", "", "");
+  }
+
+  /**
    * Handle messages emitted by the injected page runtime and update extension UI state.
    *
    * @param {Object} data - Runtime payload posted on `window`.
    */
   function handleRuntimeMessage(data) {
+    if (data.type === "voiceSessionState") {
+      const conversationId = resolveVoiceGuardConversationId(data.conversationId || "");
+
+      if (data.state === "active") {
+        setVoiceExportGuardState("voice_active", conversationId, CGO.t("voice_export_guard_active"));
+        return;
+      }
+
+      if (data.state === "syncing") {
+        setVoiceExportGuardState("voice_syncing", conversationId, CGO.t("voice_export_guard_syncing"));
+        if (conversationId) {
+          scheduleVoiceSyncCheck(conversationId, 10000);
+        }
+        return;
+      }
+
+      if (data.state === "idle") {
+        // Reserved for future voice-session handling; intentionally no-op for now.
+        return;
+      }
+    }
+
     if (data.type === "autoAdjustResult") {
       const conversationId = data.conversationId || CGO.getConversationIdFromLocation?.() || "";
       const projectName = data.projectName || "";
@@ -447,6 +697,10 @@
       void CGO.updateProjectGuideVisibility?.();
       void CGO.updateProjectGuideAlertVisibility?.();
 
+      if (shouldTryUnlockForConversation(conversationId)) {
+        scheduleVoiceSyncCheck(conversationId, 0);
+      }
+
       return;
     }
 
@@ -471,12 +725,20 @@
     }
 
     if (data.type === "analysis") {
-      CGO.updateExportButtonVisibility?.(true)
+      CGO.updateExportButtonVisibility?.(true);
       if (CGO.CONFIG.debug) {
         console.group("[CGO prune analysis]");
         console.log("url:", data.url);
         console.log("summary:", data.summary);
         console.groupEnd();
+      }
+
+      const conversationId =
+        data.summary?.conversationId ||
+        CGO.getConversationIdFromLocation?.() ||
+        "";
+      if (shouldTryUnlockForConversation(conversationId)) {
+        scheduleVoiceSyncCheck(conversationId, 0);
       }
       return;
     }
@@ -514,5 +776,6 @@
 
   CGO.observeWindowMessages = observeWindowMessages;
   CGO.ensureInitialPruneNotice = ensureInitialPruneNotice;
+  CGO.handleConversationRouteChanged = handleConversationRouteChanged;
   CGO.resetInitialPruneNoticeState = resetInitialPruneNoticeState;
 })();

@@ -59,6 +59,7 @@
     button.title = title;
     button.setAttribute("aria-label", title);
     button.dataset.iconKind = iconKind;
+    button.dataset.baseTitle = title;
 
     const iconWrap = document.createElement("span");
     iconWrap.className = "cgo-btn-icon";
@@ -97,15 +98,63 @@
   }
 
   /**
+   * Register an export-related button so lock updates can target it directly.
+   *
+   * @param {string} key - Stable button key.
+   * @param {HTMLButtonElement} button - Button element to track.
+   * @returns {HTMLButtonElement} The same button for call-site convenience.
+   */
+  function registerExportButton(key, button) {
+    if (!key || !button) return button;
+    CGO.DOMS ??= { exportButtons: {} };
+    CGO.DOMS.exportButtons ??= {};
+    CGO.DOMS.exportButtons[key] = button;
+    return button;
+  }
+
+  /**
+   * Remove a tracked export button when its owning UI is unmounted.
+   *
+   * @param {string} key - Registered button key.
+   * @param {HTMLButtonElement|null} [button=null] - Optional button identity check.
+   */
+  function unregisterExportButton(key, button = null) {
+    const buttons = CGO.DOMS?.exportButtons;
+    if (!buttons || !key) return;
+    if (!button || buttons[key] === button) {
+      delete buttons[key];
+    }
+  }
+
+  /**
+   * Return currently tracked export buttons, dropping stale disconnected entries.
+   *
+   * @returns {HTMLButtonElement[]} Connected export buttons.
+   */
+  function getRegisteredExportButtons() {
+    const buttons = CGO.DOMS?.exportButtons;
+    if (!buttons) return [];
+
+    for (const [key, button] of Object.entries(buttons)) {
+      if (!button || !button.isConnected) {
+        delete buttons[key];
+      }
+    }
+
+    return Object.values(buttons);
+  }
+
+  /**
    * Create the lightweight-view export button.
    *
    * @returns {HTMLButtonElement} Configured toolbar button.
    */
   function createOpenNewTabButton() {
-    const button = buildToolbarButton({
+    const button = registerExportButton("lightweight", buildToolbarButton({
       title: CGO.t("open_new_tab_button"),
       iconKind: "light",
-    });
+    }));
+    button.dataset.cgoExportKind = "lightweight";
 
     button.addEventListener("click", async () => {
       try {
@@ -128,10 +177,11 @@
    * @returns {HTMLButtonElement} Configured toolbar button.
    */
   function createExportButton() {
-    const button = buildToolbarButton({
+    const button = registerExportButton("html", buildToolbarButton({
       title: CGO.t("download_button"),
       iconKind: "html",
-    });
+    }));
+    button.dataset.cgoExportKind = "html";
 
     button.addEventListener("click", async () => {
       try {
@@ -154,10 +204,11 @@
    * @returns {HTMLButtonElement} Configured toolbar button.
    */
   function createZipExportButton() {
-    const button = buildToolbarButton({
+    const button = registerExportButton("zip", buildToolbarButton({
       title: CGO.t("zip_download_button"),
       iconKind: "zip",
-    });
+    }));
+    button.dataset.cgoExportKind = "zip";
 
     button.addEventListener("click", async () => {
       try {
@@ -668,6 +719,7 @@
     );
 
     headerActions.prepend(toolbarBase);
+    CGO.refreshExportButtonsLockState?.();
     ensureSettingsPanel();
     void CGO.updateProjectGuideAlertVisibility?.();
   }
@@ -713,8 +765,25 @@
     color: #ffffff;
   }
 
+  .cgo-btn:disabled,
+  .cgo-btn.cgo-btn-disabled {
+    opacity: 0.52;
+    cursor: not-allowed;
+  }
+
+  .cgo-btn:disabled:hover,
+  .cgo-btn.cgo-btn-disabled:hover {
+    background: transparent;
+    color: #d8d8d8;
+  }
+
   .cgo-btn:active {
     transform: scale(0.95);
+  }
+
+  .cgo-btn:disabled:active,
+  .cgo-btn.cgo-btn-disabled:active {
+    transform: none;
   }
   .cgo-settings-panel {
     position: absolute;
@@ -1004,6 +1073,78 @@
       button.classList.remove("cgo-btn-disabled");
       CGO.setToolbarButtonText(button, CGO.t("export_retry"));
     }
+
+    applyVoiceExportGuardToButton(button);
+  }
+
+  /**
+   * Apply the current voice-export guard lock state to a single export button.
+   *
+   * @param {HTMLButtonElement} button - Export-related toolbar button.
+   */
+  function applyVoiceExportGuardToButton(button) {
+    if (!button || !button.dataset.cgoExportKind) return;
+
+    const guard = CGO.STATE?.voiceExportGuard || null;
+    const locked =
+      guard?.state === "voice_active" ||
+      guard?.state === "voice_syncing";
+    const baseTitle = button.dataset.baseTitle || button.title || "";
+
+    if (!locked) {
+      button.title = baseTitle;
+      button.setAttribute("aria-label", baseTitle);
+      button.dataset.cgoVoiceLocked = "0";
+      return;
+    }
+
+    const reason =
+      guard?.reason ||
+      (guard?.state === "voice_active"
+        ? "Voice chat in progress"
+        : "Finalizing voice chat...");
+
+    button.disabled = true;
+    button.setAttribute("aria-disabled", "true");
+    button.classList.add("cgo-btn-disabled");
+    button.title = reason;
+    button.setAttribute("aria-label", reason);
+    button.dataset.cgoVoiceLocked = "1";
+    button.dataset.cgoVoiceLockReason = reason;
+    CGO.setToolbarButtonText(button, "");
+  }
+
+  /**
+   * Lock or unlock all export-related toolbar buttons according to the voice guard state.
+   *
+   * @param {boolean} locked - Whether export actions should remain disabled.
+   * @param {string} [reason=""] - Optional tooltip reason shown while locked.
+   */
+  function setExportButtonsLocked(locked, reason = "") {
+    if (CGO.STATE?.voiceExportGuard) {
+      CGO.STATE.voiceExportGuard.reason = locked ? reason : "";
+    }
+
+    const buttons = getRegisteredExportButtons();
+    for (const button of buttons) {
+      if (locked) {
+        applyVoiceExportGuardToButton(button);
+      } else {
+        setExportButtonState(button, "idle");
+      }
+    }
+  }
+
+  /**
+   * Re-apply the current voice-export lock state to any toolbar buttons currently mounted in the DOM.
+   */
+  function refreshExportButtonsLockState() {
+    const guard = CGO.STATE?.voiceExportGuard || null;
+    const locked =
+      guard?.state === "voice_active" ||
+      guard?.state === "voice_syncing";
+
+    setExportButtonsLocked(locked, guard?.reason || "");
   }
 
   /**
@@ -1055,8 +1196,13 @@
   CGO.injectExportButtonIntoHeader = injectExportButtonIntoHeader;
   CGO.injectExportButtonStyle = injectExportButtonStyle;
   CGO.onDomReady = onDomReady;
+  CGO.applyVoiceExportGuardToButton = applyVoiceExportGuardToButton;
+  CGO.refreshExportButtonsLockState = refreshExportButtonsLockState;
+  CGO.registerExportButton = registerExportButton;
+  CGO.setExportButtonsLocked = setExportButtonsLocked;
   CGO.setToolbarButtonText = setToolbarButtonText;
   CGO.startHeaderButtonObserver = startHeaderButtonObserver;
+  CGO.unregisterExportButton = unregisterExportButton;
   CGO.updateExportButtonVisibility = updateExportButtonVisibility;
   CGO.updateProjectGuideAlertVisibility = updateProjectGuideAlertVisibility;
   CGO.updateProjectGuideVisibility = updateProjectGuideVisibility;

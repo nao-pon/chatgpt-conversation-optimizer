@@ -5,6 +5,9 @@
   "role_assistant": {
     "message": "Assistant"
   },
+  "voice_transcription_label": {
+    "message": "Voice transcription"
+  },
   "attachments": {
     "message": "Attachments"
   },
@@ -58,6 +61,15 @@
   },
   "export_retry": {
     "message": "Retry"
+  },
+  "voice_export_guard_active": {
+    "message": "Voice chat in progress"
+  },
+  "voice_export_guard_syncing": {
+    "message": "Finalizing voice chat..."
+  },
+  "voice_export_guard_still_syncing": {
+    "message": "Voice chat is still syncing"
   },
   "zip_download_button": {
     "message": "Save as ZIP"

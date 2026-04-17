@@ -283,6 +283,31 @@
   }
 
   /**
+   * Provide the inline SVG markup used for the voice-transcription badge icon.
+   * @returns {string} SVG markup string for the voice badge.
+   */
+  function getVoiceTranscriptionIconSvg() {
+    return `
+<svg viewBox="0 0 24 24" aria-hidden="true" class="cgo-voice-badge-icon">
+  <path d="M12 4.75a2.75 2.75 0 0 0-2.75 2.75v4.9a2.75 2.75 0 0 0 5.5 0V7.5A2.75 2.75 0 0 0 12 4.75Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M7.75 11.9a4.25 4.25 0 0 0 8.5 0M12 16.15v3.1M9.35 19.25h5.3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`;
+  }
+
+  /**
+   * Render a small badge for voice-transcription messages.
+   *
+   * @param {Object} message - Normalized export message.
+   * @returns {string} HTML string for the badge or an empty string.
+   */
+  function renderVoiceTranscriptionBadge(message) {
+    if (!message?.isVoiceTranscription) return "";
+
+    const label = escapeHtml(t("voice_transcription_label"));
+    return `<span class="cgo-voice-badge" role="img" aria-label="${label}" title="${label}">${getVoiceTranscriptionIconSvg()}</span>`;
+  }
+
+  /**
    * Format a Unix timestamp (seconds) into a locale-aware date and time string.
    * @param {number|any} value - Seconds since the Unix epoch; if falsy the function returns an empty string.
    * @returns {string} The local date/time string for the given timestamp, or `""` if `value` is falsy or cannot be parsed.
@@ -542,6 +567,7 @@
   <div class="message-header">
     <div class="message-header-main">
       <span class="message-role">${escapeHtml(roleLabel)}</span>
+      ${renderVoiceTranscriptionBadge(message)}
       <span class="message-date">${escapeHtml(dateText)}</span>
     </div>
     <div class="message-header-actions">
