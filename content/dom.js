@@ -653,6 +653,7 @@
       }
 
       if (data.state === "idle") {
+        // Reserved for future voice-session handling; intentionally no-op for now.
         return;
       }
     }
