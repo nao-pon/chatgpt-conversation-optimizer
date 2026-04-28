@@ -2057,20 +2057,34 @@
    * Ensure the stream state exists for the specified conversation and topic.
    * @param {string} conversationId - Conversation identifier used to build the stream-state key.
    * @param {string} [topicId=""] - Optional topic identifier appended to the stream-state key.
-   * @returns {{currentPatchedMessageId: (string|null), pendingOps: Array}} The stream state object for the key. `currentPatchedMessageId` is the message id currently being patched or `null`; `pendingOps` is an array that will hold pending delta operations.
+   * @returns {{
+   *   currentPatchedMessageId: (string|null),
+   *   pendingOps: Array,
+   *   lastTextAppendOp: ({p: string, o: string}|null)
+   * }}
+   `currentPatchedMessageId` is the message id currently being patched or `null`; `pendingOps` is an array that will hold pending delta operations.
    */
   function ensureStreamState(conversationId, topicId = "") {
     const key = getStreamStateKey(conversationId, topicId);
     let streamState = STREAM_STATE.get(key);
+
     if (!streamState) {
       streamState = {
         currentPatchedMessageId: null,
         pendingOps: [],
+        lastTextAppendOp: null,
       };
       STREAM_STATE.set(key, streamState);
-    } else if (!Array.isArray(streamState.pendingOps)) {
+    }
+
+    if (!Array.isArray(streamState.pendingOps)) {
       streamState.pendingOps = [];
     }
+
+    if (!streamState.lastTextAppendOp) {
+      streamState.lastTextAppendOp = null;
+    }
+
     return streamState;
   }
 
@@ -2194,7 +2208,7 @@
    * @param {Object} [meta={}] - Optional metadata passed through to `onEvent`.
    */
   function processSseBlock(block, onEvent, streamParserState, meta = {}) {
-    const lines = block.split("\n").filter(Boolean);
+    const lines = block.split(/\r?\n/).filter(Boolean);
     if (!lines.length) return;
 
     let eventName = streamParserState.currentEventName || "message";
@@ -2219,6 +2233,31 @@
         // JSON 以外は無視
       }
     }
+  }
+
+  /**
+   * Build a compact summary of a stream payload shape for diagnostics.
+   * @param {any} payload - Parsed stream payload.
+   * @returns {object} Shape summary suitable for debug logs.
+   */
+  function summarizeStreamPayload(payload) {
+    if (!payload || typeof payload !== "object") {
+      return { kind: typeof payload };
+    }
+
+    return {
+      type: payload.type || "",
+      event: payload.event || "",
+      o: payload.o || "",
+      p: payload.p || "",
+      hasMessage: !!payload.message,
+      hasInputMessage: !!payload.input_message,
+      hasVMessage: !!payload.v?.message,
+      vIsArray: Array.isArray(payload.v),
+      opsIsArray: Array.isArray(payload.ops),
+      deltaIsArray: Array.isArray(payload.delta),
+      keys: Object.keys(payload).slice(0, 30),
+    };
   }
 
   /**
@@ -2249,10 +2288,32 @@
    * @param {string} [meta.topicId] - An explicit topic identifier to associate the event with a specific stream context.
    */
   function handleSseEvent(eventName, payload, meta = {}) {
+    function rememberLastTextAppendOp(streamState, ops) {
+      for (const op of ops || []) {
+        if (!op || typeof op !== "object") continue;
+
+        if (op.p === "/message/content/parts/0") {
+          if (op.o === "append") {
+            streamState.lastTextAppendOp = {
+              p: op.p,
+              o: "append",
+            };
+          } else if (op.o === "replace" || op.o === "add") {
+            // その後に {"v":"..."} が来た場合は続きとして append 扱い
+            streamState.lastTextAppendOp = {
+              p: op.p,
+              o: "append",
+            };
+          }
+        }
+      }
+    }
 
     function applyOrQueueDeltaOps(cache, streamState, ops) {
       const normalized = normalizeOps(ops);
       if (!normalized.length) return;
+
+      rememberLastTextAppendOp(streamState, normalized);
 
       if (streamState.currentPatchedMessageId) {
         applyDeltaOpsToMessage(cache, streamState.currentPatchedMessageId, normalized);
@@ -2272,13 +2333,26 @@
     const conversationId = detectedConversationId || LAST_STREAM_CONVERSATION_ID;
     if (!conversationId) return;
 
+    const payloadSummary = summarizeStreamPayload(payload);
     const topicId =
       meta.topicId ||
       getTopicIdFromPayload(payload) ||
       "";
 
+    const ignorableTypes = new Set([
+      "subscribe",
+      "unsubscribe",
+      "presence",
+      "stream-item",
+      "message_marker",
+      "server_ste_metadata",
+      "message_stream_complete",
+      "conversation-turn-complete",
+    ]);
+
     const cache = ensureConversationCache(conversationId);
     const streamState = ensureStreamState(conversationId, topicId);
+    let handledPayload = false;
 
     if (payload?.type === "resume_conversation_token") {
       const topicIdFromPayload = getTopicIdFromPayload(payload);
@@ -2340,10 +2414,33 @@
       return;
     }
 
+    if (
+      eventName === "delta" &&
+      payload &&
+      typeof payload === "object" &&
+      typeof payload.v === "string" &&
+      typeof payload.p !== "string" &&
+      typeof payload.o !== "string"
+    ) {
+      const last = streamState.lastTextAppendOp;
+
+      if (last?.p === "/message/content/parts/0") {
+        applyOrQueueDeltaOps(cache, streamState, [{
+          p: last.p,
+          o: last.o || "append",
+          v: payload.v,
+        }]);
+
+        return;
+      }
+      return;
+    }
+
     if (payload?.message?.id) {
       const msg = payload.message;
       const parentId = msg?.metadata?.parent_id || null;
       upsertMessageNode(cache, msg, parentId);
+      handledPayload = true;
 
       if (shouldUseAsPatchedTarget(msg)) {
         streamState.currentPatchedMessageId = msg.id;
@@ -2380,6 +2477,47 @@
     if (Array.isArray(payload?.delta)) {
       applyOrQueueDeltaOps(cache, streamState, payload.delta);
       return;
+    }
+
+    if (
+      eventName === "delta_encoding" ||
+      ignorableTypes.has(payload?.type) ||
+      ignorableTypes.has(payload?.command?.type) ||
+      ignorableTypes.has(payload?.reply?.type)
+    ) {
+      log("[sse:ignored]", {
+        eventName,
+        conversationId,
+        topicId,
+        type: payload?.type || "",
+        commandType: payload?.command?.type || "",
+        replyType: payload?.reply?.type || "",
+      });
+      return;
+    }
+
+    if (
+      payload &&
+      typeof payload === "object" &&
+      Object.keys(payload).length === 1 &&
+      typeof payload.conversation_id === "string"
+    ) {
+      log("[sse:ignored:conversation-id-only]", {
+        eventName,
+        conversationId,
+        topicId,
+      });
+      return;
+    }
+
+    if (!handledPayload) {
+      log("[sse:unhandled]", {
+        eventName,
+        conversationId,
+        topicId,
+        summary: payloadSummary,
+        // payloadPreview: getJsonPreview(payload, 1500),
+      });
     }
   }
 
