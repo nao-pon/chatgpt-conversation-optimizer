@@ -81,6 +81,9 @@ It may also work on other Chromium-based browsers, but compatibility can vary de
 4. Click **Load unpacked**.
 5. Select this project folder.
 
+> The `main` branch contains the latest development version.
+> Stable versions are available from GitHub Releases and the Chrome Web Store.
+
 ### After installation
 1. Open ChatGPT in Chrome.
 2. Start or open a conversation.
