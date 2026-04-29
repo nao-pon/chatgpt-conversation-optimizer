@@ -885,6 +885,78 @@
   }
 
   /**
+   * Determine whether a tool message contains generated image assets.
+   *
+   * @param {Object} message - Tool-role message payload.
+   * @returns {boolean} `true` when the tool message carries generated images.
+   */
+  function isGeneratedImageToolMessage(message) {
+    return (
+      message?.author?.role === "tool" &&
+      CGO.extractImageAssetsFromToolMessage(message).length > 0
+    );
+  }
+
+  /**
+   * Build a synthetic assistant item that proxies generated image tool output.
+   *
+   * @param {Object} parentMessage - Original parent message.
+   * @param {Object[]} toolMessages - Generated-image tool messages.
+   * @param {string} syntheticId - Stable synthetic message id.
+   * @returns {Object} Normalized export item.
+   */
+  function buildSyntheticGeneratedImageAssistantItem(parentMessage, toolMessages, syntheticId) {
+    const firstTool = toolMessages[0] || {};
+    const rawMessage = {
+      id: syntheticId,
+      author: {
+        role: "assistant",
+        name: null,
+        metadata: {},
+      },
+      create_time: firstTool.create_time ?? parentMessage?.create_time ?? null,
+      update_time: null,
+      content: {
+        content_type: "text",
+        parts: [""],
+      },
+      status: "finished_successfully",
+      end_turn: true,
+      weight: 1,
+      metadata: {
+        cgo_generated_image_proxy: true,
+        parent_id: parentMessage?.id || "",
+        turn_exchange_id:
+          firstTool?.metadata?.turn_exchange_id ||
+          parentMessage?.metadata?.turn_exchange_id ||
+          "",
+        image_gen_title: firstTool?.metadata?.image_gen_title || "",
+      },
+      recipient: "all",
+      channel: "final",
+    };
+
+    return {
+      id: syntheticId,
+      role: "assistant",
+      text: "",
+      thoughts: [],
+      hasThoughts: false,
+      createTime: rawMessage.create_time,
+      rawMessage,
+      toolMessages,
+      dataImages: collectImageAssetsFromMessage(rawMessage, toolMessages),
+      inlineImages: [],
+      renderText: "",
+      visibleAttachments: [],
+      visibleImages: [],
+      isVoiceTranscription: false,
+      voiceDirection: "",
+      hasVoiceAudio: false,
+    };
+  }
+
+  /**
    * Normalize exported thought items into a consistent array shape.
    *
    * @param {Object} message - Raw message payload.
@@ -1293,6 +1365,11 @@
       }
 
       const toolMessages = findChildToolMessages(mapping, msg.id);
+      const generatedImageToolMessages = toolMessages.filter(isGeneratedImageToolMessage);
+      const normalToolMessages = toolMessages.filter((toolMessage) => !isGeneratedImageToolMessage(toolMessage));
+      const itemToolMessages = msg.author?.role === "user"
+        ? normalToolMessages
+        : toolMessages;
 
       const item = {
         id: msg.id,
@@ -1302,8 +1379,8 @@
         hasThoughts: false,
         createTime: msg.create_time ?? null,
         rawMessage: msg,
-        toolMessages,
-        dataImages: collectImageAssetsFromMessage(msg, toolMessages),
+        toolMessages: itemToolMessages,
+        dataImages: collectImageAssetsFromMessage(msg, itemToolMessages),
         inlineImages: [],
         renderText: text,
         visibleAttachments: [],
@@ -1315,6 +1392,33 @@
 
       normalized.push(item);
       byId.set(item.id, item);
+
+      if (
+        msg.author?.role === "user" &&
+        generatedImageToolMessages.length > 0
+      ) {
+        CGO.log("[export] split generated image tool messages", {
+          parentId: msg.id,
+          parentRole: msg.author?.role,
+          generatedToolMessageIds: generatedImageToolMessages.map((toolMessage) => toolMessage.id),
+        });
+
+        let syntheticId = `${msg.id}:generated-image`;
+        let syntheticIndex = 1;
+        while (byId.has(syntheticId)) {
+          syntheticId = `${msg.id}:generated-image:${syntheticIndex}`;
+          syntheticIndex += 1;
+        }
+
+        const syntheticItem = buildSyntheticGeneratedImageAssistantItem(
+          msg,
+          generatedImageToolMessages,
+          syntheticId
+        );
+
+        normalized.push(syntheticItem);
+        byId.set(syntheticItem.id, syntheticItem);
+      }
     }
 
     for (const entry of pendingThoughts) {
