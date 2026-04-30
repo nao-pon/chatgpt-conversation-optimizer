@@ -579,9 +579,9 @@
   </div>
   <div class="message-body">
     ${renderMessageTextToHtml(sourceText)}
-    ${renderThoughts(message.thoughts || [], message.id)}
     ${renderImages(message.visibleImages || message.images || [])}
     ${renderAttachments(message.visibleAttachments || message.attachments || [])}
+    ${renderThoughts(message.thoughts || [], message.id)}
   </div>
 </section>`;
   }

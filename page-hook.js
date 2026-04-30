@@ -1071,6 +1071,105 @@
   }
 
   /**
+   * Build a compact diagnostic summary for a mapping node.
+   * @param {Object} mapping - Conversation node map.
+   * @param {string} id - Node id to summarize.
+   * @returns {Object} Debug-friendly node summary.
+   */
+  function summarizeMessageNode(mapping, id) {
+    const node = id ? mapping?.[id] : null;
+    const msg = node?.message || null;
+
+    return {
+      id: id || "",
+      exists: !!node,
+      parent: node?.parent || "",
+      role: msg?.author?.role || "",
+      contentType: msg?.content?.content_type || "",
+      textLength: getMessageTextFallback(msg).length,
+      childCount: Array.isArray(node?.children) ? node.children.length : 0,
+      hidden: !!msg?.metadata?.is_visually_hidden_from_conversation,
+      command: msg?.metadata?.command || "",
+    };
+  }
+
+  /**
+   * Build head/tail diagnostics for the parent chain ending at `currentNode`.
+   * @param {Object} mapping - Conversation node map.
+   * @param {string} currentNode - Current chain tail id.
+   * @param {number} [limit=12] - Maximum node summaries to include for head/tail.
+   * @returns {Object} Chain diagnostic payload.
+   */
+  function buildChainDiagnostics(mapping, currentNode, limit = 12) {
+    const seen = new Set();
+    const chain = [];
+    let cursor = currentNode || "";
+
+    while (cursor && mapping?.[cursor] && !seen.has(cursor)) {
+      seen.add(cursor);
+      chain.push(cursor);
+      cursor = mapping[cursor]?.parent || "";
+    }
+
+    const forward = chain.slice().reverse();
+
+    return {
+      currentNode: currentNode || "",
+      chainLength: chain.length,
+      reachedRoot: forward[0] === CONFIG.rootNodeId,
+      head: forward.slice(0, limit).map((nodeId) => summarizeMessageNode(mapping, nodeId)),
+      tail: forward.slice(-limit).map((nodeId) => summarizeMessageNode(mapping, nodeId)),
+    };
+  }
+
+  /**
+   * Check whether a message contains generated image asset pointer parts.
+   * @param {Object} message - Conversation message payload.
+   * @returns {boolean} `true` when image asset pointers are present.
+   */
+  function hasGeneratedImageAssetPointer(message) {
+    const parts = Array.isArray(message?.content?.parts)
+      ? message.content.parts
+      : [];
+
+    return parts.some((part) =>
+      part &&
+      typeof part === "object" &&
+      part.content_type === "image_asset_pointer" &&
+      typeof part.asset_pointer === "string" &&
+      part.asset_pointer
+    );
+  }
+
+  /**
+   * Collect generated-image tool nodes with parent summaries for merge diagnostics.
+   * @param {Object} mapping - Conversation node map.
+   * @returns {Object[]} Generated-image tool diagnostics.
+   */
+  function collectGeneratedImageToolDiagnostics(mapping) {
+    const out = [];
+
+    for (const [id, node] of Object.entries(mapping || {})) {
+      const msg = node?.message;
+      if (msg?.author?.role !== "tool") continue;
+      if (!hasGeneratedImageAssetPointer(msg)) continue;
+
+      out.push({
+        id,
+        parent: node?.parent || "",
+        role: msg?.author?.role || "",
+        contentType: msg?.content?.content_type || "",
+        assetCount: Array.isArray(msg?.content?.parts)
+          ? msg.content.parts.filter((part) => part?.content_type === "image_asset_pointer").length
+          : 0,
+        parentSummary: summarizeMessageNode(mapping, node?.parent || ""),
+      });
+    }
+
+    return out;
+  }
+
+  /**
    * Ensure the stream conversation's root is attached to the tail of the full conversation so the stream becomes reachable from the full tail.
    * Modifies `merged.mapping` by reparenting the stream's root node to the full tail when appropriate.
    * @param {Object} full - Full conversation object; expected to contain `current_node` and a `mapping` of nodes.
@@ -1182,6 +1281,20 @@
     } else {
       merged.current_node = fullCurrent || streamCurrent || null;
     }
+
+    log("[mergeCaches:summary]", {
+      fullCurrent: full?.current_node || "",
+      streamCurrent: stream?.current_node || "",
+      mergedCurrent: merged?.current_node || "",
+      streamConnectedToFull:
+        !!streamCurrent &&
+        !!fullCurrent &&
+        isNodeConnectedToTarget(merged.mapping, streamCurrent, fullCurrent),
+      fullChainLength: buildChainDiagnostics(full.mapping || {}, full.current_node).chainLength,
+      streamChainLength: buildChainDiagnostics(stream.mapping || {}, stream.current_node).chainLength,
+      mergedChainLength: buildChainDiagnostics(merged.mapping || {}, merged.current_node).chainLength,
+      generatedImageToolCount: collectGeneratedImageToolDiagnostics(merged.mapping).length,
+    });
 
     return merged;
   }
@@ -1594,6 +1707,32 @@
   }
 
   /**
+   * Extract parsed JSON payloads from an SSE text block.
+   * @param {string} value - SSE-like text containing `data:` lines.
+   * @returns {Object[]} Parsed JSON data payloads.
+   */
+  function parseJsonPayloadsFromSseText(value) {
+    if (typeof value !== "string" || !value.includes("data:")) return [];
+
+    const out = [];
+    const lines = value.split(/\r?\n/);
+
+    for (const line of lines) {
+      if (!line.startsWith("data:")) continue;
+
+      const raw = line.slice(5).trim();
+      if (!raw || raw === "[DONE]") continue;
+
+      const parsed = parseJsonStringSafe(raw);
+      if (parsed && typeof parsed === "object") {
+        out.push(parsed);
+      }
+    }
+
+    return out;
+  }
+
+  /**
    * Traverse a value breadth-first and invoke `visitor` for each discovered object payload.
    *
    * This function performs a guarded, breadth-first walk of the provided value, parsing JSON strings when encountered and enqueuing their parsed results. It protects against cycles and common stream wrapper shapes by inspecting known nested fields (e.g., `data`, `payload`, `message`, `v`, `ops`, `delta`, `items`, `messages`, etc.) as well as all object property values.
@@ -1784,6 +1923,13 @@
     window.__CGO_ORIGINAL_WEBSOCKET__ =
       window.__CGO_ORIGINAL_WEBSOCKET__ || NativeWebSocket;
 
+    /**
+     * Wrapped `WebSocket` constructor that mirrors frames into the stream parser.
+     *
+     * @param {string|URL} url - WebSocket endpoint.
+     * @param {string|string[]} [protocols] - Optional negotiated subprotocols.
+     * @returns {WebSocket} Wrapped native WebSocket instance.
+     */
     function CGOWebSocket(url, protocols) {
       const ws =
         protocols === undefined
@@ -1967,13 +2113,479 @@
   }
 
   /**
-   * Identify messages that should be used as the patched assistant target.
+   * Extract a nested payload object from a wrapped `"message"` event payload.
+   *
+   * @param {Object} payload - Wrapper payload emitted by transport hooks.
+   * @returns {Object|null} Nested payload object or `null`.
+   */
+  function getNestedPayloadFromMessageWrapper(payload) {
+    if (!payload || typeof payload !== "object") return null;
+    if (payload.type !== "message") return null;
+
+    const candidates = [
+      payload.payload,
+      payload.data,
+      payload.body,
+      payload.message,
+    ];
+
+    for (const candidate of candidates) {
+      if (!candidate) continue;
+
+      if (typeof candidate === "string") {
+        const parsed = parseJsonStringSafe(candidate);
+        if (parsed && typeof parsed === "object") return parsed;
+      }
+
+      if (typeof candidate === "object") {
+        return candidate;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Add object payload candidates to `out`, parsing JSON/SSE strings and arrays.
+   * @param {*} candidate - Candidate nested stream payload.
+   * @param {Object[]} out - Mutable output list.
+   */
+  function collectNestedStreamPayloadCandidate(candidate, out) {
+    if (!candidate) return;
+
+    if (typeof candidate === "string") {
+      const parsed = parseJsonStringSafe(candidate);
+      if (parsed && typeof parsed === "object") {
+        collectNestedStreamPayloadCandidate(parsed, out);
+        return;
+      }
+
+      const ssePayloads = parseJsonPayloadsFromSseText(candidate);
+      if (ssePayloads.length) {
+        collectNestedStreamPayloadCandidate(ssePayloads, out);
+      }
+      return;
+    }
+
+    if (Array.isArray(candidate)) {
+      for (const item of candidate) {
+        collectNestedStreamPayloadCandidate(item, out);
+      }
+      return;
+    }
+
+    if (typeof candidate === "object") {
+      out.push(candidate);
+
+      if (typeof candidate.encoded_item === "string") {
+        collectNestedStreamPayloadCandidate(candidate.encoded_item, out);
+      }
+    }
+  }
+
+  /**
+   * Extract nested payloads from a conversation-turn-stream wrapper.
+   * @param {*} payload - Parsed stream payload.
+   * @returns {Object[]} Nested payload objects in discovery order.
+   */
+  function getNestedPayloadsFromConversationTurnStream(payload) {
+    if (!payload || typeof payload !== "object") return [];
+    if (payload.type !== "conversation-turn-stream") return [];
+
+    const out = [];
+    const candidates = [
+      payload.payload,
+      payload.data,
+      payload.body,
+      payload.message,
+      payload.item,
+      payload.event,
+      payload.value,
+      payload.update,
+      payload.update_content,
+    ];
+
+    for (const candidate of candidates) {
+      collectNestedStreamPayloadCandidate(candidate, out);
+    }
+
+    if (Array.isArray(payload.messages)) {
+      collectNestedStreamPayloadCandidate({ messages: payload.messages }, out);
+    }
+
+    if (Array.isArray(payload.events)) {
+      for (const event of payload.events) {
+        collectNestedStreamPayloadCandidate(event, out);
+      }
+    }
+
+    if (Array.isArray(payload.items)) {
+      for (const item of payload.items) {
+        collectNestedStreamPayloadCandidate(item, out);
+      }
+    }
+
+    return out;
+  }
+
+  /**
+   * Collect message arrays from known stream payload wrapper shapes.
+   * @param {*} payload - Parsed stream payload.
+   * @returns {Object[]} Message objects with ids.
+   */
+  function getMessagesFromPayload(payload) {
+    const out = [];
+    const seen = new Set();
+    const candidates = [
+      payload?.messages,
+      payload?.update_content?.messages,
+      payload?.payload?.messages,
+      payload?.payload?.update_content?.messages,
+      payload?.data?.messages,
+      payload?.data?.update_content?.messages,
+      payload?.body?.messages,
+      payload?.body?.update_content?.messages,
+      payload?.item?.messages,
+      payload?.item?.update_content?.messages,
+    ];
+
+    for (const candidate of candidates) {
+      if (!Array.isArray(candidate)) continue;
+      for (const msg of candidate) {
+        if (!msg?.id || seen.has(msg.id)) continue;
+        seen.add(msg.id);
+        out.push(msg);
+      }
+    }
+
+    return out;
+  }
+
+  /**
+   * Parse a JSON request body from intercepted `fetch` arguments when available.
+   *
+   * @param {Array} args - Original `fetch` argument list.
+   * @returns {Object|null} Parsed request body or `null`.
+   */
+  function parseJsonRequestBodyFromFetchArgs(args) {
+    const init = args?.[1] || {};
+    const body = init?.body;
+
+    if (typeof body === "string" && body.trim()) {
+      try {
+        return JSON.parse(body);
+      } catch {
+        return null;
+      }
+    }
+
+    if (body instanceof URLSearchParams) {
+      const text = body.toString();
+      try {
+        return JSON.parse(text);
+      } catch {
+        return null;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Create a stable synthetic id for request-side user messages that lack one.
+   *
+   * @returns {string} Synthetic message id.
+   */
+  function createSyntheticUserRequestMessageId() {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+
+    return `cgo-user-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  /**
+   * Normalize a user message candidate from request payload data into conversation shape.
+   *
+   * @param {Object} value - Raw request payload value.
+   * @returns {Object|null} Normalized user message or `null`.
+   */
+  function normalizeUserRequestMessage(value) {
+    const msg = value?.message && typeof value.message === "object"
+      ? value.message
+      : value;
+
+    if (!msg || typeof msg !== "object") return null;
+
+    const id =
+      msg.id ||
+      value?.id ||
+      createSyntheticUserRequestMessageId();
+
+    let content = msg.content || value?.content || null;
+
+    if (!content) {
+      const text = value?.text || msg.text || "";
+      content = {
+        content_type: "text",
+        parts: text ? [String(text)] : [],
+      };
+    }
+
+    if (typeof content?.text === "string" && !Array.isArray(content.parts)) {
+      content = {
+        content_type: "text",
+        parts: [content.text],
+      };
+    }
+
+    return {
+      ...msg,
+      id,
+      author: {
+        ...(msg.author || {}),
+        role: "user",
+      },
+      content,
+      metadata: {
+        ...(msg.metadata || {}),
+      },
+      create_time: msg.create_time ?? Date.now() / 1000,
+      status: msg.status || "finished_successfully",
+      recipient: msg.recipient || "all",
+    };
+  }
+
+  /**
+   * Collect normalized user messages from an intercepted request body.
+   *
+   * @param {Object} body - Parsed request body.
+   * @returns {Object[]} Normalized user messages.
+   */
+  function collectUserMessagesFromRequestBody(body) {
+    const out = [];
+    const seen = new Set();
+
+    /**
+     * Add a normalized user message when it has a unique id.
+     *
+     * @param {Object} value - Raw user-message candidate.
+     * @returns {void}
+     */
+    function pushMessage(value) {
+      const msg = normalizeUserRequestMessage(value);
+      if (!msg?.id || seen.has(msg.id)) return;
+      seen.add(msg.id);
+      out.push(msg);
+    }
+
+    /**
+     * Traverse a request payload recursively and collect embedded user messages.
+     *
+     * @param {*} value - Current payload node.
+     * @returns {void}
+     */
+    function visit(value) {
+      if (!value) return;
+
+      if (Array.isArray(value)) {
+        for (const item of value) visit(item);
+        return;
+      }
+
+      if (typeof value !== "object") return;
+
+      const role =
+        value?.author?.role ||
+        value?.message?.author?.role ||
+        value?.role ||
+        "";
+
+      const id = value?.id || value?.message?.id || "";
+      const content = value?.content || value?.message?.content || null;
+      const hasText =
+        Array.isArray(content?.parts) ||
+        typeof content?.text === "string" ||
+        typeof value?.text === "string" ||
+        typeof value?.message?.text === "string";
+
+      if (role === "user" && (id || hasText)) {
+        pushMessage(value);
+        return;
+      }
+
+      for (const key of [
+        "messages",
+        "message",
+        "input_message",
+        "input_messages",
+        "payload",
+        "conversation",
+        "action",
+      ]) {
+        if (value[key]) visit(value[key]);
+      }
+    }
+
+    visit(body);
+
+    return out;
+  }
+
+  /**
+   * Cache request-side user messages before the streaming response arrives.
+   *
+   * @param {Array} args - Original `fetch` argument list.
+   * @param {string} url - Request URL used for logging context.
+   * @returns {void}
+   */
+  function rememberUserMessagesFromStreamingRequest(args, url) {
+    const body = parseJsonRequestBodyFromFetchArgs(args);
+    if (!body) return;
+
+    const conversationId =
+      body.conversation_id ||
+      body.conversationId ||
+      getConversationIdFromLocation() ||
+      LAST_STREAM_CONVERSATION_ID ||
+      "";
+
+    if (!conversationId) return;
+
+    const topicId =
+      body.topic_id ||
+      body.topicId ||
+      body.stream_topic_id ||
+      "";
+
+    const cache = ensureConversationCache(conversationId);
+    ensureStreamState(conversationId, topicId);
+
+    const userMessages = collectUserMessagesFromRequestBody(body);
+
+    for (const msg of userMessages) {
+      const parentId =
+        msg?.metadata?.parent_id ||
+        msg?.parent_id ||
+        cache.current_node ||
+        null;
+
+      upsertMessageNode(cache, msg, parentId);
+      rememberLatestInputMessageId(conversationId, topicId, msg);
+    }
+
+    if (userMessages.length) {
+      log("[sse:request-user-input]", {
+        conversationId,
+        topicId,
+        count: userMessages.length,
+      });
+    }
+  }
+
+  /**
+   * Resolve the most specific event name for a nested stream payload.
+   *
+   * @param {string} fallbackEventName - Event name from the outer transport layer.
+   * @param {Object} nested - Nested payload object.
+   * @returns {string} Effective event name.
+   */
+  function getNestedEventNameFromPayload(fallbackEventName, nested) {
+    if (nested?.event && typeof nested.event === "string") {
+      return nested.event;
+    }
+
+    if (nested?.eventName && typeof nested.eventName === "string") {
+      return nested.eventName;
+    }
+
+    if (
+      nested &&
+      typeof nested === "object" &&
+      typeof nested.p === "string" &&
+      typeof nested.o === "string"
+    ) {
+      return "delta";
+    }
+
+    return fallbackEventName;
+  }
+
+  /**
+   * Detect messages that should be kept in the mapping but not treated as visible conversation turns.
+   *
+   * Internal/hidden/thought/context messages may be useful as structural or export metadata,
+   * but must not become the stream patch target or export chain tail.
+   *
+   * @param {Object} message - Conversation message payload.
+   * @returns {boolean} `true` for hidden/internal messages.
+   */
+  function isInternalConversationMessage(message) {
+    const role = message?.author?.role || "";
+    const metadata = message?.metadata || {};
+    const contentType = message?.content?.content_type || "";
+
+    if (metadata.is_visually_hidden_from_conversation) {
+      return true;
+    }
+
+    if (contentType === "thoughts") {
+      return true;
+    }
+
+    if (metadata.command === "context_stuff") {
+      return true;
+    }
+
+    if (metadata.is_temporal_turn === true) {
+      return true;
+    }
+
+    if (role === "assistant" && metadata.can_save === false) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Decide whether a message should advance the conversation cache current node.
+   *
+   * Only visible user/assistant messages should become the export chain tail.
+   *
+   * @param {Object} message - Conversation message payload.
+   * @returns {boolean} `true` when the message should update `cache.current_node`.
+   */
+  function shouldAdvanceConversationCurrent(message) {
+    const role = message?.author?.role || "";
+
+    if (role !== "user" && role !== "assistant") {
+      return false;
+    }
+
+    if (isInternalConversationMessage(message)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Identify visible assistant messages that should receive streamed patch ops.
    * @param {Object} message - Message node object; expected to contain `author.role`.
-   * @returns {boolean} `true` if `message.author.role` is `"assistant"`, `false` otherwise.
+   * @returns {boolean} `true` for visible assistant messages, `false` otherwise.
    */
   function shouldUseAsPatchedTarget(message) {
     if (!message || typeof message !== "object") return false;
-    return message?.author?.role === "assistant";
+    if (message?.author?.role !== "assistant") {
+      return false;
+    }
+
+    if (isInternalConversationMessage(message)) {
+      return false;
+    }
+
+    return true;
   }
 
   /**
@@ -1994,11 +2606,16 @@
   }
 
   /**
-   * Insert or update a message node in a conversation cache mapping and mark it as the current node.
+   * Insert or update a message node in a conversation cache mapping.
    *
-   * Creates a new node for `message.id` if missing or replaces the stored `message` with a structured clone.
-   * When `parentId` is provided, ensures the parent node exists, adds the message id to the parent's `children`
-   * (if not already present), and sets the node's `parent`. Always sets `cache.current_node` to `message.id`.
+   * Creates a new node for `message.id` if missing or replaces the stored
+   * message with a structured clone. When `parentId` is provided, ensures
+   * the parent node exists, adds the message id to the parent's `children`
+   * if needed, and sets the node's `parent`.
+   *
+   * Updates `cache.current_node` only for visible user/assistant messages,
+   * so hidden tool/internal messages can remain in the mapping without
+   * becoming the export chain tail.
    *
    * @param {Object} cache - Conversation cache object containing at least a `mapping` object and `current_node` property.
    * @param {Object} message - Message object; must have an `id` property. If missing, the function is a no-op.
@@ -2040,7 +2657,9 @@
       cache.mapping[parentId].children = children;
     }
 
-    cache.current_node = message.id;
+    if (shouldAdvanceConversationCurrent(message)) {
+      cache.current_node = message.id;
+    }
   }
 
   /**
@@ -2060,9 +2679,11 @@
    * @returns {{
    *   currentPatchedMessageId: (string|null),
    *   pendingOps: Array,
-   *   lastTextAppendOp: ({p: string, o: string}|null)
+   *   lastTextAppendOp: ({p: string, o: string}|null),
+   *   pendingGeneratedImageContent: (Object|null),
+   *   lastInputMessageId: string
    * }}
-   `currentPatchedMessageId` is the message id currently being patched or `null`; `pendingOps` is an array that will hold pending delta operations.
+   * `currentPatchedMessageId` is the message id currently being patched or `null`; `pendingOps` is an array that will hold pending delta operations.
    */
   function ensureStreamState(conversationId, topicId = "") {
     const key = getStreamStateKey(conversationId, topicId);
@@ -2073,6 +2694,8 @@
         currentPatchedMessageId: null,
         pendingOps: [],
         lastTextAppendOp: null,
+        pendingGeneratedImageContent: null,
+        lastInputMessageId: "",
       };
       STREAM_STATE.set(key, streamState);
     }
@@ -2085,7 +2708,194 @@
       streamState.lastTextAppendOp = null;
     }
 
+    if (!("pendingGeneratedImageContent" in streamState)) {
+      streamState.pendingGeneratedImageContent = null;
+    }
+
+    if (!("lastInputMessageId" in streamState)) {
+      streamState.lastInputMessageId = "";
+    }
+
     return streamState;
+  }
+
+  /**
+   * Remember the most recent user input message id for a conversation/topic pair.
+   *
+   * @param {string} conversationId - Conversation identifier.
+   * @param {string} topicId - Topic or stream identifier.
+   * @param {Object} message - Candidate user message.
+   * @returns {void}
+   */
+  function rememberLatestInputMessageId(conversationId, topicId, message) {
+    if (!conversationId || !message?.id) return;
+    if (message?.author?.role !== "user") return;
+
+    const topicState = ensureStreamState(conversationId, topicId);
+    topicState.lastInputMessageId = message.id;
+
+    if (topicId) {
+      const conversationState = ensureStreamState(conversationId, "");
+      conversationState.lastInputMessageId = message.id;
+    }
+  }
+
+  /**
+   * Retrieve the latest remembered user input id for a conversation/topic pair.
+   *
+   * @param {string} conversationId - Conversation identifier.
+   * @param {string} [topicId=""] - Topic or stream identifier.
+   * @returns {string} Latest input message id or an empty string.
+   */
+  function getLatestInputMessageId(conversationId, topicId = "") {
+    const topicState = topicId
+      ? STREAM_STATE.get(getStreamStateKey(conversationId, topicId))
+      : null;
+    const conversationState = STREAM_STATE.get(getStreamStateKey(conversationId, ""));
+
+    return (
+      topicState?.lastInputMessageId ||
+      conversationState?.lastInputMessageId ||
+      ""
+    );
+  }
+
+  /**
+   * Walk a message's parent chain to find the oldest reachable node in its branch.
+   *
+   * @param {Object} mapping - Conversation node map.
+   * @param {string} messageId - Starting message id.
+   * @returns {string} Root node id or an empty string.
+   */
+  function findBranchRootForMessage(mapping, messageId) {
+    if (!messageId || !mapping?.[messageId]) return "";
+
+    const seen = new Set();
+    let rootId = messageId;
+    let cursor = messageId;
+
+    while (cursor && mapping?.[cursor] && !seen.has(cursor)) {
+      seen.add(cursor);
+      rootId = cursor;
+
+      const parentId = mapping[cursor]?.parent || "";
+      if (!parentId || !mapping[parentId]) {
+        break;
+      }
+
+      cursor = parentId;
+    }
+
+    return rootId || "";
+  }
+
+  /**
+   * Find the highest branch node that is still safe to reattach under a different parent.
+   *
+   * @param {Object} mapping - Conversation node map.
+   * @param {string} messageId - Starting message id.
+   * @returns {string} Attachable branch root id or an empty string.
+   */
+  function findAttachableBranchRootForMessage(mapping, messageId) {
+    if (!messageId || !mapping?.[messageId]) return "";
+
+    const seen = new Set();
+    let cursor = messageId;
+    let lastNonRootId = messageId;
+
+    while (cursor && mapping?.[cursor] && !seen.has(cursor)) {
+      seen.add(cursor);
+
+      const parentId = mapping[cursor]?.parent || "";
+
+      if (!parentId || !mapping[parentId]) {
+        return cursor === CONFIG.rootNodeId ? lastNonRootId : cursor;
+      }
+
+      if (parentId === CONFIG.rootNodeId) {
+        return cursor;
+      }
+
+      lastNonRootId = parentId;
+      cursor = parentId;
+    }
+
+    return lastNonRootId || "";
+  }
+
+  /**
+   * Re-anchor a detached assistant branch under the latest remembered user input.
+   *
+   * @param {Object} cache - Conversation cache entry.
+   * @param {string} conversationId - Conversation identifier.
+   * @param {string} topicId - Topic or stream identifier.
+   * @param {string} messageId - Assistant message to anchor.
+   * @param {string} anchorReason - Log-friendly reason for the re-anchor.
+   * @returns {boolean} `true` when the branch was re-anchored.
+   */
+  function anchorBranchToLatestInput(cache, conversationId, topicId, messageId, anchorReason) {
+    const latestInputMessageId = getLatestInputMessageId(conversationId, topicId);
+    const mapping = cache?.mapping || {};
+
+    if (!latestInputMessageId) {
+      return false;
+    }
+
+    if (!messageId) {
+      return false;
+    }
+
+    if (!mapping[latestInputMessageId]) {
+      return false;
+    }
+
+    if (!mapping[messageId]) {
+      return false;
+    }
+
+    if (messageId === latestInputMessageId) {
+      return false;
+    }
+
+    if (mapping[messageId]?.message?.author?.role === "user") {
+      return false;
+    }
+
+    if (isNodeConnectedToTarget(mapping, messageId, latestInputMessageId)) {
+      return false;
+    }
+
+    const branchRootId = findAttachableBranchRootForMessage(mapping, messageId);
+    if (!branchRootId) {
+      return false;
+    }
+
+    if (branchRootId === latestInputMessageId) {
+      return false;
+    }
+
+    if (!mapping[branchRootId]) {
+      return false;
+    }
+
+    mapping[branchRootId].parent = latestInputMessageId;
+
+    const latestInputChildren = Array.isArray(mapping[latestInputMessageId].children)
+      ? mapping[latestInputMessageId].children
+      : [];
+    if (!latestInputChildren.includes(branchRootId)) {
+      latestInputChildren.push(branchRootId);
+    }
+    mapping[latestInputMessageId].children = latestInputChildren;
+
+    log("[sse:branch-anchor-to-input]", {
+      conversationId,
+      topicId,
+      anchorReason: anchorReason || "",
+      anchored: true,
+    });
+
+    return true;
   }
 
   /**
@@ -2278,6 +3088,72 @@
   }
 
   /**
+   * Detect a raw top-level conversation message payload.
+   *
+   * Some stream items deliver the message object directly instead of wrapping it
+   * under `payload.message` or `payload.v.message`.
+   *
+   * @param {*} payload - Parsed stream payload.
+   * @returns {boolean} `true` when the payload looks like a conversation message.
+   */
+  function isRawStreamMessagePayload(payload) {
+    return (
+      payload &&
+      typeof payload === "object" &&
+      typeof payload.id === "string" &&
+      payload.id &&
+      payload.author &&
+      typeof payload.author === "object" &&
+      typeof payload.author.role === "string" &&
+      !!(
+        payload.content ||
+        payload.metadata ||
+        payload.status ||
+        payload.recipient ||
+        payload.channel
+      )
+    );
+  }
+
+  /**
+   * Check whether a content payload contains generated image asset pointers.
+   *
+   * @param {*} content - Message content-like payload.
+   * @returns {boolean} `true` when `parts` includes an image asset pointer.
+   */
+  function hasImageAssetPointerPart(content) {
+    const parts = Array.isArray(content?.parts) ? content.parts : [];
+    return parts.some((part) =>
+      part &&
+      typeof part === "object" &&
+      part.content_type === "image_asset_pointer" &&
+      typeof part.asset_pointer === "string" &&
+      part.asset_pointer
+    );
+  }
+
+  /**
+   * Detect a content-only generated-image payload.
+   *
+   * This shape has no message id or author. It cannot become a mapping node by
+   * itself, so it should be kept temporarily until a raw tool message arrives.
+   *
+   * @param {*} payload - Parsed stream payload.
+   * @returns {boolean} `true` for content-only multimodal image content.
+   */
+  function isContentOnlyGeneratedImagePayload(payload) {
+    return (
+      payload &&
+      typeof payload === "object" &&
+      !payload.id &&
+      !payload.author &&
+      typeof payload.content_type === "string" &&
+      Array.isArray(payload.parts) &&
+      hasImageAssetPointerPart(payload)
+    );
+  }
+
+  /**
    * Process a parsed SSE/WebSocket stream event for conversation streams, updating conversation/topic context, caching message nodes, and applying or queuing delta operations.
    *
    * This routine detects or restores the conversation/topic context, ensures per-conversation caches and stream state exist, handles control events (e.g., resume tokens and stream handoffs), upserts incoming messages into the stream cache, and either applies delta ops to the current patched assistant message or queues them for later application.
@@ -2288,6 +3164,13 @@
    * @param {string} [meta.topicId] - An explicit topic identifier to associate the event with a specific stream context.
    */
   function handleSseEvent(eventName, payload, meta = {}) {
+    /**
+     * Remember the latest text append-style op so follow-up value ops can be normalized.
+     *
+     * @param {Object} streamState - Per-stream state bucket.
+     * @param {Object[]} ops - Normalized delta ops.
+     * @returns {void}
+     */
     function rememberLastTextAppendOp(streamState, ops) {
       for (const op of ops || []) {
         if (!op || typeof op !== "object") continue;
@@ -2309,6 +3192,14 @@
       }
     }
 
+    /**
+     * Apply delta ops immediately when a target assistant exists, or queue them otherwise.
+     *
+     * @param {Object} cache - Conversation cache entry.
+     * @param {Object} streamState - Per-stream state bucket.
+     * @param {Object[]} ops - Raw or normalized delta ops.
+     * @returns {void}
+     */
     function applyOrQueueDeltaOps(cache, streamState, ops) {
       const normalized = normalizeOps(ops);
       if (!normalized.length) return;
@@ -2319,6 +3210,29 @@
         applyDeltaOpsToMessage(cache, streamState.currentPatchedMessageId, normalized);
       } else {
         streamState.pendingOps.push(...normalized);
+      }
+    }
+
+    if (!meta.__cgoUnwrappedMessageWrapper && payload?.type === "message") {
+      const nested = getNestedPayloadFromMessageWrapper(payload);
+
+      if (nested) {
+        const wrapperTopicId =
+          payload.topic_id ||
+          payload.topicId ||
+          meta.topicId ||
+          "";
+
+        handleSseEvent(
+          getNestedEventNameFromPayload(eventName, nested),
+          nested,
+          {
+            ...meta,
+            topicId: wrapperTopicId,
+            __cgoUnwrappedMessageWrapper: true,
+          }
+        );
+        return;
       }
     }
 
@@ -2354,6 +3268,66 @@
     const streamState = ensureStreamState(conversationId, topicId);
     let handledPayload = false;
 
+    if (
+      !meta.__cgoUnwrappedConversationTurnStream &&
+      payload?.type === "conversation-turn-stream"
+    ) {
+      const nestedPayloads = getNestedPayloadsFromConversationTurnStream(payload);
+
+      log("[sse:conversation-turn-stream]", {
+        eventName,
+        conversationId,
+        topicId,
+        nestedCount: nestedPayloads.length,
+      });
+
+      if (nestedPayloads.length) {
+        for (const nested of nestedPayloads) {
+          const nextEventName = getNestedEventNameFromPayload(eventName, nested);
+
+          handleSseEvent(nextEventName, nested, {
+            ...meta,
+            topicId:
+              payload.topic_id ||
+              payload.topicId ||
+              meta.topicId ||
+              topicId ||
+              "",
+            __cgoUnwrappedConversationTurnStream: true,
+          });
+        }
+
+        return;
+      }
+    }
+
+    const payloadMessages = getMessagesFromPayload(payload);
+
+    if (payloadMessages.length) {
+      for (const msg of payloadMessages) {
+        const parentId =
+          msg?.metadata?.parent_id ||
+          msg?.parent_id ||
+          cache.current_node ||
+          null;
+
+        upsertMessageNode(cache, msg, parentId);
+
+        if (msg?.author?.role === "user") {
+          rememberLatestInputMessageId(conversationId, topicId, msg);
+        } else {
+          anchorBranchToLatestInput(cache, conversationId, topicId, msg.id, "messages-array");
+        }
+
+        if (shouldUseAsPatchedTarget(msg)) {
+          streamState.currentPatchedMessageId = msg.id;
+          flushPendingOps(cache, streamState);
+        }
+      }
+
+      return;
+    }
+
     if (payload?.type === "resume_conversation_token") {
       const topicIdFromPayload = getTopicIdFromPayload(payload);
       if (topicIdFromPayload) {
@@ -2380,37 +3354,34 @@
 
     if (payload?.type === "input_message" && payload?.input_message) {
       const msg = payload.input_message;
-      const parentId = msg?.metadata?.parent_id || null;
+      const parentId = msg?.metadata?.parent_id || cache.current_node || null;
       upsertMessageNode(cache, msg, parentId);
+      rememberLatestInputMessageId(conversationId, topicId, msg);
 
-      if (msg?.author?.role === "assistant") {
+      if (shouldUseAsPatchedTarget(msg)) {
         streamState.currentPatchedMessageId = msg.id;
         flushPendingOps(cache, streamState);
       }
       return;
     }
 
-    if (eventName === "delta" && payload?.o === "add" && payload?.v?.message) {
+    if (payload?.v?.message?.id) {
       const msg = payload.v.message;
-      const parentId = msg?.metadata?.parent_id || null;
-      upsertMessageNode(cache, msg, parentId);
+      const parentId =
+        msg?.metadata?.parent_id ||
+        payload?.v?.parent_id ||
+        payload?.parent_id ||
+        null;
 
-      if (msg?.author?.role === "assistant") {
+      upsertMessageNode(cache, msg, parentId);
+      handledPayload = true;
+      anchorBranchToLatestInput(cache, conversationId, topicId, msg.id, "v-message");
+
+      if (shouldUseAsPatchedTarget(msg)) {
         streamState.currentPatchedMessageId = msg.id;
         flushPendingOps(cache, streamState);
       }
-      return;
-    }
 
-    if (eventName === "delta" && payload?.v?.message) {
-      const msg = payload.v.message;
-      const parentId = msg?.metadata?.parent_id || null;
-      upsertMessageNode(cache, msg, parentId);
-
-      if (msg?.author?.role === "assistant") {
-        streamState.currentPatchedMessageId = msg.id;
-        flushPendingOps(cache, streamState);
-      }
       return;
     }
 
@@ -2441,11 +3412,52 @@
       const parentId = msg?.metadata?.parent_id || null;
       upsertMessageNode(cache, msg, parentId);
       handledPayload = true;
+      anchorBranchToLatestInput(cache, conversationId, topicId, msg.id, "payload-message");
 
       if (shouldUseAsPatchedTarget(msg)) {
         streamState.currentPatchedMessageId = msg.id;
         flushPendingOps(cache, streamState);
       }
+    }
+
+    if (isRawStreamMessagePayload(payload)) {
+      const msg = payload;
+      const parentId =
+        msg?.metadata?.parent_id ||
+        msg?.parent_id ||
+        cache.current_node ||
+        null;
+
+      if (
+        msg?.author?.role === "tool" &&
+        streamState.pendingGeneratedImageContent &&
+        (
+          !msg.content ||
+          !Array.isArray(msg.content.parts) ||
+          msg.content.parts.length === 0
+        )
+      ) {
+        msg.content = structuredClone(streamState.pendingGeneratedImageContent);
+        streamState.pendingGeneratedImageContent = null;
+      } else if (hasImageAssetPointerPart(msg?.content)) {
+        streamState.pendingGeneratedImageContent = null;
+      }
+
+      upsertMessageNode(cache, msg, parentId);
+      handledPayload = true;
+      anchorBranchToLatestInput(cache, conversationId, topicId, msg.id, "raw-message");
+
+      if (shouldUseAsPatchedTarget(msg)) {
+        streamState.currentPatchedMessageId = msg.id;
+        flushPendingOps(cache, streamState);
+      }
+
+      const turnExchangeId = msg?.metadata?.turn_exchange_id || "";
+      if (turnExchangeId) {
+        STREAM_TURN_EXCHANGE_TO_CONVERSATION.set(turnExchangeId, conversationId);
+      }
+
+      return;
     }
 
     if (
@@ -2479,20 +3491,46 @@
       return;
     }
 
+    if (isContentOnlyGeneratedImagePayload(payload)) {
+      streamState.pendingGeneratedImageContent = structuredClone(payload);
+
+      const imageParts = payload.parts.filter(
+        (part) => part?.content_type === "image_asset_pointer"
+      );
+
+      log("[sse:generated-image-content:pending]", {
+        conversationId,
+        topicId,
+        imageCount: imageParts.length,
+      });
+
+      return;
+    }
+
+    if (payload?.type === "done") {
+      log("[sse:done]", {
+        conversationId,
+        topicId,
+        hasPendingGeneratedImageContent: !!streamState.pendingGeneratedImageContent,
+        pendingImageCount: streamState.pendingGeneratedImageContent
+          ? streamState.pendingGeneratedImageContent.parts.filter(
+            (part) => part?.content_type === "image_asset_pointer"
+          ).length
+          : 0,
+      });
+
+      return;
+    }
+
+    // NOTE: conversation-update/add-messages is intentionally left for a later
+    // stream-normalization pass. Raw generated-image payloads are handled above.
+
     if (
       eventName === "delta_encoding" ||
       ignorableTypes.has(payload?.type) ||
       ignorableTypes.has(payload?.command?.type) ||
       ignorableTypes.has(payload?.reply?.type)
     ) {
-      log("[sse:ignored]", {
-        eventName,
-        conversationId,
-        topicId,
-        type: payload?.type || "",
-        commandType: payload?.command?.type || "",
-        replyType: payload?.reply?.type || "",
-      });
       return;
     }
 
@@ -2502,11 +3540,6 @@
       Object.keys(payload).length === 1 &&
       typeof payload.conversation_id === "string"
     ) {
-      log("[sse:ignored:conversation-id-only]", {
-        eventName,
-        conversationId,
-        topicId,
-      });
       return;
     }
 
@@ -2516,7 +3549,6 @@
         conversationId,
         topicId,
         summary: payloadSummary,
-        // payloadPreview: getJsonPreview(payload, 1500),
       });
     }
   }
@@ -2619,6 +3651,14 @@
     }
 
     if (shouldObserveEventStream) {
+      if (isStreamingConversationRequest(url)) {
+        try {
+          rememberUserMessagesFromStreamingRequest(args, url);
+        } catch (error) {
+          log("failed to remember streaming request user input", String(error));
+        }
+      }
+
       consumeConversationStream(clonedResponse, { url }).catch((error) => {
         log("stream parse failed", String(error));
       });
@@ -2765,6 +3805,12 @@
     window.__CGO_ORIGINAL_RTCPEERCONNECTION__ =
       window.__CGO_ORIGINAL_RTCPEERCONNECTION__ || NativeRTCPeerConnection;
 
+    /**
+     * Wrapped `RTCPeerConnection` constructor that observes voice-session activity.
+     *
+     * @param {...*} args - Native `RTCPeerConnection` constructor arguments.
+     * @returns {RTCPeerConnection} Wrapped peer connection instance.
+     */
     function CGORTCPeerConnection(...args) {
       const pc = new NativeRTCPeerConnection(...args);
 
@@ -2879,6 +3925,13 @@
     window.__CGO_ORIGINAL_EVENTSOURCE__ =
       window.__CGO_ORIGINAL_EVENTSOURCE__ || NativeEventSource;
 
+    /**
+     * Wrapped `EventSource` constructor that mirrors parsed SSE payloads into the stream parser.
+     *
+     * @param {string|URL} url - EventSource endpoint.
+     * @param {Object} [config] - Optional EventSource configuration.
+     * @returns {EventSource} Wrapped native EventSource instance.
+     */
     function CGOEventSource(url, config) {
       const es =
         config === undefined

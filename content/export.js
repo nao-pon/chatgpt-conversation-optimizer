@@ -373,12 +373,11 @@
       });
     }
 
-    CGO.log("export dom asset map", items.map((item) => ({
-      role: item.role,
-      messageId: item.messageId,
-      imageCount: item.images.length,
-      attachmentCount: item.attachments.length,
-    })));
+    CGO.log("[export] dom assets collected", {
+      turns: items.length,
+      imageCount: items.reduce((sum, item) => sum + item.images.length, 0),
+      attachmentCount: items.reduce((sum, item) => sum + item.attachments.length, 0),
+    });
 
     return items;
   }

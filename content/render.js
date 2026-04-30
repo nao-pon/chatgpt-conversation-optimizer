@@ -17,7 +17,10 @@
       ...message,
       images: [],
       attachments: [],
-      imagePrompts: [],
+      imagePrompts: [
+        ...(Array.isArray(message.imagePrompts) ? message.imagePrompts : []),
+        ...(Array.isArray(message.imagePromptSeeds) ? message.imagePromptSeeds : []),
+      ],
     }));
 
     const { byMessageId, anonymous } = CGO.buildAssistantDomImagePools(domAssets);
@@ -29,7 +32,9 @@
       const isImageMessage = CGO.isImageCandidateMessage(message);
 
       let collectedImages = [];
-      let collectedPrompts = [];
+      let collectedPrompts = Array.isArray(message.imagePrompts)
+        ? [...message.imagePrompts]
+        : [];
       let matchedDomAsset = null;
 
       // 1) user 添付画像
@@ -101,13 +106,15 @@
       if (isImageMessage) {
         const promptHints = CGO.extractPromptHintsFromMessage(message);
         if (promptHints.length) {
-          collectedPrompts.push(...promptHints);
+          for (const promptHint of promptHints) {
+            addPromptOnce(collectedPrompts, promptHint);
+          }
         }
 
         // content_references 由来画像の hint も prompt に反映
         for (const image of collectedImages) {
-          if (image?.hint && !collectedPrompts.some((p) => p.text === image.hint)) {
-            collectedPrompts.push({
+          if (image?.hint) {
+            addPromptOnce(collectedPrompts, {
               text: image.hint,
               source: "content-reference-image-group",
             });
@@ -197,21 +204,322 @@
 
       CGO.prepareInlineImageData(message);
 
-      CGO.log("[export] merge message", {
-        id: message.id,
-        role: message.role,
-        isImageMessage,
-        toolMessageIds: CGO.getToolMessageIds(message),
-        matchedDomMessageId: matchedDomAsset?.messageId || null,
-        imageCount: message.images.length,
-        attachmentCount: message.attachments.length,
-        imageSources: message.images.map((img) => img.source),
-        promptCount: message.imagePrompts.length,
-        anonymousIndexAfter: anonymousIndex,
+      if (isImageMessage && message.images.length) {
+        CGO.log("[export] image message merged", {
+          id: message.id,
+          imageCount: message.images.length,
+          attachmentCount: message.attachments.length,
+          promptCount: message.imagePrompts.length,
+        });
+      }
+    }
+
+    return dedupeGeneratedImageExportItems(merged);
+  }
+
+  /**
+   * Append an image prompt entry when its text has not already been recorded.
+   *
+   * @param {Object[]} list - Prompt entry list to mutate.
+   * @param {Object} item - Prompt entry candidate.
+   * @returns {void}
+   */
+  function addPromptOnce(list, item) {
+    const text = String(item?.text || "").trim();
+    if (!text) return;
+    if (list.some((entry) => String(entry?.text || "").trim() === text)) return;
+    list.push(item);
+  }
+
+  /**
+   * Determine whether a normalized export item represents a generated-image assistant message.
+   *
+   * @param {Object} message - Normalized export item.
+   * @returns {boolean} `true` when the item should participate in generated-image merging.
+   */
+  function isGeneratedImageExportItem(message) {
+    if (!message || message.role !== "assistant") return false;
+
+    if (typeof message.id === "string" && message.id.includes(":generated-image")) {
+      return true;
+    }
+
+    if (typeof CGO.hasToolGeneratedImages === "function" && CGO.hasToolGeneratedImages(message)) {
+      return true;
+    }
+
+    const images = Array.isArray(message.images) ? message.images : [];
+    return images.some((image) => {
+      const source = String(image?.source || "");
+      return (
+        source.includes("tool-asset-pointer") ||
+        source.includes("content-reference-image-group") ||
+        source.includes("data-file-id") ||
+        source.includes("data-url")
+      );
+    });
+  }
+
+  /**
+   * Build a stable deduplication key for an exported generated image.
+   *
+   * @param {Object} image - Exported image metadata.
+   * @returns {string} Image key or an empty string when no stable key is available.
+   */
+  function getGeneratedImageKey(image) {
+    if (!image || typeof image !== "object") return "";
+
+    if (image.fileId) return `file:${image.fileId}`;
+
+    const url = String(image.url || image.embeddedUrl || image.localPath || "");
+    if (url) {
+      const fileIdMatch = url.match(/file_[A-Za-z0-9]+/);
+      if (fileIdMatch) return `file:${fileIdMatch[0]}`;
+      return `url:${url}`;
+    }
+
+    const title = String(image.title || image.alt || "");
+    const width = Number(image.width || 0);
+    const height = Number(image.height || 0);
+    const size = Number(image.fileSizeBytes || 0);
+
+    if (width && height && size) {
+      return `meta:${width}x${height}:${size}:${title}`;
+    }
+
+    return "";
+  }
+
+  /**
+   * Score image metadata richness so merges can prefer the more complete representation.
+   *
+   * @param {Object} image - Exported image metadata.
+   * @returns {number} Richness score where higher is better.
+   */
+  function scoreImageMeta(image) {
+    if (!image || typeof image !== "object") return 0;
+
+    let score = 0;
+    if (image.fileId) score += 20;
+    if (image.url) score += 20;
+    if (image.embeddedUrl) score += 20;
+    if (image.localPath) score += 20;
+    if (image.alt) score += 12;
+    if (image.title) score += 12;
+    if (image.fileName) score += 8;
+    if (image.mimeType) score += 6;
+    if (Number(image.width || 0)) score += 6;
+    if (Number(image.height || 0)) score += 6;
+    if (Number(image.fileSizeBytes || 0)) score += 6;
+    if (image.source) score += 2;
+    if (image.unresolved === false) score += 4;
+
+    return score;
+  }
+
+  /**
+   * Merge two image metadata objects while preferring the richer non-generic values.
+   *
+   * @param {Object} primaryImage - Preferred image metadata.
+   * @param {Object} donorImage - Fallback image metadata.
+   * @returns {Object} Normalized merged image metadata.
+   */
+  function mergeImageMetaPreferRich(primaryImage, donorImage) {
+    const primary = primaryImage || {};
+    const donor = donorImage || {};
+
+    const preferString = (a, b) => {
+      const aa = String(a || "").trim();
+      const bb = String(b || "").trim();
+
+      if (!aa) return bb;
+      if (!bb) return aa;
+
+      const generic = /^(generated image|生成された画像|画像データあり|image data present)$/i;
+      if (generic.test(aa) && !generic.test(bb)) return bb;
+      if (bb.length > aa.length && !generic.test(bb)) return bb;
+
+      return aa;
+    };
+
+    return CGO.normalizeImageMeta({
+      ...primary,
+      fileId: primary.fileId || donor.fileId || "",
+      url: primary.url || donor.url || "",
+      embeddedUrl: primary.embeddedUrl || donor.embeddedUrl || null,
+      localPath: primary.localPath || donor.localPath || "",
+      fileName: preferString(primary.fileName, donor.fileName),
+      mimeType: primary.mimeType || donor.mimeType || "",
+      fileSizeBytes: Number(primary.fileSizeBytes || donor.fileSizeBytes || 0),
+      width: Number(primary.width || donor.width || 0),
+      height: Number(primary.height || donor.height || 0),
+      alt: preferString(primary.alt, donor.alt),
+      title: preferString(primary.title, donor.title),
+      source: primary.source || donor.source || "",
+      unresolved: primary.unresolved === false || donor.unresolved === false
+        ? false
+        : !!(primary.unresolved || donor.unresolved),
+      skipReason: primary.skipReason || donor.skipReason || "",
+    });
+  }
+
+  /**
+   * Merge prompt entry lists while preserving order and deduplicating by prompt text.
+   *
+   * @param {Object[]} primaryPrompts - Existing prompt entries.
+   * @param {Object[]} donorPrompts - Additional prompt entries.
+   * @returns {Object[]} Deduplicated prompt entries.
+   */
+  function mergePromptLists(primaryPrompts, donorPrompts) {
+    const out = [];
+    const seen = new Set();
+
+    for (const item of [...(primaryPrompts || []), ...(donorPrompts || [])]) {
+      const text = String(item?.text || "").trim();
+      if (!text || seen.has(text)) continue;
+      seen.add(text);
+      out.push(item);
+    }
+
+    return out;
+  }
+
+  /**
+   * Merge tool-message arrays while preserving order and deduplicating by message id.
+   *
+   * @param {Object[]} primaryTools - Existing tool messages.
+   * @param {Object[]} donorTools - Additional tool messages.
+   * @returns {Object[]} Deduplicated tool message list.
+   */
+  function mergeToolMessageLists(primaryTools, donorTools) {
+    const out = [];
+    const seenIds = new Set();
+
+    for (const tool of [...(primaryTools || []), ...(donorTools || [])]) {
+      if (!tool) continue;
+
+      const id = tool?.id || "";
+      if (id) {
+        if (seenIds.has(id)) continue;
+        seenIds.add(id);
+      }
+
+      out.push(tool);
+    }
+
+    return out;
+  }
+
+  /**
+   * Merge attachment lists and remove duplicates by file identity.
+   *
+   * @param {Object[]} primaryAttachments - Existing attachment entries.
+   * @param {Object[]} donorAttachments - Additional attachment entries.
+   * @returns {Object[]} Deduplicated attachment list.
+   */
+  function mergeAttachmentLists(primaryAttachments, donorAttachments) {
+    const merged = [
+      ...(primaryAttachments || []),
+      ...(donorAttachments || []),
+    ];
+
+    if (typeof CGO.dedupeAttachments === "function") {
+      return CGO.dedupeAttachments(merged);
+    }
+
+    const out = [];
+    const seen = new Set();
+
+    for (const attachment of merged) {
+      if (!attachment) continue;
+
+      const key = [
+        attachment.fileId || "",
+        attachment.url || "",
+        attachment.name || attachment.fileName || "",
+      ].join("|");
+
+      if (key !== "||" && seen.has(key)) continue;
+      if (key !== "||") seen.add(key);
+      out.push(attachment);
+    }
+
+    return out;
+  }
+
+  /**
+   * Remove duplicate generated-image export items that describe the same image assets.
+   *
+   * @param {Object[]} messages - Normalized export items.
+   * @returns {Object[]} Export items with duplicate generated-image entries merged out.
+   */
+  function dedupeGeneratedImageExportItems(messages) {
+    const items = Array.isArray(messages) ? messages : [];
+    const removeIds = new Set();
+    const primaryByKey = new Map();
+
+    for (const message of items) {
+      if (!isGeneratedImageExportItem(message)) continue;
+
+      const images = Array.isArray(message.images) ? message.images : [];
+      const keys = images.map(getGeneratedImageKey).filter(Boolean);
+
+      if (keys.length <= 1) continue;
+
+      for (const key of keys) {
+        if (!primaryByKey.has(key)) {
+          primaryByKey.set(key, message);
+        }
+      }
+    }
+
+    for (const message of items) {
+      if (!isGeneratedImageExportItem(message)) continue;
+      if (removeIds.has(message.id)) continue;
+
+      const images = Array.isArray(message.images) ? message.images : [];
+      const keys = images.map(getGeneratedImageKey).filter(Boolean);
+
+      if (keys.length !== 1) continue;
+
+      const key = keys[0];
+      const primary = primaryByKey.get(key);
+
+      if (!primary || primary === message) {
+        continue;
+      }
+
+      const donorImage = images[0];
+      primary.images = (primary.images || []).map((image) => {
+        const imageKey = getGeneratedImageKey(image);
+        if (imageKey !== key) return image;
+        return mergeImageMetaPreferRich(image, donorImage);
+      });
+
+      primary.imagePrompts = mergePromptLists(primary.imagePrompts, message.imagePrompts);
+      primary.toolMessages = mergeToolMessageLists(primary.toolMessages, message.toolMessages);
+      primary.attachments = mergeAttachmentLists(primary.attachments, message.attachments);
+
+      if (typeof CGO.prepareInlineImageData === "function") {
+        CGO.prepareInlineImageData(primary);
+      }
+
+      removeIds.add(message.id);
+
+      CGO.log("[export] dedupe generated image item", {
+        removedId: message.id,
+        primaryId: primary.id,
+        primaryImageCount: primary.images?.length || 0,
+        donorImageCount: images.length,
+        donorPromptCount: message.imagePrompts?.length || 0,
       });
     }
 
-    return merged;
+    if (!removeIds.size) {
+      return items;
+    }
+
+    return items.filter((message) => !removeIds.has(message.id));
   }
 
 
@@ -224,7 +532,10 @@
   function renderImagePrompts(imagePrompts) {
     if (!Array.isArray(imagePrompts) || imagePrompts.length === 0) return "";
 
-    return imagePrompts
+    const prompts = imagePrompts.filter(isRenderableImagePrompt);
+    if (!prompts.length) return "";
+
+    return prompts
       .map((item) => {
         const text = CGO.escapeHtml(item?.text || "");
         if (!text) return "";
@@ -235,6 +546,22 @@
         </div>`;
       })
       .join("\n");
+  }
+
+  /**
+   * Decide whether an image prompt entry should be rendered in the export UI.
+   *
+   * @param {Object} item - Prompt entry metadata.
+   * @returns {boolean} `true` when the prompt is visible to the user.
+   */
+  function isRenderableImagePrompt(item) {
+    const source = String(item?.source || "");
+    const text = String(item?.text || "").trim();
+
+    if (!text) return false;
+    if (source === "parent-user-message") return false;
+
+    return true;
   }
 
   /**
@@ -906,10 +1233,10 @@
     </div>
     <div class="message-body">
       ${bodyHtml}
-      ${thoughtsRenderer(message.thoughts || [], message.id)}
       ${imageRenderer(visibleImages)}
       ${renderImagePrompts(message.imagePrompts || [])}
       ${attachmentRenderer(visibleAttachments)}
+      ${thoughtsRenderer(message.thoughts || [], message.id)}
     </div>
   </section>`;
     }).join("\n");

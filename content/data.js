@@ -117,6 +117,10 @@
       return Array.isArray(thoughts) && thoughts.length > 0;
     }
 
+    /*    if (isInternalContextMessage(message)) {
+          return false;
+        }
+    */
     if (isLikelyImageGenerationMessage(message)) {
       return true;
     }
@@ -149,6 +153,35 @@
     const text = getMessageTextForExport(message).trim();
 
     return text.length > 0;
+  }
+
+  /**
+   * Determine whether a message is internal context that should not render as a normal export turn.
+   *
+   * @param {Object} message - Raw conversation message.
+   * @returns {boolean} `true` when the message should stay in mapping but not export as body text.
+   */
+  function isInternalContextMessage(message) {
+    const role = message?.author?.role || "";
+    const metadata = message?.metadata || {};
+
+    if (metadata.is_visually_hidden_from_conversation) {
+      return true;
+    }
+
+    if (metadata.command === "context_stuff") {
+      return true;
+    }
+
+    if (metadata.is_temporal_turn === true) {
+      return true;
+    }
+
+    if (role === "assistant" && metadata.can_save === false) {
+      return true;
+    }
+
+    return false;
   }
 
   /**
@@ -374,9 +407,23 @@
       if (!url || seen.has(url)) continue;
       seen.add(url);
 
+      const meta = part.metadata || {};
+      const generation = meta.generation || {};
+      const dalle = meta.dalle || {};
+      const width = Number(part.width || generation.width || meta.container_pixel_width || 0);
+      const height = Number(part.height || generation.height || meta.container_pixel_height || 0);
+      const fileSizeBytes = Number(
+        part.size_bytes ||
+        part.file_size_bytes ||
+        meta.size_bytes ||
+        meta.file_size_bytes ||
+        0
+      );
       const title =
         message?.metadata?.image_gen_title ||
         message?.metadata?.async_task_title ||
+        generation.prompt ||
+        dalle.prompt ||
         "";
 
       results.push(CGO.normalizeImageMeta({
@@ -386,9 +433,9 @@
         title,
         fileName: part.file_name || "",
         mimeType: part.mime_type || "",
-        fileSizeBytes: Number(part.size_bytes || part.file_size_bytes || 0),
-        width: Number(part.width || 0),
-        height: Number(part.height || 0),
+        fileSizeBytes,
+        width,
+        height,
         source: "tool-asset-pointer",
       }));
     }
@@ -898,6 +945,196 @@
   }
 
   /**
+   * Collect generated-image tool messages from the full conversation mapping.
+   *
+   * @param {Object} mapping - Conversation node map.
+   * @returns {Object[]} Generated-image tool entries with node and parent metadata.
+   */
+  function collectGeneratedImageToolMessagesFromMapping(mapping) {
+    const out = [];
+
+    for (const [id, node] of Object.entries(mapping || {})) {
+      const msg = node?.message;
+      if (!msg) continue;
+      if (!isGeneratedImageToolMessage(msg)) continue;
+
+      out.push({
+        id,
+        node,
+        message: msg,
+        parentId: node?.parent || msg?.metadata?.parent_id || "",
+      });
+    }
+
+    return out;
+  }
+
+  /**
+   * Walk parent links from a message node and find the nearest user ancestor.
+   *
+   * @param {Object} mapping - Conversation node map.
+   * @param {string} messageId - Starting message/node id.
+   * @returns {string} User ancestor node id or an empty string.
+   */
+  function findNearestUserAncestorId(mapping, messageId) {
+    const seen = new Set();
+    let cursor =
+      mapping?.[messageId]?.parent ||
+      mapping?.[messageId]?.message?.metadata?.parent_id ||
+      "";
+
+    while (cursor && mapping?.[cursor] && !seen.has(cursor)) {
+      seen.add(cursor);
+
+      const msg = mapping[cursor]?.message;
+      if (msg?.author?.role === "user") {
+        return cursor;
+      }
+
+      cursor =
+        mapping[cursor]?.parent ||
+        msg?.metadata?.parent_id ||
+        "";
+    }
+
+    return "";
+  }
+
+  /**
+   * Insert a normalized export item after a target item, appending as fallback.
+   *
+   * @param {Object[]} normalized - Mutable normalized export item list.
+   * @param {string} targetId - Target normalized item id.
+   * @param {Object} item - Item to insert.
+   * @returns {string} Insert mode: `"after-target"` or `"append"`.
+   */
+  function insertAfterNormalizedMessage(normalized, targetId, item) {
+    const index = normalized.findIndex((entry) => entry?.id === targetId);
+    if (index < 0) {
+      normalized.push(item);
+      return "append";
+    }
+
+    normalized.splice(index + 1, 0, item);
+    return "after-target";
+  }
+
+  /**
+   * Merge generated-image tool messages while preserving order and deduplicating by id.
+   *
+   * @param {Object[]} primaryTools - Existing tool messages to keep first.
+   * @param {Object[]} donorTools - Additional tool messages to merge in.
+   * @returns {Object[]} Deduplicated tool message list.
+   */
+  function mergeGeneratedToolMessages(primaryTools, donorTools) {
+    const out = [];
+    const seen = new Set();
+
+    for (const tool of [...(primaryTools || []), ...(donorTools || [])]) {
+      if (!tool) continue;
+
+      const id = tool.id || "";
+      if (id) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+      }
+
+      out.push(tool);
+    }
+
+    return out;
+  }
+
+  /**
+   * Merge prompt seed entries while keeping the first occurrence of each prompt text.
+   *
+   * @param {Object[]} primaryPrompts - Existing prompt seed entries.
+   * @param {Object[]} donorPrompts - Additional prompt seed entries.
+   * @returns {Object[]} Deduplicated prompt seed list.
+   */
+  function mergePromptLists(primaryPrompts, donorPrompts) {
+    const out = [];
+    const seen = new Set();
+
+    for (const item of [...(primaryPrompts || []), ...(donorPrompts || [])]) {
+      const text = String(item?.text || "").trim();
+      if (!text || seen.has(text)) continue;
+      seen.add(text);
+      out.push(item);
+    }
+
+    return out;
+  }
+
+  /**
+   * Extract an image prompt from a JSON-parameter message when present.
+   *
+   * @param {Object} message - Message that may contain JSON prompt params.
+   * @returns {string} Prompt text or an empty string.
+   */
+  function extractPromptFromJsonParamMessage(message) {
+    const text = getMessageTextForExport(message || {}).trim();
+    if (!text || !text.startsWith("{") || !text.endsWith("}")) return "";
+
+    try {
+      const data = JSON.parse(text);
+      return typeof data?.prompt === "string" ? data.prompt : "";
+    } catch {
+      return "";
+    }
+  }
+
+  /**
+   * Gather candidate prompt strings that describe a generated-image request.
+   *
+   * @param {Object} parentMessage - Parent user or assistant message.
+   * @param {Object[]} [toolMessages=[]] - Related generated-image tool messages.
+   * @returns {Array<{text: string, source: string}>} Deduplicated prompt seed entries.
+   */
+  function collectGeneratedImagePromptSeeds(parentMessage, toolMessages = []) {
+    const out = [];
+    const seen = new Set();
+
+    /**
+     * Add a prompt seed when it is non-empty and not already registered.
+     *
+     * @param {string} text - Candidate prompt text.
+     * @param {string} source - Metadata describing where the prompt came from.
+     * @returns {void}
+     */
+    function add(text, source) {
+      const value = String(text || "").trim();
+      if (!value || seen.has(value)) return;
+      seen.add(value);
+      out.push({ text: value, source });
+    }
+
+    const jsonPrompt = extractPromptFromJsonParamMessage(parentMessage || {});
+    add(jsonPrompt, "json-prompt");
+
+    for (const hint of extractImageHintsFromMessage(parentMessage || null)) {
+      add(hint, "data-hint");
+    }
+
+    for (const toolMessage of toolMessages || []) {
+      add(toolMessage?.metadata?.image_gen_title, "tool-image-gen-title");
+      add(toolMessage?.metadata?.async_task_title, "tool-async-task-title");
+
+      const parts = Array.isArray(toolMessage?.content?.parts)
+        ? toolMessage.content.parts
+        : [];
+
+      for (const part of parts) {
+        const meta = part?.metadata || {};
+        add(meta?.generation?.prompt, "tool-generation-prompt");
+        add(meta?.dalle?.prompt, "tool-dalle-prompt");
+      }
+    }
+
+    return out;
+  }
+
+  /**
    * Build a synthetic assistant item that proxies generated image tool output.
    *
    * @param {Object} parentMessage - Original parent message.
@@ -953,6 +1190,10 @@
       isVoiceTranscription: false,
       voiceDirection: "",
       hasVoiceAudio: false,
+      _cgoOwnedNodeIds: new Set(),
+      _cgoOwnedContextIds: new Set(),
+      _cgoOwnedToolIds: new Set(),
+      _cgoOwnerUserId: "",
     };
   }
 
@@ -976,6 +1217,16 @@
         : [],
       finished: !!item?.finished,
     }));
+  }
+
+  /**
+   * Read the turn exchange id used to associate related messages in the same exchange.
+   *
+   * @param {Object} message - Message that may carry exchange metadata.
+   * @returns {string} Trimmed turn exchange id or an empty string.
+   */
+  function getMessageTurnExchangeId(message) {
+    return String(message?.metadata?.turn_exchange_id || "").trim();
   }
 
   /**
@@ -1339,6 +1590,456 @@
     const normalized = [];
     const byId = new Map();
     const pendingThoughts = [];
+    const consumedGeneratedToolIds = new Set();
+    const generatedImageSyntheticItems = [];
+    const generatedImageSyntheticByParentId = new Map();
+    const generatedImageSyntheticByContextId = new Map();
+    const generatedImageSyntheticByTurnExchangeId = new Map();
+    const assistantItemsByTurnExchangeId = new Map();
+
+    /**
+     * Index an assistant export item by its turn exchange id for later thought attachment.
+     *
+     * @param {Object} item - Normalized export item.
+     * @returns {void}
+     */
+    function registerAssistantItemByTurnExchangeId(item) {
+      const id = getMessageTurnExchangeId(item?.rawMessage);
+      if (!id || item?.role !== "assistant") return;
+
+      const list = assistantItemsByTurnExchangeId.get(id) || [];
+      list.push(item);
+      assistantItemsByTurnExchangeId.set(id, list);
+    }
+
+    /**
+     * Register a generated-image synthetic assistant item and capture the lineage it owns.
+     *
+     * @param {Object} options - Registration options.
+     * @param {Object} options.syntheticItem - Synthetic assistant export item.
+     * @param {string} [options.parentUserId=""] - Owning user message id.
+     * @param {Object|null} [options.parentMessage=null] - Parent message that spawned the item.
+     * @param {Object[]} [options.toolMessages=[]] - Related generated-image tool messages.
+     * @param {Object} options.mapping - Conversation node map.
+     * @returns {void}
+     */
+    function registerGeneratedImageSyntheticItem({
+      syntheticItem,
+      parentUserId = "",
+      parentMessage = null,
+      toolMessages = [],
+      mapping,
+    }) {
+      if (!syntheticItem) return;
+      if (!generatedImageSyntheticItems.includes(syntheticItem)) {
+        generatedImageSyntheticItems.push(syntheticItem);
+      }
+
+      syntheticItem._cgoOwnedNodeIds ||= new Set();
+      syntheticItem._cgoOwnedContextIds ||= new Set();
+      syntheticItem._cgoOwnedToolIds ||= new Set();
+
+      if (parentUserId) {
+        generatedImageSyntheticByParentId.set(parentUserId, syntheticItem);
+        syntheticItem._cgoOwnerUserId = parentUserId;
+        // parent user は owner としてだけ保持し、owned node には入れない
+        // syntheticItem._cgoOwnedNodeIds.add(parentUserId);
+      }
+
+      if (parentMessage?.id) {
+        syntheticItem._cgoOwnedNodeIds.add(parentMessage.id);
+      }
+
+      const turnExchangeIds = new Set();
+
+      /**
+       * Track a non-empty turn exchange id for synthetic item lookup.
+       *
+       * @param {string} value - Candidate turn exchange id.
+       * @returns {void}
+       */
+      function addTurnExchangeId(value) {
+        const id = String(value || "").trim();
+        if (id) turnExchangeIds.add(id);
+      }
+
+      addTurnExchangeId(parentMessage?.metadata?.turn_exchange_id);
+
+      for (const toolMessage of toolMessages || []) {
+        if (toolMessage?.id) {
+          syntheticItem._cgoOwnedToolIds.add(toolMessage.id);
+          syntheticItem._cgoOwnedNodeIds.add(toolMessage.id);
+        }
+        addTurnExchangeId(toolMessage?.metadata?.turn_exchange_id);
+      }
+
+      for (const id of turnExchangeIds) {
+        generatedImageSyntheticByTurnExchangeId.set(id, syntheticItem);
+      }
+
+      for (const toolMessage of toolMessages || []) {
+        const toolId = toolMessage?.id || "";
+        let cursor = mapping?.[toolId]?.parent || toolMessage?.metadata?.parent_id || "";
+        const seen = new Set();
+
+        /*        while (cursor && mapping?.[cursor] && !seen.has(cursor)) {
+                  seen.add(cursor);
+        
+                  const msg = mapping[cursor]?.message;
+                  syntheticItem._cgoOwnedNodeIds.add(cursor);
+                  if (msg?.content?.content_type === "model_editable_context") {
+                    generatedImageSyntheticByContextId.set(cursor, syntheticItem);
+                    syntheticItem._cgoOwnedContextIds.add(cursor);
+                    addTurnExchangeId(msg?.metadata?.turn_exchange_id);
+                  }
+        
+                  if (msg?.author?.role === "user") {
+                    break;
+                  }
+        
+                  cursor = mapping[cursor]?.parent || msg?.metadata?.parent_id || "";
+                }*/
+        while (cursor && mapping?.[cursor] && !seen.has(cursor)) {
+          seen.add(cursor);
+
+          const msg = mapping[cursor]?.message;
+
+          if (msg?.author?.role === "user") {
+            break;
+          }
+
+          syntheticItem._cgoOwnedNodeIds.add(cursor);
+
+          if (msg?.content?.content_type === "model_editable_context") {
+            generatedImageSyntheticByContextId.set(cursor, syntheticItem);
+            syntheticItem._cgoOwnedContextIds.add(cursor);
+            addTurnExchangeId(msg?.metadata?.turn_exchange_id);
+          }
+
+          cursor = mapping[cursor]?.parent || msg?.metadata?.parent_id || "";
+        }
+      }
+
+      for (const id of turnExchangeIds) {
+        generatedImageSyntheticByTurnExchangeId.set(id, syntheticItem);
+      }
+    }
+
+    /**
+     * Resolve the best generated-image synthetic item by matching a thought against owned lineage.
+     *
+     * @param {string} thoughtId - Thought message id.
+     * @returns {Object|null} Best matching synthetic item or `null`.
+     */
+    function findGeneratedImageSyntheticTargetByOwnership(thoughtId) {
+      if (!thoughtId || !mapping?.[thoughtId] || !generatedImageSyntheticItems.length) {
+        return null;
+      }
+
+      const thoughtMessage = mapping[thoughtId]?.message || null;
+      const sourceAnalysisId =
+        thoughtMessage?.content?.source_analysis_msg_id ||
+        thoughtMessage?.metadata?.source_analysis_msg_id ||
+        "";
+
+      let bestTarget = null;
+      let bestScore = 0;
+
+      /**
+       * Promote a synthetic item when it is a stronger ownership match.
+       *
+       * @param {Object|null} syntheticItem - Candidate synthetic item.
+       * @param {number} score - Match score where higher is better.
+       * @returns {void}
+       */
+      function considerCandidate(syntheticItem, score) {
+        if (!syntheticItem || score <= bestScore) return;
+        bestTarget = syntheticItem;
+        bestScore = score;
+      }
+
+      for (const syntheticItem of generatedImageSyntheticItems) {
+        const ownedNodeIds = syntheticItem?._cgoOwnedNodeIds;
+        const ownedContextIds = syntheticItem?._cgoOwnedContextIds;
+        if (!(ownedNodeIds instanceof Set) || !(ownedContextIds instanceof Set)) continue;
+
+        if (sourceAnalysisId) {
+          if (ownedContextIds.has(sourceAnalysisId)) {
+            considerCandidate(syntheticItem, 1000);
+            continue;
+          }
+          if (ownedNodeIds.has(sourceAnalysisId)) {
+            considerCandidate(syntheticItem, 900);
+          }
+        }
+      }
+
+      {
+        const seen = new Set();
+        let cursor = mapping[thoughtId]?.parent || thoughtMessage?.metadata?.parent_id || "";
+        let depth = 0;
+
+        while (cursor && mapping?.[cursor] && !seen.has(cursor)) {
+          seen.add(cursor);
+
+          for (const syntheticItem of generatedImageSyntheticItems) {
+            const ownedNodeIds = syntheticItem?._cgoOwnedNodeIds;
+            const ownedContextIds = syntheticItem?._cgoOwnedContextIds;
+            if (!(ownedNodeIds instanceof Set) || !(ownedContextIds instanceof Set)) continue;
+
+            if (ownedContextIds.has(cursor)) {
+              considerCandidate(syntheticItem, 800 - depth);
+            } else if (ownedNodeIds.has(cursor)) {
+              considerCandidate(syntheticItem, 600 - depth);
+            }
+          }
+
+          const msg = mapping[cursor]?.message;
+          if (msg?.author?.role === "user") {
+            break;
+          }
+
+          cursor = mapping[cursor]?.parent || msg?.metadata?.parent_id || "";
+          depth += 1;
+        }
+      }
+
+      return bestTarget;
+    }
+
+    /**
+     * Resolve a generated-image synthetic item from a context node using registered bridges.
+     *
+     * @param {string} contextId - Candidate context message id.
+     * @param {Object} [options={}] - Lookup options.
+     * @param {boolean} [options.requireRegisteredContext=false] - Whether to stop unless the context is already registered.
+     * @returns {Object|null} Matching synthetic item or `null`.
+     */
+    function findGeneratedImageSyntheticByContextBridge(contextId, options = {}) {
+      const requireRegisteredContext = !!options.requireRegisteredContext;
+      if (!contextId || !mapping?.[contextId]) return null;
+
+      const byContext = generatedImageSyntheticByContextId.get(contextId);
+      if (byContext) return byContext;
+
+      if (requireRegisteredContext) {
+        return null;
+      }
+
+      const contextMessage = mapping[contextId]?.message || null;
+      const turnExchangeId = contextMessage?.metadata?.turn_exchange_id || "";
+      if (turnExchangeId) {
+        const byTurn = generatedImageSyntheticByTurnExchangeId.get(turnExchangeId);
+        if (byTurn) return byTurn;
+      }
+
+      const userAncestorId = findNearestUserAncestorId(mapping, contextId);
+      if (userAncestorId) {
+        const byUser = generatedImageSyntheticByParentId.get(userAncestorId);
+        if (byUser) {
+          generatedImageSyntheticByContextId.set(contextId, byUser);
+          if (turnExchangeId) {
+            generatedImageSyntheticByTurnExchangeId.set(turnExchangeId, byUser);
+          }
+          return byUser;
+        }
+      }
+
+      return null;
+    }
+
+    /**
+     * Resolve a generated-image synthetic item for a thought via context and lineage bridges.
+     *
+     * @param {string} thoughtId - Thought message id.
+     * @param {Object} [options={}] - Lookup options.
+     * @param {boolean} [options.allowUserAncestorFallback=false] - Whether to allow a final user-ancestor fallback.
+     * @param {boolean} [options.allowTurnExchangeFallback=false] - Whether to allow turn-exchange fallback lookups.
+     * @param {boolean} [options.requireRegisteredContext=false] - Whether context lookups must already be registered.
+     * @returns {Object|null} Matching synthetic item or `null`.
+     */
+    function findGeneratedImageSyntheticTargetForThought(thoughtId, options = {}) {
+      const allowUserAncestorFallback = !!options.allowUserAncestorFallback;
+      const allowTurnExchangeFallback = !!options.allowTurnExchangeFallback;
+      const requireRegisteredContext = !!options.requireRegisteredContext;
+      if (!thoughtId || !mapping?.[thoughtId]) return null;
+
+      const thoughtMessage = mapping[thoughtId]?.message || null;
+
+      const sourceAnalysisId =
+        thoughtMessage?.content?.source_analysis_msg_id ||
+        thoughtMessage?.metadata?.source_analysis_msg_id ||
+        "";
+
+      if (sourceAnalysisId) {
+        const bySourceBridge = findGeneratedImageSyntheticByContextBridge(sourceAnalysisId, {
+          requireRegisteredContext,
+        });
+        if (bySourceBridge) return bySourceBridge;
+
+        if (allowTurnExchangeFallback) {
+          const sourceMsg = mapping?.[sourceAnalysisId]?.message || null;
+          const sourceTurnExchangeId = getMessageTurnExchangeId(sourceMsg);
+          if (sourceTurnExchangeId) {
+            const bySourceTurn = generatedImageSyntheticByTurnExchangeId.get(sourceTurnExchangeId);
+            if (bySourceTurn) return bySourceTurn;
+          }
+        }
+      }
+
+      {
+        const seen = new Set();
+        let cursor = mapping[thoughtId]?.parent || thoughtMessage?.metadata?.parent_id || "";
+
+        while (cursor && mapping?.[cursor] && !seen.has(cursor)) {
+          seen.add(cursor);
+
+          const msg = mapping[cursor]?.message;
+
+          if (msg?.content?.content_type === "model_editable_context") {
+            const byBridge = findGeneratedImageSyntheticByContextBridge(cursor, {
+              requireRegisteredContext,
+            });
+            if (byBridge) return byBridge;
+          }
+
+          if (allowTurnExchangeFallback) {
+            const turnExchangeId = msg?.metadata?.turn_exchange_id || "";
+            if (turnExchangeId) {
+              const byTurn = generatedImageSyntheticByTurnExchangeId.get(turnExchangeId);
+              if (byTurn) return byTurn;
+            }
+          }
+
+          cursor = mapping[cursor]?.parent || msg?.metadata?.parent_id || "";
+        }
+      }
+
+      if (allowUserAncestorFallback) {
+        const parentUserMessageId = findNearestUserAncestorId(mapping, thoughtId);
+        if (parentUserMessageId) {
+          return generatedImageSyntheticByParentId.get(parentUserMessageId) || null;
+        }
+      }
+
+      return null;
+    }
+
+    /**
+     * Detect thoughts that clearly belong to file-search, citation, or similar tool workflows.
+     *
+     * @param {Object} message - Thought message.
+     * @param {Object} mapping - Conversation node map.
+     * @returns {boolean} `true` when the thought should be excluded from image-generation attachment.
+     */
+    function isToolOrCitationThought(message, mapping) {
+      const text = normalizeThoughtsForExport(message)
+        .map((item) => `${item.summary || ""}\n${item.content || ""}`)
+        .join("\n")
+        .toLowerCase();
+
+      if (
+        text.includes("citation") ||
+        text.includes("filecite") ||
+        text.includes("file_search") ||
+        text.includes("mclick") ||
+        text.includes("msearch") ||
+        text.includes("source_filter") ||
+        text.includes("line number") ||
+        text.includes("code review")
+      ) {
+        return true;
+      }
+
+      const sourceAnalysisId =
+        message?.content?.source_analysis_msg_id ||
+        message?.metadata?.source_analysis_msg_id ||
+        "";
+
+      const sourceMsg = sourceAnalysisId ? mapping?.[sourceAnalysisId]?.message : null;
+      if (sourceMsg?.author?.role === "tool") {
+        const toolName = String(sourceMsg?.author?.name || "").toLowerCase();
+        if (
+          toolName.includes("file_search") ||
+          toolName.includes("filecite") ||
+          toolName.includes("msearch") ||
+          toolName.includes("mclick") ||
+          toolName.includes("source_filter")
+        ) {
+          return true;
+        }
+      }
+
+      return false;
+    }
+
+    /**
+     * Detect whether a thought is likely related to image generation.
+     *
+     * @param {Object} message - Thought message.
+     * @param {Object} mapping - Conversation node map.
+     * @returns {boolean} `true` when the thought appears to belong to image generation.
+     */
+    function isImageGenerationThought(message, mapping) {
+      if (!message) return false;
+
+      if (isToolOrCitationThought(message, mapping)) {
+        return false;
+      }
+
+      const sourceAnalysisId =
+        message?.content?.source_analysis_msg_id ||
+        message?.metadata?.source_analysis_msg_id ||
+        "";
+
+      if (sourceAnalysisId) {
+        const sourceMsg = mapping?.[sourceAnalysisId]?.message;
+        if (sourceMsg && isGeneratedImageToolMessage(sourceMsg)) return true;
+        if (sourceMsg && isLikelyImageGenerationMessage(sourceMsg)) return true;
+
+        const sourceBridge = findGeneratedImageSyntheticByContextBridge(sourceAnalysisId);
+        if (sourceBridge) return true;
+      }
+
+      const seen = new Set();
+      let cursor = mapping?.[message?.id]?.parent || message?.metadata?.parent_id || "";
+
+      while (cursor && mapping?.[cursor] && !seen.has(cursor)) {
+        seen.add(cursor);
+        const msg = mapping[cursor]?.message;
+
+        if (isGeneratedImageToolMessage(msg)) return true;
+        if (isLikelyImageGenerationMessage(msg)) return true;
+
+        if (msg?.content?.content_type === "model_editable_context") {
+          if (generatedImageSyntheticByContextId.has(cursor)) return true;
+        }
+
+        cursor = mapping[cursor]?.parent || msg?.metadata?.parent_id || "";
+      }
+
+      return false;
+    }
+
+    /**
+     * Find a normal assistant export item that shares the thought's turn exchange id.
+     *
+     * @param {Object} thoughtMessage - Thought message.
+     * @returns {Object|null} Matching assistant export item or `null`.
+     */
+    function findAssistantTargetForThoughtByTurnExchangeId(thoughtMessage) {
+      const turnExchangeId = getMessageTurnExchangeId(thoughtMessage);
+      if (!turnExchangeId) return null;
+
+      const items = assistantItemsByTurnExchangeId.get(turnExchangeId) || [];
+
+      const normalAssistant = items.find(
+        (item) => item?.role === "assistant" && !String(item?.id || "").includes(":generated-image")
+      );
+      if (normalAssistant) return normalAssistant;
+
+      return null;
+    }
 
     for (const msg of chain) {
       if (!isExportableMessage(msg)) continue;
@@ -1392,16 +2093,17 @@
 
       normalized.push(item);
       byId.set(item.id, item);
+      registerAssistantItemByTurnExchangeId(item);
 
       if (
         msg.author?.role === "user" &&
         generatedImageToolMessages.length > 0
       ) {
-        CGO.log("[export] split generated image tool messages", {
-          parentId: msg.id,
-          parentRole: msg.author?.role,
-          generatedToolMessageIds: generatedImageToolMessages.map((toolMessage) => toolMessage.id),
-        });
+        for (const toolMessage of generatedImageToolMessages) {
+          if (toolMessage?.id) {
+            consumedGeneratedToolIds.add(toolMessage.id);
+          }
+        }
 
         let syntheticId = `${msg.id}:generated-image`;
         let syntheticIndex = 1;
@@ -1415,15 +2117,147 @@
           generatedImageToolMessages,
           syntheticId
         );
+        const directImages = collectImageAssetsFromMessage(msg, generatedImageToolMessages);
+        syntheticItem.dataImages =
+          typeof CGO.mergeImageListsPreferData === "function"
+            ? CGO.mergeImageListsPreferData(syntheticItem.dataImages || [], directImages)
+            : CGO.dedupeImages([...(syntheticItem.dataImages || []), ...directImages]);
+        syntheticItem.imagePromptSeeds = mergePromptLists(
+          syntheticItem.imagePromptSeeds || [],
+          collectGeneratedImagePromptSeeds(msg, generatedImageToolMessages)
+        );
 
         normalized.push(syntheticItem);
         byId.set(syntheticItem.id, syntheticItem);
+        registerAssistantItemByTurnExchangeId(syntheticItem);
+        registerGeneratedImageSyntheticItem({
+          syntheticItem,
+          parentUserId: msg.id,
+          parentMessage: msg,
+          toolMessages: generatedImageToolMessages,
+          mapping,
+        });
       }
     }
 
+    const generatedToolEntries = collectGeneratedImageToolMessagesFromMapping(mapping);
+
+    for (const entry of generatedToolEntries) {
+      const toolMessage = entry.message;
+      const toolId = toolMessage?.id || entry.id;
+
+      if (!toolId || consumedGeneratedToolIds.has(toolId)) {
+        continue;
+      }
+
+      const userAncestorId = findNearestUserAncestorId(mapping, toolId);
+      const parentItem = userAncestorId ? byId.get(userAncestorId) : null;
+      const parentMessage =
+        parentItem?.rawMessage ||
+        (userAncestorId ? mapping?.[userAncestorId]?.message : null) ||
+        {
+          id: entry.parentId || toolId,
+          create_time: toolMessage?.create_time ?? null,
+          metadata: {},
+        };
+      const parentUserMessageId =
+        userAncestorId ||
+        (parentMessage?.author?.role === "user" ? parentMessage.id || "" : "");
+      const existingSyntheticItem = parentUserMessageId
+        ? generatedImageSyntheticByParentId.get(parentUserMessageId)
+        : null;
+
+      if (existingSyntheticItem) {
+        existingSyntheticItem.toolMessages = mergeGeneratedToolMessages(
+          existingSyntheticItem.toolMessages,
+          [toolMessage]
+        );
+
+        const recoveredImages = collectImageAssetsFromMessage(parentMessage, [toolMessage]);
+        existingSyntheticItem.dataImages =
+          typeof CGO.mergeImageListsPreferData === "function"
+            ? CGO.mergeImageListsPreferData(
+              existingSyntheticItem.dataImages || [],
+              recoveredImages
+            )
+            : CGO.dedupeImages([
+              ...(existingSyntheticItem.dataImages || []),
+              ...recoveredImages,
+            ]);
+        existingSyntheticItem.imagePromptSeeds = mergePromptLists(
+          existingSyntheticItem.imagePromptSeeds || [],
+          collectGeneratedImagePromptSeeds(parentMessage, [toolMessage])
+        );
+
+        consumedGeneratedToolIds.add(toolId);
+        registerGeneratedImageSyntheticItem({
+          syntheticItem: existingSyntheticItem,
+          parentUserId: parentUserMessageId || userAncestorId || "",
+          parentMessage,
+          toolMessages: [toolMessage],
+          mapping,
+        });
+
+        continue;
+      }
+
+      let syntheticId = `${parentMessage.id || toolId}:generated-image`;
+      let syntheticIndex = 1;
+      while (byId.has(syntheticId)) {
+        syntheticId = `${parentMessage.id || toolId}:generated-image:${syntheticIndex}`;
+        syntheticIndex += 1;
+      }
+
+      const syntheticItem = buildSyntheticGeneratedImageAssistantItem(
+        parentMessage,
+        [toolMessage],
+        syntheticId
+      );
+      syntheticItem.imagePromptSeeds = mergePromptLists(
+        syntheticItem.imagePromptSeeds || [],
+        collectGeneratedImagePromptSeeds(parentMessage, [toolMessage])
+      );
+
+      const insertMode = insertAfterNormalizedMessage(
+        normalized,
+        userAncestorId,
+        syntheticItem
+      );
+
+      byId.set(syntheticItem.id, syntheticItem);
+      registerAssistantItemByTurnExchangeId(syntheticItem);
+      consumedGeneratedToolIds.add(toolId);
+      registerGeneratedImageSyntheticItem({
+        syntheticItem,
+        parentUserId: parentUserMessageId || userAncestorId || "",
+        parentMessage,
+        toolMessages: [toolMessage],
+        mapping,
+      });
+
+    }
+
     for (const entry of pendingThoughts) {
-      const targetId = findThoughtTargetMessageId(entry.id, mapping);
-      const target = targetId ? byId.get(targetId) : null;
+      const thoughtMessage = mapping?.[entry.id]?.message || null;
+      const toolOrCitationThought = isToolOrCitationThought(thoughtMessage, mapping);
+      const ownershipGeneratedImageTarget = !toolOrCitationThought
+        ? findGeneratedImageSyntheticTargetByOwnership(entry.id)
+        : null;
+      const imageThought = !!ownershipGeneratedImageTarget;
+      let target = null;
+
+      if (ownershipGeneratedImageTarget) {
+        target = ownershipGeneratedImageTarget;
+      }
+
+      if (!target) {
+        target = findAssistantTargetForThoughtByTurnExchangeId(thoughtMessage);
+      }
+
+      if (!target) {
+        const targetId = findThoughtTargetMessageId(entry.id, mapping);
+        target = targetId ? byId.get(targetId) : null;
+      }
 
       if (target) {
         target.thoughts.push(...entry.thoughts);
