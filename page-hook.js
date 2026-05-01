@@ -1614,11 +1614,21 @@
   }
 
   /**
+   * Normalize stream topic ids that may be emitted with or without the conversation-turn prefix.
+   * @param {*} topicId - Raw stream topic identifier.
+   * @returns {string} Normalized topic id suitable for stream state and lookup keys.
+   */
+  function normalizeStreamTopicId(topicId) {
+    const value = String(topicId || "");
+    return value.replace(/^conversation-turn-/, "");
+  }
+
+  /**
    * Extracts a topic identifier from several possible payload shapes.
    * @param {object} payload - Object that may contain `topic_id` directly or nested under `v`, `data`, `payload`, or `body`.
-   * @returns {string} The topic id if present, otherwise an empty string.
+   * @returns {string} The raw topic id if present, otherwise an empty string.
    */
-  function getTopicIdFromPayload(payload) {
+  function getRawTopicIdFromPayload(payload) {
     if (!payload || typeof payload !== "object") return "";
     return (
       payload.topic_id ||
@@ -1628,6 +1638,15 @@
       payload?.body?.topic_id ||
       ""
     );
+  }
+
+  /**
+   * Extracts and normalizes a topic identifier from several possible payload shapes.
+   * @param {object} payload - Object that may contain `topic_id` directly or nested under `v`, `data`, `payload`, or `body`.
+   * @returns {string} The normalized topic id if present, otherwise an empty string.
+   */
+  function getTopicIdFromPayload(payload) {
+    return normalizeStreamTopicId(getRawTopicIdFromPayload(payload));
   }
 
   /**
@@ -1887,6 +1906,7 @@
           payload?.payload?.turn_id ||
           payload?.topic_id ||
           "encoded_item";
+        const normalizedTopicId = normalizeStreamTopicId(topicId);
 
         const conversationId = payload?.payload?.conversation_id || "";
         if (conversationId) {
@@ -1898,8 +1918,8 @@
         processSseBlock(
           payload.payload.encoded_item,
           handleSseEvent,
-          getWsStreamParserState(topicId),
-          { url: `ws:${topicId}`, topicId }
+          getWsStreamParserState(normalizedTopicId),
+          { url: `ws:${topicId}`, topicId: normalizedTopicId, rawTopicId: topicId }
         );
         return;
       }
@@ -1970,10 +1990,11 @@
    * @returns {{currentEventName: string}} The parser state object for the topic; contains `currentEventName` (defaults to "message").
    */
   function getWsStreamParserState(topicId) {
-    let state = WS_STREAM_PARSER_STATE.get(topicId);
+    const normalizedTopicId = normalizeStreamTopicId(topicId);
+    let state = WS_STREAM_PARSER_STATE.get(normalizedTopicId);
     if (!state) {
       state = { currentEventName: "message" };
-      WS_STREAM_PARSER_STATE.set(topicId, state);
+      WS_STREAM_PARSER_STATE.set(normalizedTopicId, state);
     }
     return state;
   }
@@ -2452,11 +2473,12 @@
 
     if (!conversationId) return;
 
-    const topicId =
+    const rawTopicId =
       body.topic_id ||
       body.topicId ||
       body.stream_topic_id ||
       "";
+    const topicId = normalizeStreamTopicId(rawTopicId);
 
     const cache = ensureConversationCache(conversationId);
     ensureStreamState(conversationId, topicId);
@@ -2602,6 +2624,14 @@
     if (!Array.isArray(streamState.pendingOps) || !streamState.pendingOps.length) return;
 
     const ops = streamState.pendingOps.splice(0, streamState.pendingOps.length);
+    log("[stream:delta-queue]", {
+      action: "flush",
+      currentPatchedMessageId: streamState.currentPatchedMessageId,
+      opCount: ops.length,
+      firstPath: ops[0]?.p || "",
+      firstOperation: ops[0]?.o || "",
+      pendingOpsCount: streamState.pendingOps.length,
+    });
     applyDeltaOpsToMessage(cache, streamState.currentPatchedMessageId, ops);
   }
 
@@ -2669,7 +2699,8 @@
    * @returns {string} The stream state key: `<conversationId>::<topicId>` if `topicId` is provided, otherwise `conversationId`.
    */
   function getStreamStateKey(conversationId, topicId = "") {
-    return topicId ? `${conversationId}::${topicId}` : conversationId;
+    const normalizedTopicId = normalizeStreamTopicId(topicId);
+    return normalizedTopicId ? `${conversationId}::${normalizedTopicId}` : conversationId;
   }
 
   /**
@@ -2696,6 +2727,11 @@
         lastTextAppendOp: null,
         pendingGeneratedImageContent: null,
         lastInputMessageId: "",
+        appliedDeltaSignatures: new Map(),
+        appliedDeltaSignatureOrder: [],
+        rawShapeLogCount: 0,
+        recentPayloadShapeSignatures: new Map(),
+        recentPayloadShapeSignatureOrder: [],
       };
       STREAM_STATE.set(key, streamState);
     }
@@ -2716,7 +2752,527 @@
       streamState.lastInputMessageId = "";
     }
 
+    if (!(streamState.appliedDeltaSignatures instanceof Map)) {
+      streamState.appliedDeltaSignatures = new Map();
+    }
+
+    if (!Array.isArray(streamState.appliedDeltaSignatureOrder)) {
+      streamState.appliedDeltaSignatureOrder = [];
+    }
+
+    if (typeof streamState.rawShapeLogCount !== "number") {
+      streamState.rawShapeLogCount = 0;
+    }
+
+    if (!(streamState.recentPayloadShapeSignatures instanceof Map)) {
+      streamState.recentPayloadShapeSignatures = new Map();
+    }
+
+    if (!Array.isArray(streamState.recentPayloadShapeSignatureOrder)) {
+      streamState.recentPayloadShapeSignatureOrder = [];
+    }
+
     return streamState;
+  }
+
+  /**
+   * Return a short text preview for debug logging without exposing long message bodies.
+   * @param {*} value - Candidate text value.
+   * @param {number} [max=100] - Maximum number of characters to include.
+   * @returns {string} Truncated preview string.
+   */
+  function previewText(value, max = 100) {
+    if (typeof value !== "string") return "";
+    return value.slice(0, max);
+  }
+
+  /**
+   * Read the first text part from a message, if present.
+   * @param {Object} message - Message-like object.
+   * @returns {string} First string content part or an empty string.
+   */
+  function getTextPart0(message) {
+    const part = message?.content?.parts?.[0];
+    return typeof part === "string" ? part : "";
+  }
+
+  /**
+   * Count all string content parts in a message without logging the full text.
+   * @param {Object} message - Message-like object.
+   * @returns {number} Total string content length.
+   */
+  function getMessageTextLength(message) {
+    const parts = Array.isArray(message?.content?.parts)
+      ? message.content.parts
+      : [];
+    return parts.reduce((total, part) =>
+      total + (typeof part === "string" ? part.length : 0), 0);
+  }
+
+  /**
+   * Hash only string values for compact diagnostic logging.
+   * @param {*} value - Candidate string.
+   * @returns {string} Stable hash or an empty string for non-strings.
+   */
+  function getStringHash(value) {
+    return typeof value === "string" ? hash(value) : "";
+  }
+
+  /**
+   * Find the overlap where current text's suffix equals incoming text's prefix.
+   * @param {*} current - Current accumulated text.
+   * @param {*} incoming - Incoming append text.
+   * @param {number} [minOverlap=4] - Minimum overlap length to consider meaningful.
+   * @returns {number} Overlap length, or 0 when no meaningful overlap exists.
+   */
+  function getTextAppendOverlapLength(current, incoming, minOverlap = 4) {
+    const a = String(current || "");
+    const b = String(incoming || "");
+    const max = Math.min(a.length, b.length);
+
+    for (let len = max; len >= minOverlap; len -= 1) {
+      if (a.slice(-len) === b.slice(0, len)) {
+        return len;
+      }
+    }
+
+    return 0;
+  }
+
+  /**
+   * Append streamed text while avoiding duplicate overlap from snapshot-like final deltas.
+   * @param {*} current - Current accumulated text.
+   * @param {*} incoming - Incoming append text.
+   * @returns {{text: string, mode: string, overlapLength: number}} Append result and diagnostic mode.
+   */
+  function appendTextDeltaSafely(current, incoming) {
+    const a = String(current || "");
+    const b = String(incoming || "");
+
+    if (!b) {
+      return {
+        text: a,
+        mode: "empty",
+        overlapLength: 0,
+      };
+    }
+
+    if (!a) {
+      return {
+        text: b,
+        mode: "plain",
+        overlapLength: 0,
+      };
+    }
+
+    if (b === a) {
+      return {
+        text: a,
+        mode: "same-skip",
+        overlapLength: b.length,
+      };
+    }
+
+    if (b.startsWith(a)) {
+      return {
+        text: b,
+        mode: "incoming-starts-with-current",
+        overlapLength: a.length,
+      };
+    }
+
+    if (b.length >= 4 && a.endsWith(b)) {
+      return {
+        text: a,
+        mode: "current-ends-with-incoming",
+        overlapLength: b.length,
+      };
+    }
+
+    const overlapLength = getTextAppendOverlapLength(a, b, 4);
+    if (overlapLength >= 4) {
+      return {
+        text: a + b.slice(overlapLength),
+        mode: "suffix-prefix-overlap",
+        overlapLength,
+      };
+    }
+
+    return {
+      text: a + b,
+      mode: "plain",
+      overlapLength: 0,
+    };
+  }
+
+  /**
+   * Summarize stream meta fields without logging full URLs or payloads.
+   * @param {Object} meta - Stream event metadata.
+   * @returns {Object} Source/transport summary.
+   */
+  function summarizeStreamMeta(meta) {
+    const url = typeof meta?.url === "string" ? meta.url : "";
+    return {
+      source: meta?.source || "",
+      transport: meta?.transport || "",
+      metaSource: meta?.source || "",
+      urlScheme: url ? url.split(":")[0] : "",
+    };
+  }
+
+  /**
+   * Return a compact payload type label for raw stream diagnostics.
+   * @param {*} payload - Stream payload.
+   * @returns {string} Type label.
+   */
+  function getPayloadTypeLabel(payload) {
+    if (payload === null) return "null";
+    if (Array.isArray(payload)) return "Array";
+    return typeof payload;
+  }
+
+  /**
+   * Summarize sequence-like fields without including full payload data.
+   * @param {Object} payload - Stream payload.
+   * @returns {Object} Sequence/cursor/index field summary.
+   */
+  function summarizePayloadSequenceFields(payload) {
+    if (!payload || typeof payload !== "object") return {};
+    return {
+      sequence: payload.sequence ?? null,
+      seq: payload.seq ?? null,
+      index: payload.index ?? null,
+      offset: payload.offset ?? null,
+      cursor: payload.cursor ?? null,
+      message_sequence: payload.message_sequence ?? null,
+      part_index: payload.part_index ?? null,
+    };
+  }
+
+  /**
+   * Summarize id-like fields without including message bodies.
+   * @param {Object} payload - Stream payload.
+   * @returns {Object} Identifier field summary.
+   */
+  function summarizePayloadIdFields(payload) {
+    if (!payload || typeof payload !== "object") return {};
+    return {
+      id: payload.id || "",
+      messageId: payload.message?.id || "",
+      vMessageId: payload.v?.message?.id || "",
+      itemId: payload.item_id || "",
+      message_id: payload.message_id || "",
+      node_id: payload.node_id || "",
+      turn_id: payload.turn_id || "",
+      turn_exchange_id: payload.turn_exchange_id || "",
+      conversation_turn_id: payload.conversation_turn_id || "",
+    };
+  }
+
+  /**
+   * Summarize path-like fields useful for stream routing diagnostics.
+   * @param {Object} payload - Stream payload.
+   * @returns {Object} Path and parent field summary.
+   */
+  function summarizePayloadPathFields(payload) {
+    if (!payload || typeof payload !== "object") return {};
+    return {
+      p: payload.p || "",
+      path: payload.path || "",
+      parent: payload.parent || "",
+      parent_id: payload.parent_id || payload.message?.metadata?.parent_id || "",
+      node_id: payload.node_id || "",
+      item_id: payload.item_id || "",
+    };
+  }
+
+  /**
+   * Summarize a payload `v` field without logging full text.
+   * @param {*} value - Payload v field.
+   * @returns {Object} Compact v field summary.
+   */
+  function summarizePayloadValueField(value) {
+    if (typeof value === "string") {
+      return {
+        type: "string",
+        length: value.length,
+        hash: getStringHash(value),
+        preview: previewText(value, 100),
+      };
+    }
+
+    if (Array.isArray(value)) {
+      return {
+        type: "array",
+        length: value.length,
+        firstItems: value.slice(0, 3).map((item) => ({
+          p: item?.p || "",
+          o: item?.o || "",
+          type: item?.type || "",
+          keys: item && typeof item === "object" ? Object.keys(item).slice(0, 20) : [],
+        })),
+      };
+    }
+
+    if (value && typeof value === "object") {
+      return {
+        type: "object",
+        keys: Object.keys(value).slice(0, 30),
+      };
+    }
+
+    return {
+      type: value === null ? "null" : typeof value,
+    };
+  }
+
+  /**
+   * Build a lightweight payload signature without including full text.
+   * @param {*} payload - Stream payload.
+   * @returns {string} Shape signature.
+   */
+  function buildPayloadShapeSignature(payload) {
+    const payloadType = getPayloadTypeLabel(payload);
+    if (!payload || typeof payload !== "object") {
+      return `${payloadType}:${String(payload ?? "")}`;
+    }
+
+    const keys = Array.isArray(payload)
+      ? [`length:${payload.length}`]
+      : Object.keys(payload).slice(0, 30);
+    const v = payload.v;
+    const vType = Array.isArray(v) ? "array" : typeof v;
+    const vMarker = typeof v === "string"
+      ? `${v.length}:${getStringHash(v)}`
+      : Array.isArray(v)
+        ? `array:${v.length}:${v.slice(0, 3).map((op) => `${op?.p || ""}:${op?.o || ""}`).join(",")}`
+        : v && typeof v === "object"
+          ? `object:${Object.keys(v).slice(0, 10).join(",")}`
+          : String(v ?? "");
+
+    return [
+      payloadType,
+      keys.join(","),
+      payload.type || "",
+      payload.kind || "",
+      payload.event || "",
+      payload.command?.type || "",
+      payload.reply?.type || "",
+      payload.id || "",
+      payload.message?.id || "",
+      payload.v?.message?.id || "",
+      payload.item_id || "",
+      payload.message_id || "",
+      payload.node_id || "",
+      payload.turn_id || "",
+      payload.turn_exchange_id || "",
+      payload.conversation_turn_id || "",
+      payload.p || "",
+      payload.o || "",
+      vType,
+      vMarker,
+    ].join("|");
+  }
+
+  /**
+   * Build a raw event shape summary without full text.
+   * @param {*} payload - Stream payload.
+   * @returns {Object} Shape summary.
+   */
+  function summarizeRawEventShape(payload) {
+    const isObject = payload && typeof payload === "object";
+    return {
+      payloadType: getPayloadTypeLabel(payload),
+      topLevelKeys: isObject ? Object.keys(payload).slice(0, 30) : [],
+      type: isObject ? payload.type || "" : "",
+      kind: isObject ? payload.kind || "" : "",
+      event: isObject ? payload.event || "" : "",
+      commandType: isObject ? payload.command?.type || "" : "",
+      replyType: isObject ? payload.reply?.type || "" : "",
+      ids: summarizePayloadIdFields(payload),
+      sequenceFields: summarizePayloadSequenceFields(payload),
+      delta: isObject ? {
+        p: payload.p || "",
+        o: payload.o || "",
+        v: summarizePayloadValueField(payload.v),
+      } : {},
+      pathFields: summarizePayloadPathFields(payload),
+    };
+  }
+
+  /**
+   * Keep the raw shape diagnostics bounded per stream state.
+   * @param {Object} streamState - Per-stream state bucket.
+   * @returns {boolean} True when another raw-shape log may be emitted.
+   */
+  function shouldLogRawShape(streamState) {
+    if (!CONFIG.debug) return false;
+    if (!streamState) return false;
+    if (streamState.rawShapeLogCount >= 120) return false;
+    streamState.rawShapeLogCount += 1;
+    return true;
+  }
+
+  /**
+   * Prune recently seen payload shape signatures.
+   * @param {Object} streamState - Per-stream state bucket.
+   * @param {number} now - Current timestamp in milliseconds.
+   * @returns {void}
+   */
+  function pruneRecentPayloadShapeSignatures(streamState, now) {
+    const maxSignatures = 200;
+    const maxAgeMs = 60000;
+    const signatures = streamState.recentPayloadShapeSignatures;
+    const order = streamState.recentPayloadShapeSignatureOrder;
+
+    while (order.length) {
+      const signature = order[0];
+      const seenAt = signatures.get(signature);
+      if (seenAt && now - seenAt <= maxAgeMs && order.length <= maxSignatures) {
+        break;
+      }
+      order.shift();
+      signatures.delete(signature);
+    }
+  }
+
+  /**
+   * Check and remember a raw payload shape signature for diagnostics.
+   * @param {Object} streamState - Per-stream state bucket.
+   * @param {string} signature - Payload shape signature.
+   * @param {number} now - Current timestamp in milliseconds.
+   * @returns {boolean} True when the signature was seen recently.
+   */
+  function rememberPayloadShapeSignature(streamState, signature, now) {
+    pruneRecentPayloadShapeSignatures(streamState, now);
+    const alreadySeen = streamState.recentPayloadShapeSignatures.has(signature);
+    if (!alreadySeen) {
+      streamState.recentPayloadShapeSignatureOrder.push(signature);
+    }
+    streamState.recentPayloadShapeSignatures.set(signature, now);
+    pruneRecentPayloadShapeSignatures(streamState, now);
+    return alreadySeen;
+  }
+
+  /**
+   * Summarize a list of delta operations for routing diagnostics.
+   * @param {Array|Object} ops - Delta operation or operations.
+   * @returns {{opCount: number, paths: string[], operations: string[]}} Compact op summary.
+   */
+  function summarizeDeltaOps(ops) {
+    const normalized = normalizeOps(Array.isArray(ops) ? ops : [ops]);
+    return {
+      opCount: normalized.length,
+      paths: normalized.slice(0, 5).map((op) => op?.p || ""),
+      operations: normalized.slice(0, 5).map((op) => op?.o || ""),
+    };
+  }
+
+  /**
+   * Build a stable signature for a delta batch applied to one message/topic.
+   * @param {string} messageId - Current patched message id.
+   * @param {string} topicId - Normalized stream topic id.
+   * @param {Object[]} ops - Normalized delta ops.
+   * @returns {string} Compact signature for duplicate detection.
+   */
+  function buildDeltaBatchSignature(messageId, topicId, ops) {
+    return [
+      messageId || "",
+      normalizeStreamTopicId(topicId),
+      String(ops.length),
+      ops.map((op) =>
+        `${op?.p || ""}:${op?.o || ""}:${hash(String(op?.v ?? ""))}`
+      ).join(","),
+    ].join("|");
+  }
+
+  /**
+   * Decide whether a normalized delta batch is safe to dedupe.
+   * @param {Object[]} ops - Normalized delta ops.
+   * @returns {boolean} True when the batch fits the conservative dedupe criteria.
+   */
+  function shouldDedupeDeltaBatch(ops) {
+    if (!Array.isArray(ops) || !ops.length) return false;
+    if (ops.length > 1) return true;
+
+    return ops.some((op) => {
+      const path = op?.p || "";
+      if (
+        path === "/message/status" ||
+        path === "/message/end_turn" ||
+        path.startsWith("/message/metadata")
+      ) {
+        return true;
+      }
+
+      return (
+        path === "/message/content/parts/0" &&
+        op?.o === "append" &&
+        typeof op?.v === "string" &&
+        op.v.length >= 20
+      );
+    });
+  }
+
+  /**
+   * Keep the per-stream delta signature cache bounded by age and count.
+   * @param {Object} streamState - Per-stream state bucket.
+   * @param {number} now - Current timestamp in milliseconds.
+   * @returns {void}
+   */
+  function pruneAppliedDeltaSignatures(streamState, now) {
+    const maxSignatures = 200;
+    const maxAgeMs = 60000;
+    const signatures = streamState.appliedDeltaSignatures;
+    const order = streamState.appliedDeltaSignatureOrder;
+
+    while (order.length) {
+      const signature = order[0];
+      const appliedAt = signatures.get(signature);
+      if (appliedAt && now - appliedAt <= maxAgeMs && order.length <= maxSignatures) {
+        break;
+      }
+      order.shift();
+      signatures.delete(signature);
+    }
+  }
+
+  /**
+   * Remember an applied delta batch signature.
+   * @param {Object} streamState - Per-stream state bucket.
+   * @param {string} signature - Delta batch signature.
+   * @param {number} now - Current timestamp in milliseconds.
+   * @returns {void}
+   */
+  function rememberAppliedDeltaSignature(streamState, signature, now) {
+    if (!streamState.appliedDeltaSignatures.has(signature)) {
+      streamState.appliedDeltaSignatureOrder.push(signature);
+    }
+    streamState.appliedDeltaSignatures.set(signature, now);
+    pruneAppliedDeltaSignatures(streamState, now);
+  }
+
+  /**
+   * Log the route that delivered message upsert data.
+   * @param {Object} details - Message route details.
+   * @returns {void}
+   */
+  function logMessageUpsert(details) {
+    const msg = details.message;
+    log("[sse:message-upsert]", {
+      conversationId: details.conversationId,
+      topicId: details.topicId,
+      route: details.route,
+      messageId: msg?.id || "",
+      parentId: details.parentId || null,
+      role: msg?.author?.role || "",
+      contentType: msg?.content?.content_type || "",
+      textLength: getMessageTextLength(msg),
+      hasEndTurn: Object.prototype.hasOwnProperty.call(msg || {}, "end_turn"),
+      shouldUseAsPatchedTarget: details.shouldUseAsPatchedTarget,
+      previousCurrentPatchedMessageId: details.previousCurrentPatchedMessageId || null,
+      nextCurrentPatchedMessageId: details.nextCurrentPatchedMessageId || null,
+    });
   }
 
   /**
@@ -2932,8 +3488,50 @@
     ops = normalizeOps(ops);
 
     for (const op of ops) {
+      const beforeText = getTextPart0(msg);
+      const isTextContentOp =
+        op.p === "/message/content/parts/0" &&
+        (op.o === "append" || op.o === "replace" || op.o === "add");
+      const incoming = typeof op.v === "string" ? op.v : "";
+      const incomingForPreview = isTextContentOp ? incoming : "";
+      const beforeOpSummary = {
+        phase: "before",
+        messageId,
+        role: msg?.author?.role || "",
+        "op.p": op.p || "",
+        "op.o": op.o || "",
+        path: op.p || "",
+        operation: op.o || "",
+        incomingLength: typeof op.v === "string" ? incoming.length : null,
+        incomingHash: getStringHash(op.v),
+        beforeLength: beforeText.length,
+        afterLength: null,
+        beforeTail: previewText(beforeText.slice(-100), 100),
+        incomingPreview: previewText(incomingForPreview, 100),
+        incomingEqualsBefore: typeof op.v === "string" ? incoming === beforeText : false,
+        incomingStartsWithBefore:
+          typeof op.v === "string" && beforeText ? incoming.startsWith(beforeText) : false,
+        beforeEndsWithIncoming:
+          typeof op.v === "string" && incoming ? beforeText.endsWith(incoming) : false,
+        endTurnAfterApply: null,
+      };
+      log("[stream:apply-delta-op]", beforeOpSummary);
+
       if (op.p === "/message/content/parts/0" && op.o === "append") {
-        msg.content.parts[0] = (msg.content.parts[0] || "") + String(op.v || "");
+        const appendResult = appendTextDeltaSafely(msg.content.parts[0] || "", op.v || "");
+        msg.content.parts[0] = appendResult.text;
+
+        if (appendResult.mode !== "plain") {
+          log("[stream:text-append-overlap]", {
+            messageId,
+            mode: appendResult.mode,
+            overlapLength: appendResult.overlapLength,
+            beforeLength: beforeText.length,
+            incomingLength: typeof op.v === "string" ? op.v.length : 0,
+            afterLength: appendResult.text.length,
+            incomingHash: getStringHash(op.v),
+          });
+        }
       } else if (
         op.p === "/message/content/parts/0" &&
         (op.o === "replace" || op.o === "add")
@@ -2947,6 +3545,14 @@
         msg.metadata = msg.metadata || {};
         msg.metadata.token_count = op.v;
       }
+
+      const afterText = getTextPart0(msg);
+      log("[stream:apply-delta-op]", {
+        ...beforeOpSummary,
+        phase: "after",
+        afterLength: afterText.length,
+        endTurnAfterApply: !!msg.end_turn,
+      });
     }
 
     annotateMessageForCgo(msg);
@@ -3171,7 +3777,7 @@
      * @param {Object[]} ops - Normalized delta ops.
      * @returns {void}
      */
-    function rememberLastTextAppendOp(streamState, ops) {
+    function rememberLastTextAppendOp(streamState, ops, route = "") {
       for (const op of ops || []) {
         if (!op || typeof op !== "object") continue;
 
@@ -3180,13 +3786,51 @@
             streamState.lastTextAppendOp = {
               p: op.p,
               o: "append",
+              signature: buildPayloadShapeSignature(op),
+              sourceEventName: eventName,
+              sourceRoute: route,
+              recordedAt: Date.now(),
             };
+            log("[stream:last-text-append-op-set]", {
+              conversationId,
+              rawTopicId,
+              normalizedTopicId: topicId,
+              currentPatchedMessageId: streamState.currentPatchedMessageId,
+              "op.p": op.p || "",
+              "op.o": op.o || "",
+              sourceRoute: route,
+              eventName,
+              opValueType: Array.isArray(op.v) ? "array" : typeof op.v,
+              opValueLength: typeof op.v === "string" ? op.v.length : null,
+              opValueHash: getStringHash(op.v),
+              opValuePreview: typeof op.v === "string" ? previewText(op.v, 100) : "",
+              sequenceFields: summarizePayloadSequenceFields(op),
+            });
           } else if (op.o === "replace" || op.o === "add") {
             // その後に {"v":"..."} が来た場合は続きとして append 扱い
             streamState.lastTextAppendOp = {
               p: op.p,
               o: "append",
+              signature: buildPayloadShapeSignature(op),
+              sourceEventName: eventName,
+              sourceRoute: route,
+              recordedAt: Date.now(),
             };
+            log("[stream:last-text-append-op-set]", {
+              conversationId,
+              rawTopicId,
+              normalizedTopicId: topicId,
+              currentPatchedMessageId: streamState.currentPatchedMessageId,
+              "op.p": op.p || "",
+              "op.o": op.o || "",
+              sourceRoute: route,
+              eventName,
+              opValueType: Array.isArray(op.v) ? "array" : typeof op.v,
+              opValueLength: typeof op.v === "string" ? op.v.length : null,
+              opValueHash: getStringHash(op.v),
+              opValuePreview: typeof op.v === "string" ? previewText(op.v, 100) : "",
+              sequenceFields: summarizePayloadSequenceFields(op),
+            });
           }
         }
       }
@@ -3200,16 +3844,63 @@
      * @param {Object[]} ops - Raw or normalized delta ops.
      * @returns {void}
      */
-    function applyOrQueueDeltaOps(cache, streamState, ops) {
+    function applyOrQueueDeltaOps(cache, streamState, ops, route = "") {
       const normalized = normalizeOps(ops);
       if (!normalized.length) return;
 
-      rememberLastTextAppendOp(streamState, normalized);
+      rememberLastTextAppendOp(streamState, normalized, route);
 
       if (streamState.currentPatchedMessageId) {
+        const shouldDedupe = shouldDedupeDeltaBatch(normalized);
+        const signature = shouldDedupe
+          ? buildDeltaBatchSignature(
+            streamState.currentPatchedMessageId,
+            topicId,
+            normalized
+          )
+          : "";
+        const now = Date.now();
+
+        if (shouldDedupe) {
+          pruneAppliedDeltaSignatures(streamState, now);
+          const appliedAt = streamState.appliedDeltaSignatures.get(signature);
+          if (appliedAt) {
+            log("[stream:delta-dedupe-skip]", {
+              conversationId,
+              rawTopicId,
+              normalizedTopicId: topicId,
+              currentPatchedMessageId: streamState.currentPatchedMessageId,
+              opCount: normalized.length,
+              firstPath: normalized[0]?.p || "",
+              firstOperation: normalized[0]?.o || "",
+              signature,
+              ageMs: now - appliedAt,
+            });
+            return;
+          }
+
+          rememberAppliedDeltaSignature(streamState, signature, now);
+        }
+
+        log("[stream:delta-queue]", {
+          action: "apply",
+          currentPatchedMessageId: streamState.currentPatchedMessageId,
+          opCount: normalized.length,
+          firstPath: normalized[0]?.p || "",
+          firstOperation: normalized[0]?.o || "",
+          pendingOpsCount: streamState.pendingOps.length,
+        });
         applyDeltaOpsToMessage(cache, streamState.currentPatchedMessageId, normalized);
       } else {
         streamState.pendingOps.push(...normalized);
+        log("[stream:delta-queue]", {
+          action: "queue",
+          currentPatchedMessageId: streamState.currentPatchedMessageId,
+          opCount: normalized.length,
+          firstPath: normalized[0]?.p || "",
+          firstOperation: normalized[0]?.o || "",
+          pendingOpsCount: streamState.pendingOps.length,
+        });
       }
     }
 
@@ -3220,6 +3911,7 @@
         const wrapperTopicId =
           payload.topic_id ||
           payload.topicId ||
+          meta.rawTopicId ||
           meta.topicId ||
           "";
 
@@ -3228,7 +3920,8 @@
           nested,
           {
             ...meta,
-            topicId: wrapperTopicId,
+            topicId: normalizeStreamTopicId(wrapperTopicId),
+            rawTopicId: wrapperTopicId,
             __cgoUnwrappedMessageWrapper: true,
           }
         );
@@ -3248,10 +3941,12 @@
     if (!conversationId) return;
 
     const payloadSummary = summarizeStreamPayload(payload);
-    const topicId =
+    const rawTopicId =
+      meta.rawTopicId ||
       meta.topicId ||
-      getTopicIdFromPayload(payload) ||
+      getRawTopicIdFromPayload(payload) ||
       "";
+    const topicId = normalizeStreamTopicId(rawTopicId);
 
     const ignorableTypes = new Set([
       "subscribe",
@@ -3268,11 +3963,85 @@
     const streamState = ensureStreamState(conversationId, topicId);
     let handledPayload = false;
 
+    if (shouldLogRawShape(streamState)) {
+      const now = Date.now();
+      const payloadShapeSignature = buildPayloadShapeSignature(payload);
+      const alreadySeenRecentlyForTopic = rememberPayloadShapeSignature(
+        streamState,
+        payloadShapeSignature,
+        now
+      );
+
+      log("[sse:raw-event-shape]", {
+        conversationId,
+        rawTopicId,
+        normalizedTopicId: topicId,
+        eventName,
+        streamSource: summarizeStreamMeta(meta),
+        payloadShapeSignature,
+        nestedIndex: meta.nestedIndex ?? null,
+        parentWrapperSignature: meta.parentWrapperSignature || "",
+        alreadySeenInThisWrapper: !!meta.alreadySeenInThisWrapper,
+        alreadySeenRecentlyForTopic,
+        ...summarizeRawEventShape(payload),
+      });
+    }
+
+    function logDeltaRoute(route, ops) {
+      const summary = summarizeDeltaOps(ops);
+      log("[sse:delta-route]", {
+        conversationId,
+        topicId,
+        eventName,
+        route,
+        opCount: summary.opCount,
+        currentPatchedMessageId: streamState.currentPatchedMessageId,
+        paths: summary.paths,
+        operations: summary.operations,
+      });
+    }
+
     if (
       !meta.__cgoUnwrappedConversationTurnStream &&
       payload?.type === "conversation-turn-stream"
     ) {
       const nestedPayloads = getNestedPayloadsFromConversationTurnStream(payload);
+      const parentWrapperSignature = buildPayloadShapeSignature(payload);
+      const nestedShapeDiagnostics = [];
+      const signaturesInWrapper = new Set();
+
+      if (CONFIG.debug) {
+        const now = Date.now();
+        for (let nestedIndex = 0; nestedIndex < nestedPayloads.length; nestedIndex += 1) {
+          const nested = nestedPayloads[nestedIndex];
+          const payloadShapeSignature = buildPayloadShapeSignature(nested);
+          const alreadySeenInThisWrapper = signaturesInWrapper.has(payloadShapeSignature);
+          signaturesInWrapper.add(payloadShapeSignature);
+          pruneRecentPayloadShapeSignatures(streamState, now);
+          const alreadySeenRecentlyForTopic =
+            streamState.recentPayloadShapeSignatures.has(payloadShapeSignature);
+
+          nestedShapeDiagnostics.push({
+            nestedIndex,
+            keys: nested && typeof nested === "object" ? Object.keys(nested).slice(0, 30) : [],
+            type: nested?.type || "",
+            kind: nested?.kind || "",
+            event: nested?.event || "",
+            id: nested?.id || "",
+            messageId: nested?.message?.id || "",
+            vMessageId: nested?.v?.message?.id || "",
+            p: nested?.p || "",
+            o: nested?.o || "",
+            v: summarizePayloadValueField(nested?.v),
+            sequenceFields: summarizePayloadSequenceFields(nested),
+            pathFields: summarizePayloadPathFields(nested),
+            payloadShapeSignature,
+            parentWrapperSignature,
+            alreadySeenInThisWrapper,
+            alreadySeenRecentlyForTopic,
+          });
+        }
+      }
 
       log("[sse:conversation-turn-stream]", {
         eventName,
@@ -3281,18 +4050,52 @@
         nestedCount: nestedPayloads.length,
       });
 
+      if (shouldLogRawShape(streamState)) {
+        log("[sse:turn-stream-wrapper-shape]", {
+          conversationId,
+          rawTopicId,
+          normalizedTopicId: topicId,
+          eventName,
+          wrapperKeys: Object.keys(payload).slice(0, 30),
+          type: payload.type || "",
+          kind: payload.kind || "",
+          event: payload.event || "",
+          topicId: getRawTopicIdFromPayload(payload),
+          turnId: payload.turn_id || payload.payload?.turn_id || "",
+          turn_exchange_id: getTurnExchangeIdFromPayload(payload),
+          conversation_turn_id: payload.conversation_turn_id || "",
+          parentWrapperSignature,
+          nestedCount: nestedPayloads.length,
+          nestedSummaries: nestedShapeDiagnostics.slice(0, 30),
+        });
+      }
+
       if (nestedPayloads.length) {
-        for (const nested of nestedPayloads) {
+        for (let nestedIndex = 0; nestedIndex < nestedPayloads.length; nestedIndex += 1) {
+          const nested = nestedPayloads[nestedIndex];
           const nextEventName = getNestedEventNameFromPayload(eventName, nested);
+          const nestedDiagnostic = nestedShapeDiagnostics[nestedIndex] || {};
 
           handleSseEvent(nextEventName, nested, {
             ...meta,
-            topicId:
+            rawTopicId:
               payload.topic_id ||
               payload.topicId ||
+              meta.rawTopicId ||
               meta.topicId ||
               topicId ||
               "",
+            topicId: normalizeStreamTopicId(
+              payload.topic_id ||
+              payload.topicId ||
+              meta.rawTopicId ||
+              meta.topicId ||
+              topicId ||
+              ""
+            ),
+            nestedIndex,
+            parentWrapperSignature,
+            alreadySeenInThisWrapper: !!nestedDiagnostic.alreadySeenInThisWrapper,
             __cgoUnwrappedConversationTurnStream: true,
           });
         }
@@ -3310,8 +4113,23 @@
           msg?.parent_id ||
           cache.current_node ||
           null;
+        const previousCurrentPatchedMessageId = streamState.currentPatchedMessageId;
 
         upsertMessageNode(cache, msg, parentId);
+        const useAsPatchedTarget = shouldUseAsPatchedTarget(msg);
+        const nextCurrentPatchedMessageId = useAsPatchedTarget
+          ? msg.id
+          : previousCurrentPatchedMessageId;
+        logMessageUpsert({
+          conversationId,
+          topicId,
+          route: "messages-array",
+          message: msg,
+          parentId,
+          shouldUseAsPatchedTarget: useAsPatchedTarget,
+          previousCurrentPatchedMessageId,
+          nextCurrentPatchedMessageId,
+        });
 
         if (msg?.author?.role === "user") {
           rememberLatestInputMessageId(conversationId, topicId, msg);
@@ -3331,7 +4149,7 @@
     if (payload?.type === "resume_conversation_token") {
       const topicIdFromPayload = getTopicIdFromPayload(payload);
       if (topicIdFromPayload) {
-        STREAM_TOPIC_TO_CONVERSATION.set(topicIdFromPayload, conversationId);
+        STREAM_TOPIC_TO_CONVERSATION.set(normalizeStreamTopicId(topicIdFromPayload), conversationId);
       }
       return;
     }
@@ -3344,7 +4162,7 @@
 
       const options = Array.isArray(payload?.options) ? payload.options : [];
       for (const option of options) {
-        const optionTopicId = option?.topic_id || "";
+        const optionTopicId = normalizeStreamTopicId(option?.topic_id || "");
         if (optionTopicId) {
           STREAM_TOPIC_TO_CONVERSATION.set(optionTopicId, conversationId);
         }
@@ -3355,7 +4173,22 @@
     if (payload?.type === "input_message" && payload?.input_message) {
       const msg = payload.input_message;
       const parentId = msg?.metadata?.parent_id || cache.current_node || null;
+      const previousCurrentPatchedMessageId = streamState.currentPatchedMessageId;
       upsertMessageNode(cache, msg, parentId);
+      const useAsPatchedTarget = shouldUseAsPatchedTarget(msg);
+      const nextCurrentPatchedMessageId = useAsPatchedTarget
+        ? msg.id
+        : previousCurrentPatchedMessageId;
+      logMessageUpsert({
+        conversationId,
+        topicId,
+        route: "input-message",
+        message: msg,
+        parentId,
+        shouldUseAsPatchedTarget: useAsPatchedTarget,
+        previousCurrentPatchedMessageId,
+        nextCurrentPatchedMessageId,
+      });
       rememberLatestInputMessageId(conversationId, topicId, msg);
 
       if (shouldUseAsPatchedTarget(msg)) {
@@ -3372,8 +4205,23 @@
         payload?.v?.parent_id ||
         payload?.parent_id ||
         null;
+      const previousCurrentPatchedMessageId = streamState.currentPatchedMessageId;
 
       upsertMessageNode(cache, msg, parentId);
+      const useAsPatchedTarget = shouldUseAsPatchedTarget(msg);
+      const nextCurrentPatchedMessageId = useAsPatchedTarget
+        ? msg.id
+        : previousCurrentPatchedMessageId;
+      logMessageUpsert({
+        conversationId,
+        topicId,
+        route: "v-message",
+        message: msg,
+        parentId,
+        shouldUseAsPatchedTarget: useAsPatchedTarget,
+        previousCurrentPatchedMessageId,
+        nextCurrentPatchedMessageId,
+      });
       handledPayload = true;
       anchorBranchToLatestInput(cache, conversationId, topicId, msg.id, "v-message");
 
@@ -3394,13 +4242,55 @@
       typeof payload.o !== "string"
     ) {
       const last = streamState.lastTextAppendOp;
+      const willApply = last?.p === "/message/content/parts/0";
+      const currentMessage = cache.mapping[streamState.currentPatchedMessageId]?.message;
+      const beforeText = getTextPart0(currentMessage);
+      const incomingHash = getStringHash(payload.v);
+      const previousCompactDelta = streamState.lastCompactTextDelta || null;
+      const sameAsPreviousCompactDeltaForSameMessage = !!(
+        previousCompactDelta &&
+        previousCompactDelta.messageId === streamState.currentPatchedMessageId &&
+        previousCompactDelta.incomingHash === incomingHash &&
+        previousCompactDelta.incomingLength === payload.v.length
+      );
+
+      log("[sse:compact-text-delta]", {
+        conversationId,
+        topicId,
+        eventName,
+        streamSource: summarizeStreamMeta(meta),
+        currentPatchedMessageId: streamState.currentPatchedMessageId,
+        lastTextAppendOp: {
+          p: last?.p || "",
+          o: last?.o || "",
+        },
+        payloadKeys: Object.keys(payload).slice(0, 30),
+        payloadSequenceFields: summarizePayloadSequenceFields(payload),
+        lastTextAppendOpSignature: last?.signature || "",
+        lastTextAppendOpSourceEventName: last?.sourceEventName || "",
+        lastTextAppendOpRecordedAt: last?.recordedAt || null,
+        beforeLength: beforeText.length,
+        beforeTailHash: getStringHash(beforeText.slice(-100)),
+        incomingLength: payload.v.length,
+        incomingHash,
+        incomingPreview: previewText(payload.v, 100),
+        sameAsPreviousCompactDeltaForSameMessage,
+        willApply,
+        ignoredReason: willApply ? "" : "lastTextAppendOp missing",
+      });
+      streamState.lastCompactTextDelta = {
+        messageId: streamState.currentPatchedMessageId,
+        incomingHash,
+        incomingLength: payload.v.length,
+        recordedAt: Date.now(),
+      };
 
       if (last?.p === "/message/content/parts/0") {
         applyOrQueueDeltaOps(cache, streamState, [{
           p: last.p,
           o: last.o || "append",
           v: payload.v,
-        }]);
+        }], "compact-text-delta");
 
         return;
       }
@@ -3410,7 +4300,22 @@
     if (payload?.message?.id) {
       const msg = payload.message;
       const parentId = msg?.metadata?.parent_id || null;
+      const previousCurrentPatchedMessageId = streamState.currentPatchedMessageId;
       upsertMessageNode(cache, msg, parentId);
+      const useAsPatchedTarget = shouldUseAsPatchedTarget(msg);
+      const nextCurrentPatchedMessageId = useAsPatchedTarget
+        ? msg.id
+        : previousCurrentPatchedMessageId;
+      logMessageUpsert({
+        conversationId,
+        topicId,
+        route: "payload-message",
+        message: msg,
+        parentId,
+        shouldUseAsPatchedTarget: useAsPatchedTarget,
+        previousCurrentPatchedMessageId,
+        nextCurrentPatchedMessageId,
+      });
       handledPayload = true;
       anchorBranchToLatestInput(cache, conversationId, topicId, msg.id, "payload-message");
 
@@ -3427,6 +4332,7 @@
         msg?.parent_id ||
         cache.current_node ||
         null;
+      const previousCurrentPatchedMessageId = streamState.currentPatchedMessageId;
 
       if (
         msg?.author?.role === "tool" &&
@@ -3444,6 +4350,20 @@
       }
 
       upsertMessageNode(cache, msg, parentId);
+      const useAsPatchedTarget = shouldUseAsPatchedTarget(msg);
+      const nextCurrentPatchedMessageId = useAsPatchedTarget
+        ? msg.id
+        : previousCurrentPatchedMessageId;
+      logMessageUpsert({
+        conversationId,
+        topicId,
+        route: "raw-message",
+        message: msg,
+        parentId,
+        shouldUseAsPatchedTarget: useAsPatchedTarget,
+        previousCurrentPatchedMessageId,
+        nextCurrentPatchedMessageId,
+      });
       handledPayload = true;
       anchorBranchToLatestInput(cache, conversationId, topicId, msg.id, "raw-message");
 
@@ -3467,27 +4387,32 @@
       typeof payload.p === "string" &&
       typeof payload.o === "string"
     ) {
-      applyOrQueueDeltaOps(cache, streamState, [payload]);
+      logDeltaRoute("single-op", [payload]);
+      applyOrQueueDeltaOps(cache, streamState, [payload], "single-op");
       return;
     }
 
     if (eventName === "delta" && Array.isArray(payload?.v)) {
-      applyOrQueueDeltaOps(cache, streamState, payload.v);
+      logDeltaRoute("payload-v-array", payload.v);
+      applyOrQueueDeltaOps(cache, streamState, payload.v, "payload-v-array");
       return;
     }
 
     if (eventName === "delta" && Array.isArray(payload)) {
-      applyOrQueueDeltaOps(cache, streamState, payload);
+      logDeltaRoute("payload-array", payload);
+      applyOrQueueDeltaOps(cache, streamState, payload, "payload-array");
       return;
     }
 
     if (Array.isArray(payload?.ops)) {
-      applyOrQueueDeltaOps(cache, streamState, payload.ops);
+      logDeltaRoute("payload-ops", payload.ops);
+      applyOrQueueDeltaOps(cache, streamState, payload.ops, "payload-ops");
       return;
     }
 
     if (Array.isArray(payload?.delta)) {
-      applyOrQueueDeltaOps(cache, streamState, payload.delta);
+      logDeltaRoute("payload-delta", payload.delta);
+      applyOrQueueDeltaOps(cache, streamState, payload.delta, "payload-delta");
       return;
     }
 

@@ -117,10 +117,6 @@
       return Array.isArray(thoughts) && thoughts.length > 0;
     }
 
-    /*    if (isInternalContextMessage(message)) {
-          return false;
-        }
-    */
     if (isLikelyImageGenerationMessage(message)) {
       return true;
     }
@@ -153,35 +149,6 @@
     const text = getMessageTextForExport(message).trim();
 
     return text.length > 0;
-  }
-
-  /**
-   * Determine whether a message is internal context that should not render as a normal export turn.
-   *
-   * @param {Object} message - Raw conversation message.
-   * @returns {boolean} `true` when the message should stay in mapping but not export as body text.
-   */
-  function isInternalContextMessage(message) {
-    const role = message?.author?.role || "";
-    const metadata = message?.metadata || {};
-
-    if (metadata.is_visually_hidden_from_conversation) {
-      return true;
-    }
-
-    if (metadata.command === "context_stuff") {
-      return true;
-    }
-
-    if (metadata.is_temporal_turn === true) {
-      return true;
-    }
-
-    if (role === "assistant" && metadata.can_save === false) {
-      return true;
-    }
-
-    return false;
   }
 
   /**
