@@ -194,6 +194,18 @@
   "debug_logging_label": {
     "message": "Enable debug logging"
   },
+  "debug_log_level_label": {
+    "message": "Debug log level"
+  },
+  "debug_log_level_basic": {
+    "message": "Basic"
+  },
+  "debug_log_level_stream": {
+    "message": "Stream"
+  },
+  "debug_log_level_trace": {
+    "message": "Trace"
+  },
   "save_button": {
     "message": "Save"
   },

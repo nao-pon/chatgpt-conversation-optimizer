@@ -347,7 +347,16 @@
 
         <label class="cgo-settings-row cgo-settings-check">
           <input id="cgo-setting-debug-enabled" type="checkbox">
-          <span>${CGO.escapeHtml(CGO.t("debug_logging_label"))}</span>
+          <span>${CGO.escapeHtml(CGO.t("debug_logging_label") || "Enable debug logging")}</span>
+        </label>
+
+        <label class="cgo-settings-row">
+          <span>${CGO.escapeHtml(CGO.t("debug_log_level_label") || "Debug log level")}</span>
+          <select id="cgo-setting-debug-level">
+            <option value="BASIC">${CGO.escapeHtml(CGO.t("debug_log_level_basic") || "Basic")}</option>
+            <option value="STREAM">${CGO.escapeHtml(CGO.t("debug_log_level_stream") || "Stream")}</option>
+            <option value="TRACE">${CGO.escapeHtml(CGO.t("debug_log_level_trace") || "Trace")}</option>
+          </select>
         </label>
 
         <div class="cgo-settings-actions">
@@ -361,6 +370,7 @@
     const autoAdjustLabel = panel.querySelector("#cgo-setting-auto-adjust-label");
     const htmlImagesInput = panel.querySelector("#cgo-setting-html-include-images");
     const debugEnabledInput = panel.querySelector("#cgo-setting-debug-enabled");
+    const debugLevelInput = panel.querySelector("#cgo-setting-debug-level");
     const saveBtn = panel.querySelector(".cgo-settings-save-btn");
     const cancelBtn = panel.querySelector(".cgo-settings-cancel-btn");
 
@@ -403,6 +413,10 @@
       }
     }
 
+    function syncDebugLevelEnabledState() {
+      debugLevelInput.disabled = !debugEnabledInput.checked;
+    }
+
     /**
      * Populate the settings panel inputs from persisted configuration and refresh the auto-adjust label.
      *
@@ -414,8 +428,12 @@
       autoAdjustInput.checked = !!CGO.SETTINGS.autoAdjustEnabled;
       htmlImagesInput.checked = CGO.SETTINGS.htmlDownloadIncludeImages !== false;
       debugEnabledInput.checked = !!CGO.SETTINGS.debugEnabled;
+      debugLevelInput.value = CGO.SETTINGS.debugLevel ?? CGO.CONFIG.debugLevel ?? "BASIC";
+      syncDebugLevelEnabledState();
       await updateAutoAdjustLabel();
     }
+
+    debugEnabledInput.addEventListener("change", syncDebugLevelEnabledState);
 
     saveBtn.addEventListener("click", async () => {
       try {
@@ -428,6 +446,7 @@
           autoAdjustEnabled: nextAutoAdjustEnabled,
           htmlDownloadIncludeImages: htmlImagesInput.checked,
           debugEnabled: debugEnabledInput.checked,
+          debugLevel: debugLevelInput.value,
         });
 
         if (wasAutoAdjustEnabled && !nextAutoAdjustEnabled && conversationId) {
@@ -816,6 +835,15 @@
 
   .cgo-settings-row input[type="number"] {
     width: 78px;
+    padding: 4px 6px;
+    border-radius: 8px;
+    border: 1px solid #555;
+    background: #111;
+    color: #f5f5f5;
+  }
+
+  .cgo-settings-row select {
+    min-width: 110px;
     padding: 4px 6px;
     border-radius: 8px;
     border: 1px solid #555;

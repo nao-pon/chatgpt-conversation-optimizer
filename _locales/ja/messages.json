@@ -194,6 +194,18 @@
   "debug_logging_label": {
     "message": "デバッグログを有効にする"
   },
+  "debug_log_level_label": {
+    "message": "デバッグログレベル"
+  },
+  "debug_log_level_basic": {
+    "message": "基本"
+  },
+  "debug_log_level_stream": {
+    "message": "ストリーム"
+  },
+  "debug_log_level_trace": {
+    "message": "詳細"
+  },
   "save_button": {
     "message": "保存"
   },

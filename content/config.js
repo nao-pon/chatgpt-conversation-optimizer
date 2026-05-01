@@ -27,6 +27,7 @@
     keepDomMessages: 40,
     domTrimDelayMs: 5000,
     debug: false,
+    debugLevel: "BASIC",
   };
 
   CGO.STATE = {
@@ -70,6 +71,7 @@
     autoAdjustEnabled: true,
     htmlDownloadIncludeImages: true,
     debugEnabled: false,
+    debugLevel: "BASIC",
   };
 
   CGO.SETTINGS = {
@@ -77,6 +79,14 @@
   };
 
   CGO.SETTING_STORAGE_KEY = "cgo_settings";
+
+  function normalizeDebugLevel(value) {
+    const key = String(value || "").toUpperCase();
+    if (key === "STREAM" || key === "TRACE") {
+      return key;
+    }
+    return "BASIC";
+  }
 
   /**
    * Clamp the keep-dom setting to the supported integer range.
@@ -94,7 +104,7 @@
    * Normalize persisted settings into a complete configuration object with defaults applied.
    *
    * @param {Object} [input={}] - Partial settings loaded from storage or UI input.
-   * @returns {{keepDomMessages: number, autoAdjustEnabled: boolean, htmlDownloadIncludeImages: boolean, debugEnabled: boolean}} Sanitized settings.
+   * @returns {{keepDomMessages: number, autoAdjustEnabled: boolean, htmlDownloadIncludeImages: boolean, debugEnabled: boolean, debugLevel: string}} Sanitized settings.
    */
   function normalizeSettings(input = {}) {
     return {
@@ -108,6 +118,9 @@
         input.htmlDownloadIncludeImages !== false,
       debugEnabled: Boolean(
         input.debugEnabled ?? CGO.DEFAULT_SETTINGS.debugEnabled
+      ),
+      debugLevel: normalizeDebugLevel(
+        input.debugLevel ?? CGO.DEFAULT_SETTINGS.debugLevel
       ),
     };
   }
@@ -125,9 +138,11 @@
     CGO.SETTINGS.autoAdjustEnabled = normalized.autoAdjustEnabled;
     CGO.SETTINGS.htmlDownloadIncludeImages = normalized.htmlDownloadIncludeImages;
     CGO.SETTINGS.debugEnabled = normalized.debugEnabled;
+    CGO.SETTINGS.debugLevel = normalized.debugLevel;
 
     CGO.CONFIG.keepDomMessages = normalized.keepDomMessages;
     CGO.CONFIG.debug = normalized.debugEnabled;
+    CGO.CONFIG.debugLevel = normalized.debugLevel;
 
     return CGO.SETTINGS;
   }
@@ -166,6 +181,7 @@
         autoAdjustEnabled: next.autoAdjustEnabled,
         htmlDownloadIncludeImages: next.htmlDownloadIncludeImages,
         debugEnabled: next.debugEnabled,
+        debugLevel: next.debugLevel,
       },
     });
 
@@ -381,6 +397,7 @@
           keepDomMessages: keepDomMessages,
           autoAdjustEnabled: CGO.SETTINGS.autoAdjustEnabled,
           debugEnabled: CGO.SETTINGS.debugEnabled,
+          debugLevel: CGO.SETTINGS.debugLevel,
         },
       },
       "*"
@@ -555,7 +572,7 @@
        * Send the current extension settings to the page hook via window.postMessage.
        *
        * The posted message has shape { source: "CGO_CONTENT", type: "CGO_INIT_SETTINGS", version, settings }
-       * where `settings` contains `keepDomMessages`, `autoAdjustEnabled`, and `debugEnabled`.
+       * where `settings` contains `keepDomMessages`, `autoAdjustEnabled`, `debugEnabled`, and `debugLevel`.
        */
       function sendInit() {
         window.postMessage(
@@ -567,6 +584,7 @@
               keepDomMessages: CGO.SETTINGS.keepDomMessages,
               autoAdjustEnabled: CGO.SETTINGS.autoAdjustEnabled,
               debugEnabled: CGO.SETTINGS.debugEnabled,
+              debugLevel: CGO.SETTINGS.debugLevel,
             },
           },
           "*"

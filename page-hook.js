@@ -13,10 +13,18 @@
   window.__CGO_MAIN_HOOK_INSTALLED__ = true;
   window.__CGO_BRIDGE_SECRET__ = PAGE_BRIDGE_SECRET;
 
+  const LOG_LEVELS = {
+    OFF: 0,
+    BASIC: 1,
+    STREAM: 2,
+    TRACE: 3,
+  };
+
   const CONFIG = {
     turnCount: 40,
     enablePrune: true,
     debug: false,
+    debugLevel: "BASIC",
     rootNodeId: "client-created-root",
     targetPathFragment: "/backend-api/conversation/",
   };
@@ -40,11 +48,34 @@
 
   // =========================================================
   // LOGGING / POST HELPERS
+  function normalizeLogLevelKey(value) {
+    const key = String(value || "").toUpperCase();
+    if (Object.prototype.hasOwnProperty.call(LOG_LEVELS, key) && key !== "OFF") {
+      return key;
+    }
+    return "BASIC";
+  }
+
+  function getLogLevelValue(value) {
+    const key = String(value || "").toUpperCase();
+    if (Object.prototype.hasOwnProperty.call(LOG_LEVELS, key)) {
+      return LOG_LEVELS[key];
+    }
+
+    const n = Number(value);
+    return Number.isFinite(n) ? n : LOG_LEVELS.BASIC;
+  }
+
+  function getActiveLogLevel() {
+    if (!CONFIG.debug) return LOG_LEVELS.OFF;
+    return getLogLevelValue(CONFIG.debugLevel || "BASIC");
+  }
+
   /**
    * Send debug log messages to the host via window.postMessage when debugging is enabled.
    * @param {...any} args - Values to include in the log payload forwarded to the host.
    */
-  function log(...args) {
+  function emitLog(...args) {
     if (!CONFIG.debug) return;
     window.postMessage(
       {
@@ -55,6 +86,17 @@
       "*"
     );
   }
+
+  function logAt(level, ...args) {
+    if (getActiveLogLevel() < level) return;
+    emitLog(...args);
+  }
+
+  const log = {
+    basic: (...args) => logAt(LOG_LEVELS.BASIC, ...args),
+    stream: (...args) => logAt(LOG_LEVELS.STREAM, ...args),
+    trace: (...args) => logAt(LOG_LEVELS.TRACE, ...args),
+  };
 
   /**
    * Send analysis results about a conversation to the page via window.postMessage.
@@ -255,6 +297,7 @@
 
       CONFIG.autoAdjustEnabled = !!settings.autoAdjustEnabled;
       CONFIG.debug = !!settings.debugEnabled;
+      CONFIG.debugLevel = normalizeLogLevelKey(settings.debugLevel);
 
       window.postMessage(
         {
@@ -267,6 +310,7 @@
             turnCount: CONFIG.turnCount,
             autoAdjustEnabled: CONFIG.autoAdjustEnabled,
             debugEnabled: CONFIG.debug,
+            debugLevel: CONFIG.debugLevel,
           },
         },
         "*"
@@ -290,10 +334,13 @@
         CONFIG.debug = settings.debugEnabled;
       }
 
-      log("page-hook settings updated", {
+      CONFIG.debugLevel = normalizeLogLevelKey(settings.debugLevel);
+
+      log.basic("page-hook settings updated", {
         turnCount: CONFIG.turnCount,
         autoAdjustEnabled: CONFIG.autoAdjustEnabled,
         debugEnabled: CONFIG.debug,
+        debugLevel: CONFIG.debugLevel,
       });
     }
   });
@@ -1282,7 +1329,7 @@
       merged.current_node = fullCurrent || streamCurrent || null;
     }
 
-    log("[mergeCaches:summary]", {
+    log.basic("[mergeCaches:summary]", {
       fullCurrent: full?.current_node || "",
       streamCurrent: stream?.current_node || "",
       mergedCurrent: merged?.current_node || "",
@@ -1554,7 +1601,7 @@
       }
     }
 
-    log("prune mapping integrity", {
+    log.trace("prune mapping integrity", {
       originalCount: Object.keys(mapping).length,
       prunedCount: Object.keys(prunedMapping).length,
       rootChildren: prunedMapping[rootId]?.children || [],
@@ -1879,7 +1926,7 @@
   async function handleWebSocketFrame(rawData, source = "ws") {
     const text = await decodeWebSocketData(rawData);
     if (!text) {
-      log("ws frame skipped: empty/unsupported", {
+      log.stream("ws frame skipped: empty/unsupported", {
         source,
         dataType: getWsDataTypeName(rawData),
       });
@@ -1888,7 +1935,7 @@
 
     const root = parseJsonStringSafe(text);
     if (!root) {
-      log("ws frame non-json", {
+      log.stream("ws frame non-json", {
         source,
         preview: text.slice(0, 300),
       });
@@ -1960,18 +2007,18 @@
         const originalSend = ws.send;
         ws.send = function send(data) {
           handleWebSocketFrame(data, "ws-send").catch((error) => {
-            log("ws send parse failed", String(error));
+            log.basic("ws send parse failed", String(error));
           });
           return originalSend.call(this, data);
         };
 
         ws.addEventListener("message", (event) => {
           handleWebSocketFrame(event.data, "ws-message").catch((error) => {
-            log("ws message parse failed", String(error));
+            log.basic("ws message parse failed", String(error));
           });
         });
       } catch (error) {
-        log("websocket patch failed", String(error));
+        log.basic("websocket patch failed", String(error));
       }
 
       return ws;
@@ -2497,7 +2544,7 @@
     }
 
     if (userMessages.length) {
-      log("[sse:request-user-input]", {
+      log.stream("[sse:request-user-input]", {
         conversationId,
         topicId,
         count: userMessages.length,
@@ -2624,7 +2671,7 @@
     if (!Array.isArray(streamState.pendingOps) || !streamState.pendingOps.length) return;
 
     const ops = streamState.pendingOps.splice(0, streamState.pendingOps.length);
-    log("[stream:delta-queue]", {
+    log.stream("[stream:delta-queue]", {
       action: "flush",
       currentPatchedMessageId: streamState.currentPatchedMessageId,
       opCount: ops.length,
@@ -3106,7 +3153,7 @@
    * @returns {boolean} True when another raw-shape log may be emitted.
    */
   function shouldLogRawShape(streamState) {
-    if (!CONFIG.debug) return false;
+    if (getActiveLogLevel() < LOG_LEVELS.TRACE) return false;
     if (!streamState) return false;
     if (streamState.rawShapeLogCount >= 120) return false;
     streamState.rawShapeLogCount += 1;
@@ -3259,7 +3306,7 @@
    */
   function logMessageUpsert(details) {
     const msg = details.message;
-    log("[sse:message-upsert]", {
+    log.stream("[sse:message-upsert]", {
       conversationId: details.conversationId,
       topicId: details.topicId,
       route: details.route,
@@ -3444,7 +3491,7 @@
     }
     mapping[latestInputMessageId].children = latestInputChildren;
 
-    log("[sse:branch-anchor-to-input]", {
+    log.stream("[sse:branch-anchor-to-input]", {
       conversationId,
       topicId,
       anchorReason: anchorReason || "",
@@ -3515,14 +3562,14 @@
           typeof op.v === "string" && incoming ? beforeText.endsWith(incoming) : false,
         endTurnAfterApply: null,
       };
-      log("[stream:apply-delta-op]", beforeOpSummary);
+      log.trace("[stream:apply-delta-op]", beforeOpSummary);
 
       if (op.p === "/message/content/parts/0" && op.o === "append") {
         const appendResult = appendTextDeltaSafely(msg.content.parts[0] || "", op.v || "");
         msg.content.parts[0] = appendResult.text;
 
         if (appendResult.mode !== "plain") {
-          log("[stream:text-append-overlap]", {
+          log.basic("[stream:text-append-overlap]", {
             messageId,
             mode: appendResult.mode,
             overlapLength: appendResult.overlapLength,
@@ -3547,7 +3594,7 @@
       }
 
       const afterText = getTextPart0(msg);
-      log("[stream:apply-delta-op]", {
+      log.trace("[stream:apply-delta-op]", {
         ...beforeOpSummary,
         phase: "after",
         afterLength: afterText.length,
@@ -3791,7 +3838,7 @@
               sourceRoute: route,
               recordedAt: Date.now(),
             };
-            log("[stream:last-text-append-op-set]", {
+            log.stream("[stream:last-text-append-op-set]", {
               conversationId,
               rawTopicId,
               normalizedTopicId: topicId,
@@ -3816,7 +3863,7 @@
               sourceRoute: route,
               recordedAt: Date.now(),
             };
-            log("[stream:last-text-append-op-set]", {
+            log.stream("[stream:last-text-append-op-set]", {
               conversationId,
               rawTopicId,
               normalizedTopicId: topicId,
@@ -3865,7 +3912,7 @@
           pruneAppliedDeltaSignatures(streamState, now);
           const appliedAt = streamState.appliedDeltaSignatures.get(signature);
           if (appliedAt) {
-            log("[stream:delta-dedupe-skip]", {
+            log.stream("[stream:delta-dedupe-skip]", {
               conversationId,
               rawTopicId,
               normalizedTopicId: topicId,
@@ -3882,7 +3929,7 @@
           rememberAppliedDeltaSignature(streamState, signature, now);
         }
 
-        log("[stream:delta-queue]", {
+        log.stream("[stream:delta-queue]", {
           action: "apply",
           currentPatchedMessageId: streamState.currentPatchedMessageId,
           opCount: normalized.length,
@@ -3893,7 +3940,7 @@
         applyDeltaOpsToMessage(cache, streamState.currentPatchedMessageId, normalized);
       } else {
         streamState.pendingOps.push(...normalized);
-        log("[stream:delta-queue]", {
+        log.stream("[stream:delta-queue]", {
           action: "queue",
           currentPatchedMessageId: streamState.currentPatchedMessageId,
           opCount: normalized.length,
@@ -3972,7 +4019,7 @@
         now
       );
 
-      log("[sse:raw-event-shape]", {
+      log.trace("[sse:raw-event-shape]", {
         conversationId,
         rawTopicId,
         normalizedTopicId: topicId,
@@ -3989,7 +4036,7 @@
 
     function logDeltaRoute(route, ops) {
       const summary = summarizeDeltaOps(ops);
-      log("[sse:delta-route]", {
+      log.stream("[sse:delta-route]", {
         conversationId,
         topicId,
         eventName,
@@ -4010,7 +4057,7 @@
       const nestedShapeDiagnostics = [];
       const signaturesInWrapper = new Set();
 
-      if (CONFIG.debug) {
+      if (getActiveLogLevel() >= LOG_LEVELS.TRACE) {
         const now = Date.now();
         for (let nestedIndex = 0; nestedIndex < nestedPayloads.length; nestedIndex += 1) {
           const nested = nestedPayloads[nestedIndex];
@@ -4043,7 +4090,7 @@
         }
       }
 
-      log("[sse:conversation-turn-stream]", {
+      log.stream("[sse:conversation-turn-stream]", {
         eventName,
         conversationId,
         topicId,
@@ -4051,7 +4098,7 @@
       });
 
       if (shouldLogRawShape(streamState)) {
-        log("[sse:turn-stream-wrapper-shape]", {
+        log.trace("[sse:turn-stream-wrapper-shape]", {
           conversationId,
           rawTopicId,
           normalizedTopicId: topicId,
@@ -4254,7 +4301,7 @@
         previousCompactDelta.incomingLength === payload.v.length
       );
 
-      log("[sse:compact-text-delta]", {
+      log.stream("[sse:compact-text-delta]", {
         conversationId,
         topicId,
         eventName,
@@ -4423,7 +4470,7 @@
         (part) => part?.content_type === "image_asset_pointer"
       );
 
-      log("[sse:generated-image-content:pending]", {
+      log.stream("[sse:generated-image-content:pending]", {
         conversationId,
         topicId,
         imageCount: imageParts.length,
@@ -4433,7 +4480,7 @@
     }
 
     if (payload?.type === "done") {
-      log("[sse:done]", {
+      log.stream("[sse:done]", {
         conversationId,
         topicId,
         hasPendingGeneratedImageContent: !!streamState.pendingGeneratedImageContent,
@@ -4469,7 +4516,7 @@
     }
 
     if (!handledPayload) {
-      log("[sse:unhandled]", {
+      log.stream("[sse:unhandled]", {
         eventName,
         conversationId,
         topicId,
@@ -4496,7 +4543,7 @@
           processSseBlock(block, handleSseEvent, streamParserState, meta);
         }
       } catch (error) {
-        log("stream parse failed (no body)", String(error));
+        log.basic("stream parse failed (no body)", String(error));
       }
       return;
     }
@@ -4524,11 +4571,11 @@
       buffer += decoder.decode();
     } catch (error) {
       if (String(error?.name || "") !== "AbortError") {
-        log("stream parse failed", String(error));
+        log.basic("stream parse failed", String(error));
         return;
       }
 
-      log("stream aborted after partial read", { url: meta.url || "" });
+      log.basic("stream aborted after partial read", { url: meta.url || "" });
     }
 
     if (buffer.trim()) {
@@ -4580,12 +4627,12 @@
         try {
           rememberUserMessagesFromStreamingRequest(args, url);
         } catch (error) {
-          log("failed to remember streaming request user input", String(error));
+          log.basic("failed to remember streaming request user input", String(error));
         }
       }
 
       consumeConversationStream(clonedResponse, { url }).catch((error) => {
-        log("stream parse failed", String(error));
+        log.basic("stream parse failed", String(error));
       });
 
       return orgResponse;
@@ -4607,7 +4654,7 @@
       try {
         cacheProjectSidebarPayload(rawData);
       } catch (error) {
-        log("failed to cache snorlax sidebar response", String(error));
+        log.basic("failed to cache snorlax sidebar response", String(error));
       }
 
       return orgResponse;
@@ -4621,10 +4668,10 @@
 
         if (fileId && conversationId && rawData?.download_url) {
           saveFileDownloadResultToCache(fileId, conversationId, rawData);
-          log("cached file download url", { fileId, conversationId });
+          log.stream("cached file download url", { fileId, conversationId });
         }
       } catch (error) {
-        log("failed to cache file download response", String(error));
+        log.basic("failed to cache file download response", String(error));
       }
 
       return orgResponse;
@@ -4668,7 +4715,7 @@
     }
 
     if (summary?.error) {
-      log("skip prune: summary error", summary.error);
+      log.basic("skip prune: summary error", summary.error);
       return orgResponse;
     }
 
@@ -4678,7 +4725,7 @@
     }
 
     if (shouldSkipPrune(summary)) {
-      log("skip prune: low benefit", {
+      log.basic("skip prune: low benefit", {
         chainLength: summary.original?.chainLength,
         keepNodeCount: summary.prunePlan?.keepNodeCount,
       });
@@ -4695,7 +4742,7 @@
       postInitialPruneMeta(data.conversation_id || "", pruneMeta);
     }
 
-    log("pruned conversation response", {
+    log.basic("pruned conversation response", {
       url,
       originalMappingCount: Object.keys(data.mapping || {}).length,
       prunedMappingCount: Object.keys(pruned.mapping || {}).length,
@@ -4800,7 +4847,7 @@
           }
         });
       } catch (error) {
-        log("rtc peer connection state patch failed", String(error));
+        log.basic("rtc peer connection state patch failed", String(error));
       }
 
       return pc;
@@ -4889,7 +4936,7 @@
           return originalAddEventListener.call(this, type, listener, options);
         };
       } catch (error) {
-        log("eventsource patch failed", String(error));
+        log.basic("eventsource patch failed", String(error));
       }
 
       return es;
@@ -4975,5 +5022,5 @@
       );
     }
   });
-  log("main hook initialized");
+  log.basic("main hook initialized");
 })();
