@@ -203,8 +203,8 @@
     const rawText = typeof message?.text === "string" ? message.text : "";
     const renderText = typeof message?.renderText === "string" ? message.renderText : "";
 
-    if (rawText) return rawText;
     if (renderText) return renderText;
+    if (rawText) return rawText;
     return "";
   }
 
@@ -404,6 +404,77 @@
   }
 
   /**
+   * Render a single image figure for the lightweight viewer.
+   *
+   * @param {Object} image - Image metadata object.
+   * @returns {string} Figure markup.
+   */
+  function renderSingleImageFigure(image, options = {}) {
+    const noImg = options.noImg !== false;
+    const rawSrc = image?.embeddedUrl || image?.url || "";
+    const alt = escapeHtml(image?.alt || "");
+    const caption = escapeHtml(image?.alt || image?.title || "");
+
+    let src = "";
+    let isExternal = false;
+    if (rawSrc) {
+      try {
+        if (/^https?:\/\//i.test(rawSrc)) {
+          src = rawSrc;
+          isExternal = true;
+        } else if (/^data:image\//i.test(rawSrc)) {
+          src = rawSrc;
+        }
+      } catch {
+        src = "";
+      }
+    }
+
+    if (noImg) {
+      return `<figure class="cgo-image cgo-image-missing">
+          <div class="cgo-image-missing-box">${escapeHtml(t("image_not_include_label"))}</div>
+          ${caption ? `<figcaption>${caption}</figcaption>` : ""}
+        </figure>`;
+    }
+
+    return src
+      ? `<figure class="cgo-image${isExternal ? " cgo-image-external" : ""}">
+          <img src="${escapeHtml(src)}" alt="${alt}"${isExternal ? ' loading="lazy" referrerpolicy="no-referrer"' : ""}>
+          ${caption ? `<figcaption>${caption}</figcaption>` : ""}
+          ${renderImageMeta(image)}
+        </figure>`
+      : `<figure class="cgo-image cgo-image-missing">
+          <div class="cgo-image-missing-box">${escapeHtml(t("image_not_include_label"))}</div>
+          ${caption ? `<figcaption>${caption}</figcaption>` : ""}
+        </figure>`;
+  }
+
+  /**
+   * Replace prepared inline-image tokens inside rendered message HTML.
+   *
+   * @param {string} bodyHtml - Rendered markdown HTML.
+   * @param {Object} message - Message with optional `inlineImages`.
+   * @returns {string} HTML with inline tokens expanded.
+   */
+  function renderPreparedInlineImagesInHtml(bodyHtml, message) {
+    let html = typeof bodyHtml === "string" ? bodyHtml : "";
+    const inlineImages = Array.isArray(message?.inlineImages) ? message.inlineImages : [];
+
+    if (!html || !inlineImages.length) {
+      return html;
+    }
+
+    for (const entry of inlineImages) {
+      if (!entry?.token || !entry?.image) continue;
+      html = html.split(entry.token).join(
+        renderSingleImageFigure(entry.image, { noImg: true })
+      );
+    }
+
+    return html;
+  }
+
+  /**
    * Render an array of image descriptors into HTML blocks grouping internal and external images.
    *
    * @param {Array<Object>} images - List of image objects. Each object may contain:
@@ -425,37 +496,8 @@
 
     for (const image of images) {
       const rawSrc = image?.embeddedUrl || image?.url || "";
-      const alt = escapeHtml(image?.alt || "");
-      const caption = escapeHtml(image?.alt || image?.title || "");
-
-      // Validate URL scheme
-      let src = "";
-      let isExternal = false;
-      if (rawSrc) {
-        try {
-          if (/^https?:\/\//i.test(rawSrc)) {
-            src = rawSrc;
-            isExternal = true;
-          } else if (/^data:image\//i.test(rawSrc)) {
-            src = rawSrc;
-            isExternal = false;
-          }
-          // Otherwise treat as missing (disallow other schemes)
-        } catch {
-          // Invalid URL; treat as missing
-        }
-      }
-
-      const figureHtml = src
-        ? `<figure class="cgo-image${isExternal ? " cgo-image-external" : ""}">
-            <img src="${escapeHtml(src)}" alt="${alt}"${isExternal ? ' loading="lazy" referrerpolicy="no-referrer"' : ""}>
-            ${caption ? `<figcaption>${caption}</figcaption>` : ""}
-            ${renderImageMeta(image)}
-          </figure>`
-        : `<figure class="cgo-image cgo-image-missing">
-            <div class="cgo-image-missing-box">${escapeHtml(t("image_not_include_label"))}</div>
-            ${caption ? `<figcaption>${caption}</figcaption>` : ""}
-          </figure>`;
+      const isExternal = /^https?:\/\//i.test(rawSrc);
+      const figureHtml = renderSingleImageFigure(image, { noImg: true });
 
       if (isExternal) {
         externalItems.push(figureHtml);
@@ -478,8 +520,10 @@
    */
   function renderAttachments(attachments) {
     if (!Array.isArray(attachments) || attachments.length === 0) return "";
+    const nonImageAttachments = attachments.filter((attachment) => attachment?.kind !== "image");
+    if (nonImageAttachments.length === 0) return "";
 
-    return `<div class="cgo-attachments">${attachments.map((attachment) => {
+    return `<div class="cgo-attachments">${nonImageAttachments.map((attachment) => {
       const name = escapeHtml(attachment?.name || "attachment");
       const rawHref = attachment?.localPath || attachment?.url || "";
       const meta = escapeHtml(t("attachment_not_embedded_label"));
@@ -561,6 +605,8 @@
     const roleLabel = message.role === "user" ? t("role_user") : t("role_assistant");
     const dateText = formatExportDate(message.createTime);
     const sourceText = pickMessageSourceText(message);
+    let bodyHtml = renderMessageTextToHtml(sourceText);
+    bodyHtml = renderPreparedInlineImagesInHtml(bodyHtml, message);
 
     return `
 <section class="message ${escapeHtml(message.role || "")}" id="mes-${escapeHtml(message.id || "")}">
@@ -578,7 +624,7 @@
     </div>
   </div>
   <div class="message-body">
-    ${renderMessageTextToHtml(sourceText)}
+    ${bodyHtml}
     ${renderImages(message.visibleImages || message.images || [])}
     ${renderAttachments(message.visibleAttachments || message.attachments || [])}
     ${renderThoughts(message.thoughts || [], message.id)}

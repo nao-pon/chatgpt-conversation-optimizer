@@ -1095,8 +1095,10 @@
    */
   function renderAttachmentsForZip(attachments) {
     if (!Array.isArray(attachments) || attachments.length === 0) return "";
+    const nonImageAttachments = attachments.filter((attachment) => attachment?.kind !== "image");
+    if (nonImageAttachments.length === 0) return "";
 
-    const items = attachments.map((attachment) => {
+    const items = nonImageAttachments.map((attachment) => {
       const icon = CGO.getAttachmentIcon(attachment.kind, (attachment.isSandboxArtifact && !attachment.url));
       const name = CGO.escapeHtml(attachment.name || CGO.t("attachment_unknown_name"));
       const kindLabel = CGO.escapeHtml(
@@ -1143,8 +1145,10 @@
    */
   function renderAttachments(attachments) {
     if (!Array.isArray(attachments) || attachments.length === 0) return "";
+    const nonImageAttachments = attachments.filter((attachment) => attachment?.kind !== "image");
+    if (nonImageAttachments.length === 0) return "";
 
-    const items = attachments.map((attachment) => {
+    const items = nonImageAttachments.map((attachment) => {
       const icon = CGO.getAttachmentIcon(attachment.kind, attachment.isSandboxArtifact);
       const name = CGO.escapeHtml(attachment.name || CGO.t("attachment_unknown_name"));
       const kindLabel = CGO.escapeHtml(

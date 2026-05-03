@@ -1421,7 +1421,7 @@
 
     let renderText = sourceText;
     const inlineImages = [];
-    const consumedKeys = new Set();
+    const consumedAssets = [];
 
     for (const attachment of imageAttachments) {
       const attachmentName = String(attachment?.name || "").trim();
@@ -1433,7 +1433,7 @@
       let matched = false;
 
       renderText = renderText.replace(
-        /\[([^\]]+)\]\(([^)\n]+)\)/g,
+        /!?\[([^\]]+)\]\(([^)\n]+)\)/g,
         (all, label, href) => {
           try {
             const fileName = String(href || "").split("/").pop() || "";
@@ -1474,26 +1474,14 @@
 
       if (!matched) continue;
 
-      const attachmentKey = attachment.fileId || attachment.url || attachment.name || "";
-      consumedKeys.add(attachmentKey);
-
       const matchedImage = images.find((image) => {
-        const imageKey = image?.fileId || image?.url || image?.fileName || image?.title || image?.alt || "";
-        if (attachment.fileId && image?.fileId && attachment.fileId === image.fileId) {
-          return true;
-        }
-        if (attachment.url && image?.url && attachment.url === image.url) {
-          return true;
-        }
-        if (
-          normalizeInlineAssetName(image?.fileName || "") === normalizedAttachmentName ||
-          normalizeInlineAssetName(image?.title || "") === normalizedAttachmentName ||
-          normalizeInlineAssetName(image?.alt || "") === normalizedAttachmentName
-        ) {
-          return true;
-        }
-        return imageKey === attachmentKey;
+        return doesInlineAssetMatch(image, attachment);
       });
+
+      consumedAssets.push(buildInlineAssetIdentity(attachment));
+      if (matchedImage) {
+        consumedAssets.push(buildInlineAssetIdentity(matchedImage));
+      }
 
       const baseImage = matchedImage
         ? CGO.normalizeImageMeta(matchedImage)
@@ -1535,15 +1523,72 @@
     message.renderText = renderText;
     message.visibleAttachments = attachments.filter((attachment) => {
       if (attachment?.kind !== "image") return true;
-      const key = attachment.fileId || attachment.url || attachment.name || "";
-      return !consumedKeys.has(key);
+      return !consumedAssets.some((identity) => doesInlineAssetMatch(attachment, identity));
     });
     message.visibleImages = images.filter((image) => {
-      const key = image?.fileId || image?.url || image?.fileName || image?.title || image?.alt || "";
-      return !consumedKeys.has(key);
+      return !consumedAssets.some((identity) => doesInlineAssetMatch(image, identity));
     });
 
     return message;
+  }
+
+  /**
+   * Build a compact identity object used to suppress already-inlined image assets.
+   *
+   * @param {Object} asset - Attachment or image metadata.
+   * @returns {{fileId: string, url: string, names: string[]}} Stable identity fields.
+   */
+  function buildInlineAssetIdentity(asset) {
+    const names = [
+      asset?.name,
+      asset?.fileName,
+      asset?.title,
+      asset?.alt,
+    ]
+      .map((value) => normalizeInlineAssetName(value || ""))
+      .filter(Boolean);
+
+    return {
+      fileId: String(asset?.fileId || "").trim(),
+      url: String(asset?.url || asset?.embeddedUrl || "").trim(),
+      names: Array.from(new Set(names)),
+    };
+  }
+
+  /**
+   * Decide whether two attachment/image records describe the same inline image candidate.
+   *
+   * @param {Object} asset - Candidate attachment or image metadata.
+   * @param {Object} identity - Identity descriptor built from a related asset.
+   * @returns {boolean} `true` when the candidate should be treated as already inlined.
+   */
+  function doesInlineAssetMatch(asset, identity) {
+    if (!asset || !identity) return false;
+
+    const assetFileId = String(asset?.fileId || "").trim();
+    if (assetFileId && identity.fileId && assetFileId === identity.fileId) {
+      return true;
+    }
+
+    const assetUrl = String(asset?.url || asset?.embeddedUrl || "").trim();
+    if (assetUrl && identity.url && assetUrl === identity.url) {
+      return true;
+    }
+
+    const assetNames = [
+      asset?.name,
+      asset?.fileName,
+      asset?.title,
+      asset?.alt,
+    ]
+      .map((value) => normalizeInlineAssetName(value || ""))
+      .filter(Boolean);
+
+    if (!assetNames.length || !Array.isArray(identity.names) || !identity.names.length) {
+      return false;
+    }
+
+    return identity.names.some((name) => assetNames.includes(name));
   }
 
   /**

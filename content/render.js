@@ -203,6 +203,7 @@
       ]);
 
       CGO.prepareInlineImageData(message);
+      sanitizeRenderableMedia(message);
 
       if (isImageMessage && message.images.length) {
         CGO.log("[export] image message merged", {
@@ -502,6 +503,7 @@
 
       if (typeof CGO.prepareInlineImageData === "function") {
         CGO.prepareInlineImageData(primary);
+        sanitizeRenderableMedia(primary);
       }
 
       removeIds.add(message.id);
@@ -810,6 +812,192 @@
       ...(Array.isArray(message.images) ? message.images : []),
       ...promoted,
     ]);
+  }
+
+  /**
+   * Normalize a media label for duplicate detection.
+   *
+   * @param {*} value - Candidate label value.
+   * @returns {string} Normalized label.
+   */
+  function normalizeRenderableMediaName(value) {
+    return String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/\\/g, "/")
+      .split("/")
+      .pop()
+      .replace(/\?.*$/, "")
+      .replace(/^!+/, "");
+  }
+
+  /**
+   * Extract stable identifiers from image/attachment metadata.
+   *
+   * @param {Object} asset - Media metadata.
+   * @returns {string[]} Candidate identifiers.
+   */
+  function getRenderableMediaIds(asset) {
+    const ids = new Set();
+    const directId = String(asset?.fileId || "").trim();
+    if (directId) ids.add(directId);
+
+    const rawValues = [
+      asset?.url,
+      asset?.embeddedUrl,
+      asset?.localPath,
+    ];
+
+    for (const rawValue of rawValues) {
+      const value = String(rawValue || "").trim();
+      if (!value) continue;
+
+      const fileIdMatch = value.match(/file_[A-Za-z0-9]+/i);
+      if (fileIdMatch) ids.add(fileIdMatch[0]);
+
+      const downloadMatch = value.match(/\/backend-api\/files\/([A-Za-z0-9_-]+)\/download(?:\?|$)/i);
+      if (downloadMatch) ids.add(downloadMatch[1]);
+
+      const estuaryMatch = value.match(/[?&]id=([A-Za-z0-9_-]+)/i);
+      if (estuaryMatch) ids.add(estuaryMatch[1]);
+    }
+
+    return Array.from(ids);
+  }
+
+  /**
+   * Build a compact identity descriptor for render-time media filtering.
+   *
+   * @param {Object} asset - Image or attachment metadata.
+   * @returns {{ids: string[], urls: string[], names: string[], fileSizeBytes: number, width: number, height: number}} Identity descriptor.
+   */
+  function buildRenderableMediaIdentity(asset) {
+    const names = [
+      asset?.name,
+      asset?.fileName,
+      asset?.title,
+      asset?.alt,
+    ]
+      .map(normalizeRenderableMediaName)
+      .filter(Boolean);
+
+    const urls = [
+      asset?.url,
+      asset?.embeddedUrl,
+      asset?.localPath,
+    ]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+
+    return {
+      ids: getRenderableMediaIds(asset),
+      urls: Array.from(new Set(urls)),
+      names: Array.from(new Set(names)),
+      fileSizeBytes: Number(asset?.fileSizeBytes || 0),
+      width: Number(asset?.width || 0),
+      height: Number(asset?.height || 0),
+    };
+  }
+
+  /**
+   * Decide whether two image/attachment records should be treated as the same rendered media.
+   *
+   * @param {Object} asset - Candidate media metadata.
+   * @param {Object} identity - Identity descriptor.
+   * @returns {boolean} `true` when both records refer to the same media.
+   */
+  function isRenderableMediaMatch(asset, identity) {
+    if (!asset || !identity) return false;
+
+    const candidate = buildRenderableMediaIdentity(asset);
+
+    if (candidate.ids.some((id) => identity.ids.includes(id))) {
+      return true;
+    }
+
+    if (candidate.urls.some((url) => identity.urls.includes(url))) {
+      return true;
+    }
+
+    const sharedName = candidate.names.find((name) => identity.names.includes(name));
+    if (!sharedName) return false;
+
+    if (
+      candidate.fileSizeBytes > 0 &&
+      identity.fileSizeBytes > 0 &&
+      candidate.fileSizeBytes === identity.fileSizeBytes
+    ) {
+      return true;
+    }
+
+    if (
+      candidate.width > 0 &&
+      candidate.height > 0 &&
+      identity.width > 0 &&
+      identity.height > 0 &&
+      candidate.width === identity.width &&
+      candidate.height === identity.height
+    ) {
+      return true;
+    }
+
+    return candidate.names.length === 1 && identity.names.length === 1;
+  }
+
+  /**
+   * Apply a final render-time cleanup so inline images, gallery images, and attachment cards do not duplicate each other.
+   *
+   * @param {Object} message - Export message mutated in place.
+   * @returns {Object} The same message reference.
+   */
+  function sanitizeRenderableMedia(message) {
+    if (!message || typeof message !== "object") return message;
+
+    const inlineImages = Array.isArray(message.inlineImages)
+      ? message.inlineImages
+        .map((entry) => entry?.image)
+        .filter((image) => image && typeof image === "object")
+      : [];
+
+    const inlineIdentities = inlineImages.map(buildRenderableMediaIdentity);
+
+    const sourceImages = Array.isArray(message.visibleImages)
+      ? message.visibleImages
+      : (Array.isArray(message.images) ? message.images : []);
+    const dedupedImages = [];
+    const seenImageIdentities = [];
+
+    for (const image of sourceImages) {
+      if (!image || typeof image !== "object") continue;
+      if (inlineIdentities.some((identity) => isRenderableMediaMatch(image, identity))) {
+        continue;
+      }
+
+      const identity = buildRenderableMediaIdentity(image);
+      if (seenImageIdentities.some((seen) => isRenderableMediaMatch(image, seen))) {
+        continue;
+      }
+
+      dedupedImages.push(image);
+      seenImageIdentities.push(identity);
+    }
+
+    const sourceAttachments = Array.isArray(message.visibleAttachments)
+      ? message.visibleAttachments
+      : (Array.isArray(message.attachments) ? message.attachments : []);
+    const hiddenAttachmentIdentities = [
+      ...inlineIdentities,
+      ...seenImageIdentities,
+    ];
+
+    const filteredAttachments = sourceAttachments.filter((attachment) => {
+      if (!attachment || typeof attachment !== "object") return false;
+      return !hiddenAttachmentIdentities.some((identity) => isRenderableMediaMatch(attachment, identity));
+    });
+
+    message.visibleImages = dedupedImages;
+    message.visibleAttachments = filteredAttachments;
+    return message;
   }
 
   /**
@@ -1470,6 +1658,7 @@
 
       for (const message of messages) {
         CGO.prepareInlineImageData(message);
+        sanitizeRenderableMedia(message);
       }
 
       CGO.log("[export] counts", {
@@ -1533,6 +1722,7 @@
             createTime: message.createTime,
             text: message.text || "",
             renderText: typeof message.renderText === "string" ? message.renderText : (message.text || ""),
+            inlineImages: message.inlineImages || [],
             isVoiceTranscription: !!message.isVoiceTranscription,
             voiceDirection: message.voiceDirection || "",
             hasVoiceAudio: !!message.hasVoiceAudio,
