@@ -122,6 +122,68 @@
   }
 
   /**
+   * Create (or return an existing) modal backdrop used for image zoom previews.
+   *
+   * @param {Function} [getLabel] - Optional localized label resolver.
+   * @returns {HTMLElement} The image zoom backdrop element.
+   */
+  function ensureImageZoomModal(getLabel) {
+    let backdrop = document.getElementById("cgo-image-zoom-backdrop");
+    if (backdrop) return backdrop;
+
+    const closeLabel = typeof getLabel === "function"
+      ? getLabel("close_button", "Close")
+      : "Close";
+
+    backdrop = document.createElement("div");
+    backdrop.id = "cgo-image-zoom-backdrop";
+    backdrop.className = "cgo-image-zoom-backdrop";
+    backdrop.hidden = true;
+    backdrop.innerHTML = `
+      <div class="cgo-image-zoom-dialog" role="dialog" aria-modal="true">
+        <button type="button" class="cgo-image-zoom-close" aria-label="${closeLabel}">×</button>
+        <img alt="">
+        <div class="cgo-image-zoom-caption"></div>
+      </div>`;
+    document.body.appendChild(backdrop);
+
+    const closeModal = () => { backdrop.hidden = true; };
+    backdrop.querySelector(".cgo-image-zoom-close")?.addEventListener("click", closeModal);
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) closeModal();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !backdrop.hidden) closeModal();
+    });
+
+    return backdrop;
+  }
+
+  /**
+   * Show a larger preview for an exported image.
+   *
+   * @param {HTMLImageElement} image - Image element that was clicked.
+   * @param {Function} [getLabel] - Optional localized label resolver.
+   * @returns {void}
+   */
+  function showImageZoom(image, getLabel) {
+    const src = image?.getAttribute("data-cgo-full-src") || image?.currentSrc || image?.src || "";
+    if (!src) return;
+
+    const backdrop = ensureImageZoomModal(getLabel);
+    const zoomImage = backdrop.querySelector(".cgo-image-zoom-dialog img");
+    const caption = backdrop.querySelector(".cgo-image-zoom-caption");
+    const figure = image.closest("figure");
+    const captionText = figure?.querySelector("figcaption")?.textContent?.trim() || image.alt || "";
+
+    zoomImage.src = src;
+    zoomImage.alt = image.alt || captionText || "";
+    caption.textContent = captionText;
+    caption.hidden = !captionText;
+    backdrop.hidden = false;
+  }
+
+  /**
    * Initialize syntax highlighting for all `pre code` blocks using `window.hljs`.
    *
    * If `window.hljs` is not present this function does nothing. When `IntersectionObserver`
@@ -185,6 +247,13 @@
     const getLabel = options.getLabel || ((key, fallback) => fallback || key);
 
     document.addEventListener("click", async (event) => {
+      const zoomImage = event.target.closest(".cgo-image-external img");
+      if (zoomImage) {
+        event.preventDefault();
+        showImageZoom(zoomImage, getLabel);
+        return;
+      }
+
       const markdownCopyBtn = event.target.closest(".cgo-markdown-copy-btn");
       if (markdownCopyBtn) {
         const section = markdownCopyBtn.closest(".message");

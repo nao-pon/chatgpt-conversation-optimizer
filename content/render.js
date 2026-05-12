@@ -159,11 +159,14 @@
         const mimeType = String(image?.mimeType || "").toLowerCase();
         const fileName = String(image?.fileName || image?.title || image?.alt || "").toLowerCase();
         const url = String(image?.url || "");
+        const source = String(image?.source || "");
 
         return (
+          /^content-reference-image-/i.test(source) ||
           /^image\//i.test(mimeType) ||
           /\.(png|jpg|jpeg|webp|gif|bmp|svg)$/i.test(fileName) ||
           /[?&]mime_type=image%2F/i.test(url) ||
+          /^https:\/\/images\.openai\.com\/static-rsc-/i.test(url) ||
           /\/backend-api\/files\/[A-Za-z0-9_-]+\/download(\?|$)/i.test(url) ||
           /\/backend-api\/estuary\/content\?/i.test(url)
         );
@@ -305,6 +308,9 @@
     if (image.url) score += 20;
     if (image.embeddedUrl) score += 20;
     if (image.localPath) score += 20;
+    if (image.thumbnailUrl) score += 8;
+    if (image.originalUrl) score += 8;
+    if (image.sourceUrl) score += 8;
     if (image.alt) score += 12;
     if (image.title) score += 12;
     if (image.fileName) score += 8;
@@ -349,6 +355,9 @@
       url: primary.url || donor.url || "",
       embeddedUrl: primary.embeddedUrl || donor.embeddedUrl || null,
       localPath: primary.localPath || donor.localPath || "",
+      thumbnailUrl: primary.thumbnailUrl || donor.thumbnailUrl || "",
+      originalUrl: primary.originalUrl || donor.originalUrl || "",
+      sourceUrl: primary.sourceUrl || donor.sourceUrl || "",
       fileName: preferString(primary.fileName, donor.fileName),
       mimeType: primary.mimeType || donor.mimeType || "",
       fileSizeBytes: Number(primary.fileSizeBytes || donor.fileSizeBytes || 0),
@@ -676,6 +685,17 @@
     const sourceLink = CGO.renderImageSourceLink(image);
     const skipLabel = CGO.getImageSkipLabel(image);
     const isExternal = CGO.isProbablyExternalImage(image);
+    const lightweightUrl = image.thumbnailUrl || image.url || "";
+    const isReferenceImage = /^content-reference-image-/i.test(String(image.source || ""));
+
+    if (noImg && lightweightUrl && !image.unresolved && isExternal && isReferenceImage) {
+      return `<figure class="cgo-image cgo-image-external">
+        <img src="${CGO.escapeHtml(lightweightUrl)}" data-cgo-full-src="${CGO.escapeHtml(image.url || lightweightUrl)}" alt="${alt}" loading="lazy" referrerpolicy="no-referrer">
+        ${caption ? `<figcaption>${caption}</figcaption>` : ""}
+        ${renderImageMeta(image)}
+        ${sourceLink}
+      </figure>`;
+    }
 
     // ZIP内ローカル画像
     if (mode === "zip" && image.localPath) {
@@ -700,7 +720,8 @@
     // 外部画像は参照用としてそのまま表示
     if (image.url && !image.unresolved && isExternal) {
       return `<figure class="cgo-image cgo-image-external">
-        <img src="${CGO.escapeHtml(image.url)}" loading="lazy" referrerpolicy="no-referrer">
+        <img src="${CGO.escapeHtml(image.url)}" alt="${alt}" loading="lazy" referrerpolicy="no-referrer">
+        ${caption ? `<figcaption>${caption}</figcaption>` : ""}
         ${renderImageMeta(image)}
         ${sourceLink}
       </figure>`;
@@ -758,6 +779,29 @@
         ? `<div class="cgo-images cgo-images-external">${externalItems.join("\n")}</div>`
         : "",
     ].join("\n");
+  }
+
+  /**
+   * Render inline image references as a compact gallery.
+   *
+   * @param {Object[]} images - Inline image metadata entries.
+   * @param {Object} [options={}] - Rendering options.
+   * @returns {string} Gallery markup.
+   */
+  function renderInlineImageGroup(images, options = {}) {
+    if (!Array.isArray(images) || !images.length) return "";
+
+    const mode = options.zipMode ? "zip" : "html";
+    const noImg = !!options.noImg;
+    const items = images
+      .map((image) => CGO.renderSingleImageFigure(image, { mode, noImg }))
+      .filter(Boolean);
+
+    if (!items.length) return "";
+
+    return `<div class="cgo-images cgo-images-external cgo-images-inline-reference">
+      ${items.join("\n")}
+    </div>`;
   }
 
   /**
@@ -1023,12 +1067,18 @@
     }
 
     for (const entry of inlineImages) {
-      if (!entry?.token || !entry?.image) continue;
+      if (!entry?.token) continue;
 
-      const figureHtml = CGO.renderSingleImageFigure(entry.image, {
-        mode: zipMode ? "zip" : "html",
-        noImg,
-      });
+      const figureHtml = Array.isArray(entry.images)
+        ? renderInlineImageGroup(entry.images, { zipMode, noImg })
+        : entry.image
+          ? CGO.renderSingleImageFigure(entry.image, {
+            mode: zipMode ? "zip" : "html",
+            noImg,
+          })
+          : "";
+
+      if (!figureHtml) continue;
 
       html = html.split(entry.token).join(figureHtml);
     }

@@ -478,6 +478,10 @@ code {
   margin-top: 12px;
 }
 
+.cgo-images-inline-reference {
+  max-width: min(100%, 900px);
+}
+
 @media (min-width: 900px) {
   .cgo-images-external {
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -494,6 +498,13 @@ code {
   height: auto;
   border: 1px solid #d1d5db;
   border-radius: 10px;
+}
+
+.cgo-image-external img {
+  max-width: min(100%, 420px);
+  max-height: 460px;
+  object-fit: contain;
+  cursor: zoom-in;
 }
 
 .cgo-images-external .cgo-image-external img {
@@ -525,10 +536,6 @@ code {
 .cgo-image-source a {
   color: inherit;
   text-decoration: underline;
-}
-
-.cgo-image-external img {
-  cursor: zoom-in;
 }
 
 .cgo-image-hint {
@@ -569,6 +576,68 @@ code {
   color: #ffb020;
   font-size: 0.9rem;
   font-weight: 500;
+}
+
+.cgo-image-zoom-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 22px;
+  background: rgba(17, 24, 39, 0.86);
+}
+
+.cgo-image-zoom-backdrop[hidden] {
+  display: none;
+}
+
+.cgo-image-zoom-dialog {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: min(1120px, 100%);
+  max-height: 100%;
+}
+
+.cgo-image-zoom-dialog img {
+  display: block;
+  max-width: calc(100vw - 44px);
+  max-height: calc(100vh - 120px);
+  width: auto;
+  height: auto;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  object-fit: contain;
+}
+
+.cgo-image-zoom-caption {
+  max-width: calc(100vw - 44px);
+  color: #f9fafb;
+  font-size: 0.92rem;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.cgo-image-zoom-close {
+  position: absolute;
+  top: -14px;
+  right: -14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+  background: rgba(17, 24, 39, 0.92);
+  color: #fff;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
 }
 
 .cgo-attachments {

@@ -1305,6 +1305,84 @@
   }
 
   /**
+   * Build the placeholder token used for image content-reference markers.
+   *
+   * @param {string} messageId - Message identifier.
+   * @param {number} refIndex - Content-reference index.
+   * @returns {string} Placeholder token.
+   */
+  function buildContentReferenceImageToken(messageId, refIndex) {
+    return buildInlineImageToken(
+      `${messageId || "msg"}_content_ref`,
+      refIndex + 1
+    );
+  }
+
+  /**
+   * Extract inline image-reference entries from ChatGPT content references.
+   *
+   * @param {Object} rawMessage - Raw message payload.
+   * @returns {Object[]} Image reference entries with marker text and matching metadata.
+   */
+  function extractContentReferenceInlineImageEntries(rawMessage) {
+    const refs = Array.isArray(rawMessage?.metadata?.content_references)
+      ? rawMessage.metadata.content_references
+      : [];
+
+    const entries = [];
+    const messageId = rawMessage?.id || "";
+
+    refs.forEach((ref, refIndex) => {
+      if (!ref || (ref.type !== "image_v2" && ref.type !== "image_group")) return;
+      if (!Array.isArray(ref.images) || !ref.images.length) return;
+
+      const matchedText = typeof ref.matched_text === "string"
+        ? ref.matched_text
+        : "";
+      if (!matchedText) return;
+
+      ref.images.forEach((item, imageIndex) => {
+        const imageResult = item?.image_result || item || {};
+        const rawUrl =
+          imageResult.content_url ||
+          (ref.type === "image_group" ? imageResult.url : "") ||
+          imageResult.thumbnail_url ||
+          imageResult.original_content_url ||
+          imageResult.original_url ||
+          "";
+
+        const sourceUrl =
+          imageResult.source_url ||
+          imageResult.page_url ||
+          imageResult.url ||
+          "";
+
+        entries.push({
+          matchedText,
+          refIndex,
+          token: buildContentReferenceImageToken(messageId, refIndex),
+          image: {
+            url: CGO.normalizeMaybeRelativeChatgptUrl(rawUrl),
+            embeddedUrl: "",
+            thumbnailUrl: CGO.normalizeMaybeRelativeChatgptUrl(imageResult.thumbnail_url || ""),
+            originalUrl: CGO.normalizeMaybeRelativeChatgptUrl(
+              imageResult.original_content_url || imageResult.original_url || ""
+            ),
+            sourceUrl: CGO.normalizeMaybeRelativeChatgptUrl(sourceUrl),
+            title: imageResult.title || "",
+            alt: imageResult.alt || imageResult.title || "",
+            source: ref.type === "image_v2"
+              ? "content-reference-image-v2"
+              : "content-reference-image-group",
+          },
+        });
+      });
+    });
+
+    return entries;
+  }
+
+  /**
    * Convert a content-reference entry into replacement text for export rendering.
    *
    * @param {Object} ref - Content-reference descriptor.
@@ -1347,6 +1425,10 @@
       return `[${safeLabel}](${url})`;
     }
 
+    if (ref.type === "image_v2" || ref.type === "image_group") {
+      return "";
+    }
+
     return "";
   }
 
@@ -1369,7 +1451,10 @@
 
     const replacements = [];
 
-    for (const ref of refs) {
+    const imageEntries = extractContentReferenceInlineImageEntries(rawMessage);
+
+    for (let refIndex = 0; refIndex < refs.length; refIndex += 1) {
+      const ref = refs[refIndex];
       if (!ref || typeof ref !== "object") continue;
 
       const matchedText = typeof ref.matched_text === "string"
@@ -1377,7 +1462,15 @@
         : "";
       if (!matchedText) continue;
 
-      const replacement = getContentReferenceReplacement(ref);
+      let replacement = getContentReferenceReplacement(ref);
+      if (!replacement && (ref.type === "image_v2" || ref.type === "image_group")) {
+        const tokens = imageEntries
+          .filter((entry) => entry.refIndex === refIndex && entry.matchedText === matchedText)
+          .map((entry) => entry.token);
+        const uniqueTokens = Array.from(new Set(tokens));
+
+        replacement = uniqueTokens.length ? `\n\n${uniqueTokens.join("\n\n")}\n\n` : "";
+      }
       if (!replacement) continue;
 
       replacements.push({
@@ -1410,8 +1503,9 @@
     const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
     const images = Array.isArray(message?.images) ? message.images : [];
     const imageAttachments = attachments.filter((attachment) => attachment?.kind === "image");
+    const contentReferenceInlineEntries = extractContentReferenceInlineImageEntries(message?.rawMessage || {});
 
-    if (!sourceText || !imageAttachments.length) {
+    if (!sourceText || (!imageAttachments.length && !contentReferenceInlineEntries.length)) {
       message.inlineImages = [];
       message.renderText = sourceText;
       message.visibleAttachments = attachments.slice();
@@ -1422,6 +1516,48 @@
     let renderText = sourceText;
     const inlineImages = [];
     const consumedAssets = [];
+
+    const contentReferenceEntriesByToken = new Map();
+    for (const entry of contentReferenceInlineEntries) {
+      if (!entry?.token || !renderText.includes(entry.token)) continue;
+      const list = contentReferenceEntriesByToken.get(entry.token) || [];
+      list.push(entry);
+      contentReferenceEntriesByToken.set(entry.token, list);
+    }
+
+    for (const [token, entries] of contentReferenceEntriesByToken.entries()) {
+      const groupImages = [];
+
+      for (const entry of entries) {
+        const entryIdentity = buildInlineAssetIdentity(entry.image || {});
+        const matchedImage = images.find((image) => {
+          return doesInlineAssetMatch(image, entryIdentity);
+        });
+
+        const baseImage = matchedImage
+          ? CGO.normalizeImageMeta(matchedImage)
+          : CGO.normalizeImageMeta(entry.image || {});
+
+        consumedAssets.push(entryIdentity);
+        if (matchedImage) {
+          consumedAssets.push(buildInlineAssetIdentity(matchedImage));
+        }
+
+        groupImages.push(CGO.normalizeImageMeta({
+          ...baseImage,
+          alt: baseImage.alt || baseImage.title || entry.image?.alt || entry.image?.title || "",
+          title: baseImage.title || entry.image?.title || "",
+          source: baseImage.source || entry.image?.source || "content-reference-image",
+        }));
+      }
+
+      inlineImages.push({
+        token,
+        ...(groupImages.length === 1
+          ? { image: groupImages[0] }
+          : { images: groupImages }),
+      });
+    }
 
     for (const attachment of imageAttachments) {
       const attachmentName = String(attachment?.name || "").trim();
@@ -1536,7 +1672,7 @@
    * Build a compact identity object used to suppress already-inlined image assets.
    *
    * @param {Object} asset - Attachment or image metadata.
-   * @returns {{fileId: string, url: string, names: string[]}} Stable identity fields.
+   * @returns {{fileId: string, url: string, urls: string[], names: string[]}} Stable identity fields.
    */
   function buildInlineAssetIdentity(asset) {
     const names = [
@@ -1551,6 +1687,16 @@
     return {
       fileId: String(asset?.fileId || "").trim(),
       url: String(asset?.url || asset?.embeddedUrl || "").trim(),
+      urls: Array.from(new Set([
+        asset?.url,
+        asset?.embeddedUrl,
+        asset?.thumbnailUrl,
+        asset?.originalUrl,
+        asset?.sourceUrl,
+        asset?.localPath,
+      ]
+        .map((value) => String(value || "").trim())
+        .filter(Boolean))),
       names: Array.from(new Set(names)),
     };
   }
@@ -1570,9 +1716,25 @@
       return true;
     }
 
-    const assetUrl = String(asset?.url || asset?.embeddedUrl || "").trim();
-    if (assetUrl && identity.url && assetUrl === identity.url) {
-      return true;
+    const assetUrls = [
+      asset?.url,
+      asset?.embeddedUrl,
+      asset?.thumbnailUrl,
+      asset?.originalUrl,
+      asset?.sourceUrl,
+      asset?.localPath,
+    ]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+
+    const identityUrls = Array.isArray(identity.urls) && identity.urls.length
+      ? identity.urls
+      : [identity.url].filter(Boolean);
+
+    if (assetUrls.length && identityUrls.length) {
+      if (assetUrls.some((url) => identityUrls.includes(url))) {
+        return true;
+      }
     }
 
     const assetNames = [
@@ -2476,6 +2638,9 @@
       alt: "",
       title: "",
       hint: "",
+      thumbnailUrl: "",
+      originalUrl: "",
+      sourceUrl: "",
       fileName: "",
       mimeType: "",
       fileSizeBytes: 0,
@@ -2538,6 +2703,9 @@
       alt: a.alt || b.alt,
       title: a.title || b.title,
       hint: a.hint || b.hint,
+      thumbnailUrl: a.thumbnailUrl || b.thumbnailUrl,
+      originalUrl: a.originalUrl || b.originalUrl,
+      sourceUrl: a.sourceUrl || b.sourceUrl,
       fileName: a.fileName || b.fileName,
       mimeType: a.mimeType || b.mimeType,
       fileSizeBytes: a.fileSizeBytes || b.fileSizeBytes,

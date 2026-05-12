@@ -404,6 +404,38 @@
   }
 
   /**
+   * Return a source link for referenced images when the original page is known.
+   *
+   * @param {Object} image - Image metadata object.
+   * @returns {string} Source link markup or an empty string.
+   */
+  function renderImageSourceLink(image) {
+    const candidates = [
+      image?.sourceUrl || "",
+      image?.originalUrl || "",
+    ];
+
+    for (const candidate of candidates) {
+      if (!candidate) continue;
+
+      try {
+        const parsed = new URL(candidate, location.href);
+        if (parsed.hostname === "images.openai.com") continue;
+
+        return `<div class="cgo-image-source">
+          <a href="${escapeHtml(parsed.href)}" target="_blank" rel="noopener noreferrer">
+            ${escapeHtml(t("image_source_link_label"))}
+          </a>
+        </div>`;
+      } catch {
+        continue;
+      }
+    }
+
+    return "";
+  }
+
+  /**
    * Render a single image figure for the lightweight viewer.
    *
    * @param {Object} image - Image metadata object.
@@ -412,8 +444,10 @@
   function renderSingleImageFigure(image, options = {}) {
     const noImg = options.noImg !== false;
     const rawSrc = image?.embeddedUrl || image?.url || "";
+    const lightweightSrc = image?.thumbnailUrl || image?.url || "";
     const alt = escapeHtml(image?.alt || "");
     const caption = escapeHtml(image?.alt || image?.title || "");
+    const sourceLink = renderImageSourceLink(image);
 
     let src = "";
     let isExternal = false;
@@ -430,10 +464,25 @@
       }
     }
 
+    if (
+      noImg &&
+      /^content-reference-image-/i.test(String(image?.source || "")) &&
+      /^https?:\/\//i.test(lightweightSrc) &&
+      image?.unresolved !== true
+    ) {
+      return `<figure class="cgo-image cgo-image-external">
+          <img src="${escapeHtml(lightweightSrc)}" data-cgo-full-src="${escapeHtml(image?.url || lightweightSrc)}" alt="${alt}" loading="lazy" referrerpolicy="no-referrer">
+          ${caption ? `<figcaption>${caption}</figcaption>` : ""}
+          ${renderImageMeta(image)}
+          ${sourceLink}
+        </figure>`;
+    }
+
     if (noImg) {
       return `<figure class="cgo-image cgo-image-missing">
           <div class="cgo-image-missing-box">${escapeHtml(t("image_not_include_label"))}</div>
           ${caption ? `<figcaption>${caption}</figcaption>` : ""}
+          ${sourceLink}
         </figure>`;
     }
 
@@ -442,10 +491,12 @@
           <img src="${escapeHtml(src)}" alt="${alt}"${isExternal ? ' loading="lazy" referrerpolicy="no-referrer"' : ""}>
           ${caption ? `<figcaption>${caption}</figcaption>` : ""}
           ${renderImageMeta(image)}
+          ${sourceLink}
         </figure>`
       : `<figure class="cgo-image cgo-image-missing">
           <div class="cgo-image-missing-box">${escapeHtml(t("image_not_include_label"))}</div>
           ${caption ? `<figcaption>${caption}</figcaption>` : ""}
+          ${sourceLink}
         </figure>`;
   }
 
@@ -465,10 +516,18 @@
     }
 
     for (const entry of inlineImages) {
-      if (!entry?.token || !entry?.image) continue;
-      html = html.split(entry.token).join(
-        renderSingleImageFigure(entry.image, { noImg: true })
-      );
+      if (!entry?.token) continue;
+
+      const figureHtml = Array.isArray(entry.images)
+        ? `<div class="cgo-images cgo-images-external cgo-images-inline-reference">
+            ${entry.images.map((image) => renderSingleImageFigure(image, { noImg: true })).join("\n")}
+          </div>`
+        : entry.image
+          ? renderSingleImageFigure(entry.image, { noImg: true })
+          : "";
+
+      if (!figureHtml) continue;
+      html = html.split(entry.token).join(figureHtml);
     }
 
     return html;

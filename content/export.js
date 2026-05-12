@@ -485,7 +485,7 @@
   }
 
   /**
-   * Extract image metadata from `content_references.image_group` entries.
+   * Extract image metadata from image content references.
    *
    * @param {Object} message - Raw message payload.
    * @returns {Object[]} Normalized referenced image metadata.
@@ -499,32 +499,58 @@
     const seen = new Set();
 
     for (const ref of refs) {
-      if (!ref || ref.type !== "image_group") continue;
+      if (!ref || (ref.type !== "image_group" && ref.type !== "image_v2")) continue;
       if (!Array.isArray(ref.images)) continue;
 
       for (const item of ref.images) {
-        const imageResult = item?.image_result || {};
+        const imageResult = item?.image_result || item || {};
+        const contentSize = imageResult.content_size || {};
+        const thumbnailSize = imageResult.thumbnail_size || {};
+        const sourceUrl =
+          imageResult.source_url ||
+          imageResult.page_url ||
+          imageResult.url ||
+          "";
+        const originalUrl =
+          imageResult.original_content_url ||
+          imageResult.original_url ||
+          "";
+        const thumbnailUrl =
+          imageResult.thumbnail_url ||
+          "";
         const rawUrl =
           imageResult.content_url ||
-          imageResult.url ||
-          imageResult.source_url ||
+          (ref.type === "image_group" ? imageResult.url : "") ||
+          thumbnailUrl ||
+          originalUrl ||
           "";
 
         const url = CGO.normalizeMaybeRelativeChatgptUrl(rawUrl);
         if (!url || seen.has(url)) continue;
         seen.add(url);
 
+        const title = imageResult.title || "";
+        const alt =
+          imageResult.alt ||
+          title ||
+          (ref.type === "image_group" ? ref.alt || "" : "");
+
         results.push(CGO.normalizeImageMeta({
           url,
-          alt: ref.alt || imageResult.alt || "",
-          hint: ref.prompt_text || "",
-          title: imageResult.title || "",
+          thumbnailUrl: CGO.normalizeMaybeRelativeChatgptUrl(thumbnailUrl),
+          originalUrl: CGO.normalizeMaybeRelativeChatgptUrl(originalUrl),
+          sourceUrl: CGO.normalizeMaybeRelativeChatgptUrl(sourceUrl),
+          alt,
+          hint: ref.type === "image_group" ? ref.prompt_text || "" : "",
+          title,
           fileName: imageResult.file_name || ref.file_name || "",
           mimeType: imageResult.mime_type || ref.mime_type || "",
           fileSizeBytes: Number(imageResult.file_size_bytes || ref.file_size_bytes || 0),
-          width: Number(imageResult.width || 0),
-          height: Number(imageResult.height || 0),
-          source: "content-reference-image-group",
+          width: Number(imageResult.width || contentSize.width || thumbnailSize.width || 0),
+          height: Number(imageResult.height || contentSize.height || thumbnailSize.height || 0),
+          source: ref.type === "image_v2"
+            ? "content-reference-image-v2"
+            : "content-reference-image-group",
         }));
       }
     }
@@ -543,6 +569,7 @@
     const url = String(image?.url || "");
 
     if (source === "content-reference-image-group") return true;
+    if (source === "content-reference-image-v2") return true;
 
     // chatgpt 内部 estuary / files/download は内部扱い
     if (/\/backend-api\/estuary\/content/i.test(url)) return false;
@@ -564,21 +591,53 @@
    * @returns {string} External source URL or an empty string for internal assets.
    */
   function getImageSourceHref(image) {
-    const url = String(image?.url || "");
-    if (!url) return "";
+    const candidates = [
+      image?.sourceUrl ||
+      "",
+      image?.originalUrl || "",
+      image?.url || "",
+    ];
 
-    try {
-      const u = new URL(url, location.origin);
+    for (const candidate of candidates) {
+      const url = String(candidate || "");
+      if (!url) continue;
 
-      // chatgpt 内部URLは Source リンク不要
-      if (u.hostname === "chatgpt.com" || u.hostname === "chat.openai.com") {
-        return "";
+      try {
+        const u = new URL(url, location.origin);
+
+        // chatgpt 内部URLやOpenAI画像キャッシュは Source リンクにしない
+        if (
+          u.hostname === "chatgpt.com" ||
+          u.hostname === "chat.openai.com" ||
+          u.hostname === "images.openai.com"
+        ) {
+          continue;
+        }
+
+        return u.href;
+      } catch {
+        continue;
       }
-
-      return u.href;
-    } catch {
-      return "";
     }
+
+    return "";
+  }
+
+  /**
+   * Determine whether an external reference image should be archived locally.
+   *
+   * @param {Object} image - Normalized image metadata.
+   * @returns {boolean} `true` when the image has a direct reference-image URL.
+   */
+  function shouldArchiveExternalReferenceImage(image) {
+    const source = String(image?.source || "");
+    const url = String(image?.url || "");
+
+    return (
+      source === "content-reference-image-v2" &&
+      !!url &&
+      image?.unresolved !== true
+    );
   }
 
   /**
@@ -825,7 +884,7 @@
     const imageFolder = zip.folder(projectFolderName ? `${projectFolderName}/images` : "images");
     const allImages = messages.flatMap((m) => m.images || []);
     const zipTargetImages = allImages.filter(
-      (image) => !CGO.isProbablyExternalImage(image)
+      (image) => !CGO.isProbablyExternalImage(image) || shouldArchiveExternalReferenceImage(image)
     );
 
     const total = zipTargetImages.length;
