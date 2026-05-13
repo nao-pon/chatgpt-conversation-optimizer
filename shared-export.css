@@ -737,6 +737,19 @@ code {
   text-decoration: underline;
 }
 
+.cgo-markdown img {
+  display: block;
+  max-width: min(100%, 420px);
+  max-height: 460px;
+  width: auto;
+  height: auto;
+  margin: 0.75em 0 1em;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.03);
+  object-fit: contain;
+}
+
 .cgo-markdown hr {
   margin: 1.25em 0;
   border: 0;
@@ -869,6 +882,11 @@ code {
 
   .cgo-markdown a {
     color: #60a5fa;
+  }
+
+  .cgo-markdown img {
+    border-color: #374151;
+    background: rgba(255, 255, 255, 0.04);
   }
 
   .cgo-markdown hr {
