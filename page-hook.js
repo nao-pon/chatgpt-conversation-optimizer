@@ -1926,19 +1926,23 @@
   async function handleWebSocketFrame(rawData, source = "ws") {
     const text = await decodeWebSocketData(rawData);
     if (!text) {
-      log.stream("ws frame skipped: empty/unsupported", {
-        source,
-        dataType: getWsDataTypeName(rawData),
-      });
+      if (getActiveLogLevel() >= LOG_LEVELS.STREAM) {
+        log.stream("ws frame skipped: empty/unsupported", {
+          source,
+          dataType: getWsDataTypeName(rawData),
+        });
+      }
       return;
     }
 
     const root = parseJsonStringSafe(text);
     if (!root) {
-      log.stream("ws frame non-json", {
-        source,
-        preview: text.slice(0, 300),
-      });
+      if (getActiveLogLevel() >= LOG_LEVELS.STREAM) {
+        log.stream("ws frame non-json", {
+          source,
+          preview: text.slice(0, 300),
+        });
+      }
       return;
     }
 
@@ -3144,6 +3148,9 @@
         v: summarizePayloadValueField(payload.v),
       } : {},
       pathFields: summarizePayloadPathFields(payload),
+      contentReferenceCandidates: isObject
+        ? findContentReferenceSummariesInPayload(payload)
+        : [],
     };
   }
 
@@ -3228,9 +3235,26 @@
       normalizeStreamTopicId(topicId),
       String(ops.length),
       ops.map((op) =>
-        `${op?.p || ""}:${op?.o || ""}:${hash(String(op?.v ?? ""))}`
+        `${op?.p || ""}:${op?.o || ""}:${hash(stringifyDeltaValueForSignature(op?.v))}`
       ).join(","),
     ].join("|");
+  }
+
+  /**
+   * Stringify a delta value for dedupe signatures without collapsing objects to `[object Object]`.
+   *
+   * @param {*} value - Delta operation value.
+   * @returns {string} Stable-enough JSON text for parsed stream payloads.
+   */
+  function stringifyDeltaValueForSignature(value) {
+    if (typeof value === "string") return value;
+    if (value == null) return "";
+
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
   }
 
   /**
@@ -3305,21 +3329,25 @@
    * @returns {void}
    */
   function logMessageUpsert(details) {
-    const msg = details.message;
-    log.stream("[sse:message-upsert]", {
-      conversationId: details.conversationId,
-      topicId: details.topicId,
-      route: details.route,
-      messageId: msg?.id || "",
-      parentId: details.parentId || null,
-      role: msg?.author?.role || "",
-      contentType: msg?.content?.content_type || "",
-      textLength: getMessageTextLength(msg),
-      hasEndTurn: Object.prototype.hasOwnProperty.call(msg || {}, "end_turn"),
-      shouldUseAsPatchedTarget: details.shouldUseAsPatchedTarget,
-      previousCurrentPatchedMessageId: details.previousCurrentPatchedMessageId || null,
-      nextCurrentPatchedMessageId: details.nextCurrentPatchedMessageId || null,
-    });
+    if (getActiveLogLevel() >= LOG_LEVELS.STREAM) {
+      const msg = details.message;
+      const contentReferences = summarizeContentReferences(msg);
+      log.stream("[sse:message-upsert]", {
+        conversationId: details.conversationId,
+        topicId: details.topicId,
+        route: details.route,
+        messageId: msg?.id || "",
+        parentId: details.parentId || null,
+        role: msg?.author?.role || "",
+        contentType: msg?.content?.content_type || "",
+        textLength: getMessageTextLength(msg),
+        hasEndTurn: Object.prototype.hasOwnProperty.call(msg || {}, "end_turn"),
+        shouldUseAsPatchedTarget: details.shouldUseAsPatchedTarget,
+        previousCurrentPatchedMessageId: details.previousCurrentPatchedMessageId || null,
+        nextCurrentPatchedMessageId: details.nextCurrentPatchedMessageId || null,
+        ...(contentReferences.count > 0 ? { contentReferences } : {}),
+      });
+    }
   }
 
   /**
@@ -3564,6 +3592,8 @@
       };
       log.trace("[stream:apply-delta-op]", beforeOpSummary);
 
+      let applied = false;
+
       if (op.p === "/message/content/parts/0" && op.o === "append") {
         const appendResult = appendTextDeltaSafely(msg.content.parts[0] || "", op.v || "");
         msg.content.parts[0] = appendResult.text;
@@ -3579,18 +3609,46 @@
             incomingHash: getStringHash(op.v),
           });
         }
+        applied = true;
       } else if (
         op.p === "/message/content/parts/0" &&
         (op.o === "replace" || op.o === "add")
       ) {
         msg.content.parts[0] = String(op.v || "");
+        applied = true;
       } else if (op.p === "/message/status" && op.o === "replace") {
         msg.status = op.v;
+        applied = true;
       } else if (op.p === "/message/end_turn" && op.o === "replace") {
         msg.end_turn = op.v;
+        applied = true;
       } else if (op.p === "/message/metadata/token_count" && op.o === "replace") {
         msg.metadata = msg.metadata || {};
         msg.metadata.token_count = op.v;
+        applied = true;
+      } else if (applyMessageMetadataDeltaOp(msg, op)) {
+        applied = true;
+      }
+
+      if (!applied && getActiveLogLevel() >= LOG_LEVELS.STREAM && isContentReferenceDeltaOp(op)) {
+        log.stream("[stream:content-references-delta:unapplied]", {
+          messageId,
+          role: msg?.author?.role || "",
+          path: op.p || "",
+          operation: op.o || "",
+          valueSummary: summarizePayloadValueField(op.v),
+          contentReferenceCandidates: findContentReferenceSummariesInPayload(op.v),
+          valueString: typeof op.v === "string" ? op.v : "",
+          valuePreview: previewText(
+            typeof op.v === "string" ? op.v : JSON.stringify(op.v ?? null),
+            200
+          ),
+          refTypeHint:
+            /\/content_references\/\d+\/type$/.test(String(op.p || "")) &&
+              typeof op.v === "string"
+              ? op.v
+              : "",
+        });
       }
 
       const afterText = getTextPart0(msg);
@@ -3633,14 +3691,343 @@
     });
   }
 
+  /**
+   * Summarize content references attached to a message for bounded stream diagnostics.
+   *
+   * @param {Object} message - Raw ChatGPT message object.
+   * @returns {{count: number, byType: Object<string, number>, imageRefs: Object[]}} Content-reference counts and image-reference details.
+   */
+  function summarizeContentReferences(message) {
+    const refs = Array.isArray(message?.metadata?.content_references)
+      ? message.metadata.content_references
+      : [];
+
+    const byType = {};
+    const imageRefs = [];
+
+    refs.forEach((ref, index) => {
+      const type = String(ref?.type || "");
+      byType[type] = (byType[type] || 0) + 1;
+
+      if (type === "image_v2" || type === "image_group") {
+        const images = Array.isArray(ref.images) ? ref.images : [];
+        imageRefs.push({
+          index,
+          type,
+          matchedTextLength: typeof ref.matched_text === "string" ? ref.matched_text.length : 0,
+          matchedTextPreview: previewText(ref.matched_text || "", 80),
+          imageCount: images.length,
+          refKeys: Object.keys(ref || {}).slice(0, 30),
+          firstImageKeys: images[0] && typeof images[0] === "object"
+            ? Object.keys(images[0]).slice(0, 30)
+            : [],
+          firstImageResultKeys: images[0]?.image_result && typeof images[0].image_result === "object"
+            ? Object.keys(images[0].image_result).slice(0, 30)
+            : [],
+        });
+      }
+    });
+
+    return {
+      count: refs.length,
+      byType,
+      imageRefs,
+    };
+  }
+
+  /**
+   * Search a nested stream payload for content-reference arrays and summarize them.
+   *
+   * @param {*} value - Parsed stream payload or nested value to inspect.
+   * @param {number} [limit=8] - Maximum number of matching payload locations to return.
+   * @returns {Object[]} Bounded summaries of discovered content-reference arrays.
+   */
+  function findContentReferenceSummariesInPayload(value, limit = 8) {
+    const out = [];
+    const queue = [{ value, path: "$", depth: 0 }];
+    const seen = new Set();
+
+    while (queue.length && out.length < limit) {
+      const item = queue.shift();
+      const current = item.value;
+
+      if (!current || typeof current !== "object" || seen.has(current)) continue;
+      seen.add(current);
+
+      const refs = Array.isArray(current?.metadata?.content_references)
+        ? current.metadata.content_references
+        : Array.isArray(current?.content_references)
+          ? current.content_references
+          : null;
+
+      if (refs) {
+        const byType = {};
+        let imageRefCount = 0;
+
+        for (const ref of refs) {
+          const type = String(ref?.type || "");
+          byType[type] = (byType[type] || 0) + 1;
+          if (type === "image_v2" || type === "image_group") {
+            imageRefCount += 1;
+          }
+        }
+
+        out.push({
+          path: item.path,
+          count: refs.length,
+          byType,
+          imageRefCount,
+          firstImageRef: refs
+            .filter((ref) => ref?.type === "image_v2" || ref?.type === "image_group")
+            .slice(0, 1)
+            .map((ref) => ({
+              type: ref.type || "",
+              matchedTextLength: typeof ref.matched_text === "string" ? ref.matched_text.length : 0,
+              matchedTextPreview: previewText(ref.matched_text || "", 80),
+              imageCount: Array.isArray(ref.images) ? ref.images.length : 0,
+              keys: Object.keys(ref || {}).slice(0, 30),
+            }))[0] || null,
+        });
+      }
+
+      if (item.depth >= 4) continue;
+
+      for (const [key, child] of Object.entries(current)) {
+        if (child && typeof child === "object") {
+          queue.push({
+            value: child,
+            path: `${item.path}.${key}`,
+            depth: item.depth + 1,
+          });
+        }
+      }
+    }
+
+    return out;
+  }
+
+  /**
+   * Determine whether a delta operation targets message content references.
+   *
+   * @param {Object} op - Delta operation with a JSON pointer path in `p`.
+   * @returns {boolean} `true` when the operation targets `message.metadata.content_references`.
+   */
+  function isContentReferenceDeltaOp(op) {
+    const path = String(op?.p || "");
+    return (
+      path === "/message/metadata/content_references" ||
+      path.startsWith("/message/metadata/content_references/")
+    );
+  }
+
+  /**
+   * Decode one RFC 6901 JSON Pointer path segment.
+   *
+   * @param {*} value - Encoded path segment.
+   * @returns {string} Decoded path segment.
+   */
+  function decodeJsonPointerSegment(value) {
+    return String(value || "")
+      .replace(/~1/g, "/")
+      .replace(/~0/g, "~");
+  }
+
+  /**
+   * Check whether a JSON Pointer segment should create/traverse an array container.
+   *
+   * @param {*} value - Path segment to inspect.
+   * @returns {boolean} `true` for numeric indexes or the append marker `-`.
+   */
+  function isArrayIndexSegment(value) {
+    return value === "-" || /^\d+$/.test(String(value || ""));
+  }
+
+  /**
+   * Traverse a JSON Pointer path, creating missing parent containers as needed.
+   *
+   * @param {Object|Array} root - Object or array being patched.
+   * @param {string[]} tokens - Decoded JSON Pointer tokens.
+   * @returns {{target: Object|Array, key: string}} Parent container and final key/index token.
+   */
+  function ensureJsonPointerContainer(root, tokens) {
+    let target = root;
+
+    for (let i = 0; i < tokens.length - 1; i += 1) {
+      const key = tokens[i];
+      const nextKey = tokens[i + 1];
+      const shouldBeArray = isArrayIndexSegment(nextKey);
+
+      if (Array.isArray(target)) {
+        const index = key === "-" ? target.length : Number(key);
+        if (!target[index] || typeof target[index] !== "object") {
+          target[index] = shouldBeArray ? [] : {};
+        }
+        target = target[index];
+      } else {
+        if (!target[key] || typeof target[key] !== "object") {
+          target[key] = shouldBeArray ? [] : {};
+        }
+        target = target[key];
+      }
+    }
+
+    return {
+      target,
+      key: tokens[tokens.length - 1],
+    };
+  }
+
+  /**
+   * Apply a small subset of JSON Patch-like operations to an object by JSON Pointer.
+   *
+   * Supports `add`, `replace`, `remove`, and the stream-specific `append` operation.
+   *
+   * @param {Object|Array} root - Object or array to mutate.
+   * @param {string} pointer - Absolute JSON Pointer path.
+   * @param {string} operation - Patch operation name.
+   * @param {*} value - Operation value.
+   * @returns {boolean} `true` when the operation was applied.
+   */
+  function applyJsonPointerOperation(root, pointer, operation, value) {
+    if (!root || typeof root !== "object") return false;
+    if (typeof pointer !== "string" || !pointer.startsWith("/")) return false;
+
+    const tokens = pointer
+      .split("/")
+      .slice(1)
+      .map(decodeJsonPointerSegment);
+
+    if (!tokens.length) return false;
+
+    const { target, key } = ensureJsonPointerContainer(root, tokens);
+
+    const setValue = (nextValue) => {
+      if (Array.isArray(target)) {
+        if (key === "-") {
+          target.push(nextValue);
+        } else {
+          target[Number(key)] = nextValue;
+        }
+      } else {
+        target[key] = nextValue;
+      }
+    };
+
+    const getValue = () => {
+      if (Array.isArray(target)) {
+        return target[key === "-" ? target.length : Number(key)];
+      }
+      return target[key];
+    };
+
+    if (operation === "remove") {
+      if (Array.isArray(target)) {
+        if (key !== "-") target.splice(Number(key), 1);
+      } else {
+        delete target[key];
+      }
+      return true;
+    }
+
+    if (operation === "replace" || operation === "add") {
+      setValue(value);
+      return true;
+    }
+
+    if (operation === "append") {
+      const current = getValue();
+
+      if (Array.isArray(current)) {
+        if (Array.isArray(value)) {
+          current.push(...value);
+        } else {
+          current.push(value);
+        }
+      } else if (
+        current &&
+        typeof current === "object" &&
+        value &&
+        typeof value === "object" &&
+        !Array.isArray(value)
+      ) {
+        Object.assign(current, value);
+      } else if (typeof current === "string") {
+        setValue(current + String(value ?? ""));
+      } else if (current == null) {
+        setValue(Array.isArray(value) ? [...value] : value);
+      } else {
+        setValue(value);
+      }
+
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Apply a stream delta operation that targets `message.metadata`.
+   *
+   * @param {Object} message - Message object to mutate.
+   * @param {Object} op - Delta operation with a `/message/metadata...` path.
+   * @returns {boolean} `true` when the operation was applied.
+   */
+  function applyMessageMetadataDeltaOp(message, op) {
+    const path = String(op?.p || "");
+    if (!path.startsWith("/message/metadata")) return false;
+
+    message.metadata ??= {};
+
+    // root は message なので "/message" を外す
+    const messageRelativePointer = path.replace(/^\/message/, "");
+
+    return applyJsonPointerOperation(
+      message,
+      messageRelativePointer,
+      op.o || "",
+      op.v
+    );
+  }
+
   // =========================================================
   // STREAM HELPERS
   /**
-   * Flatten and normalize a list of delta operation objects by recursively expanding any `patch` operations whose `v` field is an array.
-   * @param {Array<object>} ops - Array of operation objects; elements may be falsy, non-objects, or a `patch` op with `v` as an array of ops.
-   * @returns {Array<object>} A flat array of operation objects with nested `patch` arrays recursively expanded and falsy/non-object entries removed.
+   * Join a parent JSON Pointer path and a child path from a nested patch operation.
+   *
+   * Absolute `/message...` child paths remain anchored at the message root.
+   *
+   * @param {string} parentPath - Parent JSON Pointer path from an outer patch op.
+   * @param {string} childPath - Child path from a nested patch op.
+   * @returns {string} Combined JSON Pointer path.
    */
-  function normalizeOps(ops) {
+  function joinJsonPointerPath(parentPath, childPath) {
+    const parent = String(parentPath || "");
+    const child = String(childPath || "");
+
+    if (!parent) return child;
+    if (!child) return parent;
+
+    // Absolute message-level paths are already anchored.
+    if (child === "/message" || child.startsWith("/message/")) {
+      return child;
+    }
+
+    const normalizedChild = child.startsWith("/") ? child : `/${child}`;
+    if (parent === "/") return normalizedChild;
+
+    return `${parent.replace(/\/+$/, "")}${normalizedChild}`;
+  }
+
+  /**
+   * Flatten and normalize delta operations, expanding nested `patch` arrays.
+   *
+   * Relative child paths inside a `patch` operation are joined with their parent path so downstream handlers receive message-rooted JSON Pointer paths.
+   *
+   * @param {Array<object>} ops - Operation objects, including optional nested `patch` ops.
+   * @param {string} [parentPath=""] - Parent JSON Pointer path used while recursively expanding nested patches.
+   * @returns {Array<object>} Flat list of normalized operation objects.
+   */
+  function normalizeOps(ops, parentPath = "") {
     const out = [];
 
     for (const op of ops || []) {
@@ -3650,11 +4037,19 @@
         op.o === "patch" &&
         Array.isArray(op.v)
       ) {
-        out.push(...normalizeOps(op.v));
+        const nextParentPath = joinJsonPointerPath(parentPath, op.p || "");
+        out.push(...normalizeOps(op.v, nextParentPath));
         continue;
       }
 
-      out.push(op);
+      const normalizedPath = parentPath
+        ? joinJsonPointerPath(parentPath, op.p || "")
+        : op.p;
+
+      out.push({
+        ...op,
+        ...(normalizedPath ? { p: normalizedPath } : {}),
+      });
     }
 
     return out;
@@ -3838,21 +4233,23 @@
               sourceRoute: route,
               recordedAt: Date.now(),
             };
-            log.stream("[stream:last-text-append-op-set]", {
-              conversationId,
-              rawTopicId,
-              normalizedTopicId: topicId,
-              currentPatchedMessageId: streamState.currentPatchedMessageId,
-              "op.p": op.p || "",
-              "op.o": op.o || "",
-              sourceRoute: route,
-              eventName,
-              opValueType: Array.isArray(op.v) ? "array" : typeof op.v,
-              opValueLength: typeof op.v === "string" ? op.v.length : null,
-              opValueHash: getStringHash(op.v),
-              opValuePreview: typeof op.v === "string" ? previewText(op.v, 100) : "",
-              sequenceFields: summarizePayloadSequenceFields(op),
-            });
+            if (getActiveLogLevel() >= LOG_LEVELS.STREAM) {
+              log.stream("[stream:last-text-append-op-set]", {
+                conversationId,
+                rawTopicId,
+                normalizedTopicId: topicId,
+                currentPatchedMessageId: streamState.currentPatchedMessageId,
+                "op.p": op.p || "",
+                "op.o": op.o || "",
+                sourceRoute: route,
+                eventName,
+                opValueType: Array.isArray(op.v) ? "array" : typeof op.v,
+                opValueLength: typeof op.v === "string" ? op.v.length : null,
+                opValueHash: getStringHash(op.v),
+                opValuePreview: typeof op.v === "string" ? previewText(op.v, 100) : "",
+                sequenceFields: summarizePayloadSequenceFields(op),
+              });
+            }
           } else if (op.o === "replace" || op.o === "add") {
             // その後に {"v":"..."} が来た場合は続きとして append 扱い
             streamState.lastTextAppendOp = {
@@ -3863,21 +4260,23 @@
               sourceRoute: route,
               recordedAt: Date.now(),
             };
-            log.stream("[stream:last-text-append-op-set]", {
-              conversationId,
-              rawTopicId,
-              normalizedTopicId: topicId,
-              currentPatchedMessageId: streamState.currentPatchedMessageId,
-              "op.p": op.p || "",
-              "op.o": op.o || "",
-              sourceRoute: route,
-              eventName,
-              opValueType: Array.isArray(op.v) ? "array" : typeof op.v,
-              opValueLength: typeof op.v === "string" ? op.v.length : null,
-              opValueHash: getStringHash(op.v),
-              opValuePreview: typeof op.v === "string" ? previewText(op.v, 100) : "",
-              sequenceFields: summarizePayloadSequenceFields(op),
-            });
+            if (getActiveLogLevel() >= LOG_LEVELS.STREAM) {
+              log.stream("[stream:last-text-append-op-set]", {
+                conversationId,
+                rawTopicId,
+                normalizedTopicId: topicId,
+                currentPatchedMessageId: streamState.currentPatchedMessageId,
+                "op.p": op.p || "",
+                "op.o": op.o || "",
+                sourceRoute: route,
+                eventName,
+                opValueType: Array.isArray(op.v) ? "array" : typeof op.v,
+                opValueLength: typeof op.v === "string" ? op.v.length : null,
+                opValueHash: getStringHash(op.v),
+                opValuePreview: typeof op.v === "string" ? previewText(op.v, 100) : "",
+                sequenceFields: summarizePayloadSequenceFields(op),
+              });
+            }
           }
         }
       }
@@ -4035,17 +4434,19 @@
     }
 
     function logDeltaRoute(route, ops) {
-      const summary = summarizeDeltaOps(ops);
-      log.stream("[sse:delta-route]", {
-        conversationId,
-        topicId,
-        eventName,
-        route,
-        opCount: summary.opCount,
-        currentPatchedMessageId: streamState.currentPatchedMessageId,
-        paths: summary.paths,
-        operations: summary.operations,
-      });
+      if (getActiveLogLevel() >= LOG_LEVELS.STREAM) {
+        const summary = summarizeDeltaOps(ops);
+        log.stream("[sse:delta-route]", {
+          conversationId,
+          topicId,
+          eventName,
+          route,
+          opCount: summary.opCount,
+          currentPatchedMessageId: streamState.currentPatchedMessageId,
+          paths: summary.paths,
+          operations: summary.operations,
+        });
+      }
     }
 
     if (
@@ -4301,30 +4702,32 @@
         previousCompactDelta.incomingLength === payload.v.length
       );
 
-      log.stream("[sse:compact-text-delta]", {
-        conversationId,
-        topicId,
-        eventName,
-        streamSource: summarizeStreamMeta(meta),
-        currentPatchedMessageId: streamState.currentPatchedMessageId,
-        lastTextAppendOp: {
-          p: last?.p || "",
-          o: last?.o || "",
-        },
-        payloadKeys: Object.keys(payload).slice(0, 30),
-        payloadSequenceFields: summarizePayloadSequenceFields(payload),
-        lastTextAppendOpSignature: last?.signature || "",
-        lastTextAppendOpSourceEventName: last?.sourceEventName || "",
-        lastTextAppendOpRecordedAt: last?.recordedAt || null,
-        beforeLength: beforeText.length,
-        beforeTailHash: getStringHash(beforeText.slice(-100)),
-        incomingLength: payload.v.length,
-        incomingHash,
-        incomingPreview: previewText(payload.v, 100),
-        sameAsPreviousCompactDeltaForSameMessage,
-        willApply,
-        ignoredReason: willApply ? "" : "lastTextAppendOp missing",
-      });
+      if (getActiveLogLevel() >= LOG_LEVELS.STREAM) {
+        log.stream("[sse:compact-text-delta]", {
+          conversationId,
+          topicId,
+          eventName,
+          streamSource: summarizeStreamMeta(meta),
+          currentPatchedMessageId: streamState.currentPatchedMessageId,
+          lastTextAppendOp: {
+            p: last?.p || "",
+            o: last?.o || "",
+          },
+          payloadKeys: Object.keys(payload).slice(0, 30),
+          payloadSequenceFields: summarizePayloadSequenceFields(payload),
+          lastTextAppendOpSignature: last?.signature || "",
+          lastTextAppendOpSourceEventName: last?.sourceEventName || "",
+          lastTextAppendOpRecordedAt: last?.recordedAt || null,
+          beforeLength: beforeText.length,
+          beforeTailHash: getStringHash(beforeText.slice(-100)),
+          incomingLength: payload.v.length,
+          incomingHash,
+          incomingPreview: previewText(payload.v, 100),
+          sameAsPreviousCompactDeltaForSameMessage,
+          willApply,
+          ignoredReason: willApply ? "" : "lastTextAppendOp missing",
+        });
+      }
       streamState.lastCompactTextDelta = {
         messageId: streamState.currentPatchedMessageId,
         incomingHash,
@@ -4479,7 +4882,7 @@
       return;
     }
 
-    if (payload?.type === "done") {
+    if (payload?.type === "done" && getActiveLogLevel() >= LOG_LEVELS.STREAM) {
       log.stream("[sse:done]", {
         conversationId,
         topicId,
