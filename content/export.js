@@ -386,12 +386,14 @@
    * Fetch an image and convert it to a data URL for self-contained HTML exports.
    *
    * @param {string} url - Resolved image URL.
+   * @param {Object} [image={}] - Image metadata used to recover generic blob MIME types.
    * @returns {Promise<string>} Data URL representation of the fetched image.
    */
-  async function imageUrlToDataUrl(url) {
+  async function imageUrlToDataUrl(url, image = {}) {
     const blob = await fetchBlobWithAuth(url, "image");
+    const mimeType = resolveImageBlobMimeType(image, blob.type);
 
-    if (!blob.type || !blob.type.startsWith("image/")) {
+    if (!mimeType) {
       const error = new Error(
         `Unexpected content-type: ${blob.type || "unknown"}`
       );
@@ -400,13 +402,15 @@
       throw error;
     }
 
+    const imageBlob = coerceBlobMimeType(blob, mimeType);
+
     return await new Promise((resolve, reject) => {
       const reader = new FileReader();
 
       reader.onload = () => resolve(reader.result);
       reader.onerror = () => reject(new Error("Failed to read blob as data URL."));
 
-      reader.readAsDataURL(blob);
+      reader.readAsDataURL(imageBlob);
     });
   }
 
@@ -433,7 +437,7 @@
       async (image) => {
         if (image.unresolved === false && image.url && includeImages) {
           try {
-            image.embeddedUrl = await imageUrlToDataUrl(image.url);
+            image.embeddedUrl = await imageUrlToDataUrl(image.url, image);
             image.skipReason = "";
           } catch (error) {
             CGO.log("[warn] export image embed failed", {
@@ -820,6 +824,97 @@
   }
 
   /**
+   * Guess an image MIME type from a filename or URL.
+   *
+   * @param {string} name - Filename, label, or URL.
+   * @returns {string} Image MIME type or an empty string.
+   */
+  function guessImageMimeTypeFromName(name) {
+    const value = String(name || "").toLowerCase();
+
+    if (/\.png(?:[?#].*)?$/.test(value)) return "image/png";
+    if (/\.jpe?g(?:[?#].*)?$/.test(value)) return "image/jpeg";
+    if (/\.webp(?:[?#].*)?$/.test(value)) return "image/webp";
+    if (/\.gif(?:[?#].*)?$/.test(value)) return "image/gif";
+    if (/\.bmp(?:[?#].*)?$/.test(value)) return "image/bmp";
+    if (/\.svg(?:[?#].*)?$/.test(value)) return "image/svg+xml";
+
+    return "";
+  }
+
+  /**
+   * Resolve the MIME type to use for an exported image blob.
+   *
+   * ChatGPT may return uploaded images as `application/octet-stream` with a
+   * filename in Content-Disposition. The conversation metadata is the more
+   * reliable signal for whether the fetched blob is an image.
+   *
+   * @param {Object} image - Normalized image metadata.
+   * @param {string} [blobType=""] - MIME type reported by fetch.
+   * @returns {string} Image MIME type or an empty string.
+   */
+  function resolveImageBlobMimeType(image, blobType = "") {
+    const fetchedType = String(blobType || "").toLowerCase();
+    if (/^image\//i.test(fetchedType)) return fetchedType;
+
+    const metadataType = String(image?.mimeType || "").toLowerCase();
+    if (/^image\//i.test(metadataType)) return metadataType;
+
+    const candidates = [
+      image?.fileName,
+      image?.name,
+      image?.title,
+      image?.alt,
+      image?.url,
+      image?.originalUrl,
+      image?.thumbnailUrl,
+    ];
+
+    for (const candidate of candidates) {
+      const guessed = guessImageMimeTypeFromName(candidate);
+      if (guessed) return guessed;
+    }
+
+    return "";
+  }
+
+  /**
+   * Return a blob with a corrected image MIME type when the server used a generic type.
+   *
+   * @param {Blob} blob - Fetched blob.
+   * @param {string} mimeType - MIME type to assign.
+   * @returns {Blob} Original or MIME-corrected blob.
+   */
+  function coerceBlobMimeType(blob, mimeType) {
+    if (!blob || !mimeType) return blob;
+    if (String(blob.type || "").toLowerCase() === String(mimeType).toLowerCase()) {
+      return blob;
+    }
+
+    return new Blob([blob], { type: mimeType });
+  }
+
+  /**
+   * Choose an image file extension from metadata before falling back to MIME.
+   *
+   * @param {Object} image - Normalized image metadata.
+   * @param {string} mimeType - Image MIME type.
+   * @returns {string} File extension without a leading dot.
+   */
+  function guessImageExtension(image, mimeType) {
+    const candidates = [image?.fileName, image?.name, image?.title, image?.alt];
+
+    for (const candidate of candidates) {
+      const match = String(candidate || "").match(/\.([A-Za-z0-9]+)$/);
+      if (match && /^(png|jpe?g|webp|gif|bmp|svg)$/i.test(match[1])) {
+        return match[1].toLowerCase().replace(/^jpeg$/, "jpg");
+      }
+    }
+
+    return guessExtensionFromMimeType(mimeType);
+  }
+
+  /**
    * Sanitize a filename so it is safe to store inside the generated ZIP archive.
    *
    * @param {string} name - Candidate filename.
@@ -845,17 +940,34 @@
 
     const headers = new Headers();
 
-    // Only add auth for trusted OpenAI/ChatGPT origins
+    // ChatGPT file endpoints may accept cookie auth even when we cannot observe
+    // an Authorization header, so include credentials for first-party assets.
     let credentials = "omit";
     try {
       const parsedUrl = new URL(url, location.origin);
       const hostname = parsedUrl.hostname.toLowerCase();
-      const isTrustedOrigin = (
+      const pathname = parsedUrl.pathname;
+      const isChatGptOrigin = (
         hostname === "chatgpt.com" ||
         hostname === "chat.openai.com" ||
-        hostname.endsWith(".chatgpt.com") ||
+        hostname.endsWith(".chatgpt.com")
+      );
+      const isChatGptAssetEndpoint = (
+        isChatGptOrigin &&
+        (
+          pathname.includes("/backend-api/estuary/content") ||
+          pathname.includes("/backend-api/files/") ||
+          pathname.includes("/backend-api/conversation/")
+        )
+      );
+      const isTrustedOrigin = (
+        isChatGptOrigin ||
         hostname.endsWith(".openai.com")
       );
+
+      if (isChatGptAssetEndpoint) {
+        credentials = "include";
+      }
 
       if (isTrustedOrigin && authorization) {
         headers.set("authorization", authorization);
@@ -934,20 +1046,24 @@
         try {
           if (image.unresolved === false && image.url) {
             const blob = await fetchBlobWithAuth(image.url, "image");
-            if (!/^image\//i.test(blob.type || "")) {
+            const mimeType = resolveImageBlobMimeType(image, blob.type);
+            if (!mimeType) {
               image.localPath = "";
               image.skipReason = "unsupported_media";
               return;
             }
-            const ext = guessExtensionFromMimeType(blob.type);
+            const imageBlob = coerceBlobMimeType(blob, mimeType);
+            const ext = guessImageExtension(image, mimeType);
             const fileName = `img_${String(counter++).padStart(4, "0")}.${ext}`;
             const localPath = `images/${fileName}`;
 
             image.localPath = localPath;
             image.embeddedUrl = null;
+            image.mimeType = image.mimeType || mimeType;
+            image.fileSizeBytes = image.fileSizeBytes || imageBlob.size || 0;
             image.skipReason = "";
 
-            const buffer = await blobToArrayBuffer(blob);
+            const buffer = await blobToArrayBuffer(imageBlob);
             imageFolder.file(fileName, buffer);
           } else {
             image.localPath = "";
