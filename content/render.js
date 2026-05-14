@@ -571,6 +571,8 @@
 
     if (!text) return false;
     if (source === "parent-user-message") return false;
+    if (source === "tool-image-gen-title") return false;
+    if (source === "tool-async-task-title") return false;
 
     return true;
   }
@@ -1777,6 +1779,8 @@
             voiceDirection: message.voiceDirection || "",
             hasVoiceAudio: !!message.hasVoiceAudio,
             thoughts: message.thoughts || [],
+            imagePrompts: message.imagePrompts || [],
+            imagePromptSeeds: message.imagePromptSeeds || [],
             images: message.images || [],
             visibleImages: message.visibleImages || [],
             attachments: message.attachments || [],

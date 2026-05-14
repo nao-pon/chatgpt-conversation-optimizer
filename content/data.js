@@ -1034,21 +1034,148 @@
   }
 
   /**
+   * Collect text blobs that may contain image-generation parameters.
+   *
+   * ChatGPT has used a few shapes for image tool-call parents: JSON strings in
+   * `content.parts`, JSON in `content.text`, and prompt fields nested under
+   * `content.parts`.
+   *
+   * @param {Object} message - Message that may carry image parameters.
+   * @returns {string[]} Candidate parameter texts.
+   */
+  function getPromptCandidateTextsFromMessage(message) {
+    const out = [];
+    const seen = new Set();
+
+    function add(value) {
+      if (typeof value !== "string") return;
+      const text = value.trim();
+      if (!text || seen.has(text)) return;
+      seen.add(text);
+      out.push(text);
+    }
+
+    const content = message?.content || {};
+
+    add(message?.metadata?.cgo?.text_fallback);
+    add(content.prompt);
+    add(content.text);
+
+    if (Array.isArray(content.parts)) {
+      const stringParts = content.parts.filter((value) => typeof value === "string");
+      if (stringParts.length) {
+        add(stringParts.join("\n"));
+      }
+
+      for (const part of content.parts) {
+        if (!part || typeof part !== "object") continue;
+        add(part.prompt);
+        add(part.text);
+        add(part.content);
+        add(part.input?.prompt);
+        add(part.args?.prompt);
+        add(part.arguments?.prompt);
+      }
+    } else if (content.parts && typeof content.parts === "object") {
+      add(content.parts.prompt);
+      add(content.parts.text);
+      add(content.parts.content);
+    }
+
+    return out;
+  }
+
+  /**
    * Extract an image prompt from a JSON-parameter message when present.
    *
    * @param {Object} message - Message that may contain JSON prompt params.
    * @returns {string} Prompt text or an empty string.
    */
   function extractPromptFromJsonParamMessage(message) {
-    const text = getMessageTextForExport(message || {}).trim();
-    if (!text || !text.startsWith("{") || !text.endsWith("}")) return "";
+    for (const text of getPromptCandidateTextsFromMessage(message || {})) {
+      if (!text.startsWith("{") || !text.endsWith("}")) continue;
 
-    try {
-      const data = JSON.parse(text);
-      return typeof data?.prompt === "string" ? data.prompt : "";
-    } catch {
-      return "";
+      try {
+        const data = JSON.parse(text);
+        if (typeof data?.prompt === "string") {
+          return data.prompt;
+        }
+      } catch {
+        continue;
+      }
     }
+
+    return "";
+  }
+
+  /**
+   * Extract the literal prompt text from the message that invoked an image tool.
+   *
+   * @param {Object} message - Candidate image tool-call parent message.
+   * @returns {string} Prompt text or an empty string.
+   */
+  function extractPromptFromImageToolParentMessage(message) {
+    const jsonPrompt = extractPromptFromJsonParamMessage(message || {});
+    if (jsonPrompt) return jsonPrompt;
+
+    const text = getPromptCandidateTextsFromMessage(message || {})
+      .find((candidate) => candidate && !looksLikeJsonBlob(candidate));
+
+    return text || "";
+  }
+
+  /**
+   * Check whether a message looks like the assistant-side payload sent to an image tool.
+   *
+   * @param {Object} message - Candidate message.
+   * @returns {boolean} `true` when the message is likely an image tool-call parent.
+   */
+  function isImageToolPromptParentMessage(message) {
+    if (!message || typeof message !== "object") return false;
+    if (extractPromptFromJsonParamMessage(message)) return true;
+
+    return (
+      message?.author?.role === "assistant" &&
+      message?.channel === "commentary" &&
+      typeof message?.recipient === "string" &&
+      message.recipient !== "all" &&
+      message.end_turn === false &&
+      getPromptCandidateTextsFromMessage(message).some((text) => !!text)
+    );
+  }
+
+  /**
+   * Collect prompt carrier messages between a generated-image tool output and its user turn.
+   *
+   * @param {Object} mapping - Conversation node map.
+   * @param {string} toolMessageId - Generated-image tool message id.
+   * @returns {Object[]} Prompt carrier messages closest to the tool output first.
+   */
+  function collectImageToolPromptParentMessages(mapping, toolMessageId) {
+    const out = [];
+    const seen = new Set();
+    let cursor =
+      mapping?.[toolMessageId]?.parent ||
+      mapping?.[toolMessageId]?.message?.metadata?.parent_id ||
+      "";
+
+    while (cursor && mapping?.[cursor] && !seen.has(cursor)) {
+      seen.add(cursor);
+
+      const msg = mapping[cursor]?.message;
+      if (msg?.author?.role === "user") break;
+
+      if (isImageToolPromptParentMessage(msg)) {
+        out.push(msg);
+      }
+
+      cursor =
+        mapping[cursor]?.parent ||
+        msg?.metadata?.parent_id ||
+        "";
+    }
+
+    return out;
   }
 
   /**
@@ -1056,9 +1183,10 @@
    *
    * @param {Object} parentMessage - Parent user or assistant message.
    * @param {Object[]} [toolMessages=[]] - Related generated-image tool messages.
+   * @param {Object[]} [promptParentMessages=[]] - Image tool-call parent messages.
    * @returns {Array<{text: string, source: string}>} Deduplicated prompt seed entries.
    */
-  function collectGeneratedImagePromptSeeds(parentMessage, toolMessages = []) {
+  function collectGeneratedImagePromptSeeds(parentMessage, toolMessages = [], promptParentMessages = []) {
     const out = [];
     const seen = new Set();
 
@@ -1076,6 +1204,13 @@
       out.push({ text: value, source });
     }
 
+    for (const promptParentMessage of promptParentMessages || []) {
+      add(
+        extractPromptFromImageToolParentMessage(promptParentMessage),
+        "tool-parent-prompt"
+      );
+    }
+
     const jsonPrompt = extractPromptFromJsonParamMessage(parentMessage || {});
     add(jsonPrompt, "json-prompt");
 
@@ -1084,9 +1219,6 @@
     }
 
     for (const toolMessage of toolMessages || []) {
-      add(toolMessage?.metadata?.image_gen_title, "tool-image-gen-title");
-      add(toolMessage?.metadata?.async_task_title, "tool-async-task-title");
-
       const parts = Array.isArray(toolMessage?.content?.parts)
         ? toolMessage.content.parts
         : [];
@@ -2273,6 +2405,11 @@
         msg.author?.role === "user" &&
         generatedImageToolMessages.length > 0
       ) {
+        const promptParentMessages = generatedImageToolMessages.flatMap((toolMessage) => {
+          const toolId = toolMessage?.id || "";
+          return toolId ? collectImageToolPromptParentMessages(mapping, toolId) : [];
+        });
+
         for (const toolMessage of generatedImageToolMessages) {
           if (toolMessage?.id) {
             consumedGeneratedToolIds.add(toolMessage.id);
@@ -2298,7 +2435,11 @@
             : CGO.dedupeImages([...(syntheticItem.dataImages || []), ...directImages]);
         syntheticItem.imagePromptSeeds = mergePromptLists(
           syntheticItem.imagePromptSeeds || [],
-          collectGeneratedImagePromptSeeds(msg, generatedImageToolMessages)
+          collectGeneratedImagePromptSeeds(
+            msg,
+            generatedImageToolMessages,
+            promptParentMessages
+          )
         );
 
         normalized.push(syntheticItem);
@@ -2325,6 +2466,7 @@
       }
 
       const userAncestorId = findNearestUserAncestorId(mapping, toolId);
+      const promptParentMessages = collectImageToolPromptParentMessages(mapping, toolId);
       const parentItem = userAncestorId ? byId.get(userAncestorId) : null;
       const parentMessage =
         parentItem?.rawMessage ||
@@ -2360,7 +2502,11 @@
             ]);
         existingSyntheticItem.imagePromptSeeds = mergePromptLists(
           existingSyntheticItem.imagePromptSeeds || [],
-          collectGeneratedImagePromptSeeds(parentMessage, [toolMessage])
+          collectGeneratedImagePromptSeeds(
+            parentMessage,
+            [toolMessage],
+            promptParentMessages
+          )
         );
 
         consumedGeneratedToolIds.add(toolId);
@@ -2389,7 +2535,11 @@
       );
       syntheticItem.imagePromptSeeds = mergePromptLists(
         syntheticItem.imagePromptSeeds || [],
-        collectGeneratedImagePromptSeeds(parentMessage, [toolMessage])
+        collectGeneratedImagePromptSeeds(
+          parentMessage,
+          [toolMessage],
+          promptParentMessages
+        )
       );
 
       const insertMode = insertAfterNormalizedMessage(
@@ -2571,6 +2721,7 @@
     if (metadata && typeof metadata === "object") {
       for (const [key, value] of Object.entries(metadata)) {
         if (typeof value !== "string") continue;
+        if (/^(image_gen_title|async_task_title)$/i.test(key)) continue;
 
         const text = value.trim();
         if (!text) continue;

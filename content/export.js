@@ -470,18 +470,55 @@
    * @returns {string} Prompt text or an empty string.
    */
   function extractPromptFromJsonParamMessage(message) {
-    const text = Array.isArray(message?.content?.parts)
-      ? message.content.parts.filter((v) => typeof v === "string").join("\n").trim()
-      : "";
+    const content = message?.content || {};
+    const candidates = [];
 
-    if (!text) return "";
-
-    try {
-      const obj = JSON.parse(text);
-      return typeof obj.prompt === "string" ? obj.prompt.trim() : "";
-    } catch {
-      return "";
+    function add(value) {
+      if (typeof value !== "string") return;
+      const text = value.trim();
+      if (text && !candidates.includes(text)) {
+        candidates.push(text);
+      }
     }
+
+    add(content.prompt);
+    add(content.text);
+
+    if (Array.isArray(content.parts)) {
+      const strings = content.parts.filter((v) => typeof v === "string");
+      if (strings.length) {
+        add(strings.join("\n"));
+      }
+
+      for (const part of content.parts) {
+        if (!part || typeof part !== "object") continue;
+        add(part.prompt);
+        add(part.text);
+        add(part.content);
+        add(part.input?.prompt);
+        add(part.args?.prompt);
+        add(part.arguments?.prompt);
+      }
+    } else if (content.parts && typeof content.parts === "object") {
+      add(content.parts.prompt);
+      add(content.parts.text);
+      add(content.parts.content);
+    }
+
+    for (const text of candidates) {
+      if (!text.startsWith("{") || !text.endsWith("}")) continue;
+
+      try {
+        const obj = JSON.parse(text);
+        if (typeof obj.prompt === "string") {
+          return obj.prompt.trim();
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    return "";
   }
 
   /**

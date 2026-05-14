@@ -572,6 +572,57 @@
   }
 
   /**
+   * Decide whether an image-generation prompt entry should be shown.
+   *
+   * @param {Object} item - Prompt descriptor.
+   * @returns {boolean} `true` when the prompt should be rendered.
+   */
+  function isRenderableImagePrompt(item) {
+    const source = String(item?.source || "");
+    const text = String(item?.text || "").trim();
+
+    if (!text) return false;
+    if (source === "parent-user-message") return false;
+    if (source === "tool-image-gen-title") return false;
+    if (source === "tool-async-task-title") return false;
+
+    return true;
+  }
+
+  /**
+   * Render prompt text associated with generated images in the lightweight viewer.
+   *
+   * @param {Array<{text: string, source?: string}>} imagePrompts - Prompt descriptors.
+   * @returns {string} Prompt HTML fragment.
+   */
+  function renderImagePrompts(imagePrompts) {
+    if (!Array.isArray(imagePrompts) || imagePrompts.length === 0) return "";
+
+    const seen = new Set();
+    const prompts = imagePrompts.filter((item) => {
+      if (!isRenderableImagePrompt(item)) return false;
+      const text = String(item?.text || "").trim();
+      if (seen.has(text)) return false;
+      seen.add(text);
+      return true;
+    });
+
+    if (!prompts.length) return "";
+
+    return prompts
+      .map((item) => {
+        const text = escapeHtml(item?.text || "");
+        if (!text) return "";
+
+        return `<div class="cgo-image-hint">
+          <div class="cgo-image-hint-label">${escapeHtml(t("image_prompt_label"))}</div>
+          <div class="cgo-image-hint-text">${text}</div>
+        </div>`;
+      })
+      .join("\n");
+  }
+
+  /**
    * Render an HTML fragment representing a list of attachments.
    *
    * @param {Array<Object>} attachments - Array of attachment objects. Each object may include `name`, `localPath`, and `url`.
@@ -685,6 +736,10 @@
   <div class="message-body">
     ${bodyHtml}
     ${renderImages(message.visibleImages || message.images || [])}
+    ${renderImagePrompts([
+      ...(Array.isArray(message.imagePrompts) ? message.imagePrompts : []),
+      ...(Array.isArray(message.imagePromptSeeds) ? message.imagePromptSeeds : []),
+    ])}
     ${renderAttachments(message.visibleAttachments || message.attachments || [])}
     ${renderThoughts(message.thoughts || [], message.id)}
   </div>
