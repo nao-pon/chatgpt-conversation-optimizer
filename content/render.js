@@ -205,6 +205,7 @@
         ...promotedAttachmentImages,
       ]);
 
+      normalizeImageVariantsForDisplay(message);
       CGO.prepareInlineImageData(message);
       sanitizeRenderableMedia(message);
 
@@ -455,6 +456,117 @@
     }
 
     return out;
+  }
+
+  /**
+   * Build a grouping key for image variants that represent the same user-facing asset.
+   *
+   * @param {Object} image - Image metadata.
+   * @returns {string} Variant key or an empty string.
+   */
+  function getImageVariantKey(image) {
+    if (!image || typeof image !== "object") return "";
+
+    const names = [
+      image.fileName,
+      image.title,
+      image.alt,
+    ]
+      .map(normalizeRenderableMediaName)
+      .filter(Boolean);
+
+    const name = names.find((value) => /\.(png|jpg|jpeg|webp|gif|bmp|svg)$/i.test(value)) || names[0] || "";
+    if (!name) return "";
+
+    const mimeType = String(image.mimeType || "").toLowerCase();
+    const looksImage =
+      /^image\//i.test(mimeType) ||
+      /\.(png|jpg|jpeg|webp|gif|bmp|svg)$/i.test(name);
+
+    return looksImage ? `name:${name}` : "";
+  }
+
+  /**
+   * Choose the image variant that should be rendered inline.
+   *
+   * @param {Object[]} images - Image variants for the same user-facing asset.
+   * @returns {Object|null} Preferred lightweight display image.
+   */
+  function chooseLightweightDisplayImage(images) {
+    const candidates = (images || []).filter(Boolean);
+    if (!candidates.length) return null;
+
+    return candidates.slice().sort((a, b) => {
+      const aSize = Number(a?.fileSizeBytes || 0);
+      const bSize = Number(b?.fileSizeBytes || 0);
+      const aa = aSize > 0 ? aSize : Number.POSITIVE_INFINITY;
+      const bb = bSize > 0 ? bSize : Number.POSITIVE_INFINITY;
+      if (aa !== bb) return aa - bb;
+
+      const aPixels = Number(a?.width || 0) * Number(a?.height || 0);
+      const bPixels = Number(b?.width || 0) * Number(b?.height || 0);
+      const ap = aPixels > 0 ? aPixels : Number.POSITIVE_INFINITY;
+      const bp = bPixels > 0 ? bPixels : Number.POSITIVE_INFINITY;
+      if (ap !== bp) return ap - bp;
+
+      const aResolved = a?.embeddedUrl || a?.localPath || (a?.url && a?.unresolved === false);
+      const bResolved = b?.embeddedUrl || b?.localPath || (b?.url && b?.unresolved === false);
+      if (!!aResolved !== !!bResolved) return aResolved ? -1 : 1;
+
+      return 0;
+    })[0];
+  }
+
+  /**
+   * Collapse multiple size variants of the same attached image.
+   *
+   * The smallest known variant remains in the image gallery; other variants are
+   * discarded because ChatGPT's duplicate upload representations are not always
+   * independently downloadable.
+   *
+   * @param {Object} message - Export message mutated in place.
+   * @returns {Object} The same message reference.
+   */
+  function normalizeImageVariantsForDisplay(message) {
+    if (!message || typeof message !== "object") return message;
+
+    const images = Array.isArray(message.images) ? message.images : [];
+    if (images.length < 2) return message;
+
+    const groups = new Map();
+    const passthrough = [];
+
+    for (const image of images) {
+      const key = getImageVariantKey(image);
+      if (!key) {
+        passthrough.push(image);
+        continue;
+      }
+
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(image);
+    }
+
+    const keptImages = [...passthrough];
+    let removedVariantCount = 0;
+
+    for (const group of groups.values()) {
+      if (group.length === 1) {
+        keptImages.push(group[0]);
+        continue;
+      }
+
+      const displayImage = chooseLightweightDisplayImage(group);
+      if (!displayImage) continue;
+
+      keptImages.push(displayImage);
+      removedVariantCount += group.length - 1;
+    }
+
+    if (!removedVariantCount) return message;
+
+    message.images = CGO.dedupeImages(keptImages);
+    return message;
   }
 
   /**
@@ -1811,5 +1923,6 @@
   CGO.getSharedExportAssets = getSharedExportAssets;
   CGO.loadExtensionTextFile = loadExtensionTextFile;
   CGO.mergeMessagesWithDomAssets = mergeMessagesWithDomAssets;
+  CGO.normalizeImageVariantsForDisplay = normalizeImageVariantsForDisplay;
   CGO.renderSingleImageFigure = renderSingleImageFigure;
 })();

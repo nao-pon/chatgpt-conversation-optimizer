@@ -145,7 +145,7 @@
             image.unresolved = false;
             image.source = `${image.source || "file-id"}+download-cache`;
             image.fileName = image.fileName || cached.fileName || "";
-            image.fileSizeBytes = image.fileSizeBytes || cached.fileSizeBytes || 0;
+            image.fileSizeBytes = Number(cached.fileSizeBytes || 0) || image.fileSizeBytes || 0;
             image.mimeType = image.mimeType || cached.mimeType || "";
           } else {
             // 2) 無ければ API
@@ -226,7 +226,7 @@
             attachment.url = cached.downloadUrl;
             attachment.unresolved = false;
             attachment.name = attachment.name || cached.fileName || "";
-            attachment.fileSizeBytes = attachment.fileSizeBytes || cached.fileSizeBytes || 0;
+            attachment.fileSizeBytes = Number(cached.fileSizeBytes || 0) || attachment.fileSizeBytes || 0;
             attachment.kind = CGO.guessAttachmentKind(attachment.name, attachment.mimeType);
             attachment.source = `${attachment.source || "file-id"}+download-cache`;
           } else {
@@ -403,6 +403,8 @@
     }
 
     const imageBlob = coerceBlobMimeType(blob, mimeType);
+    image.mimeType = mimeType;
+    image.fileSizeBytes = imageBlob.size || blob.size || image.fileSizeBytes || 0;
 
     return await new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -1059,8 +1061,8 @@
 
             image.localPath = localPath;
             image.embeddedUrl = null;
-            image.mimeType = image.mimeType || mimeType;
-            image.fileSizeBytes = image.fileSizeBytes || imageBlob.size || 0;
+            image.mimeType = mimeType;
+            image.fileSizeBytes = imageBlob.size || blob.size || image.fileSizeBytes || 0;
             image.skipReason = "";
 
             const buffer = await blobToArrayBuffer(imageBlob);
@@ -1192,7 +1194,7 @@
     projectFolderName = ""
   ) {
     const allAttachments = messages.flatMap((m) => m.attachments || []);
-    const candidates = allAttachments;
+    const candidates = allAttachments.filter((attachment) => attachment?.kind !== "image");
     const zipTargetAttachments = [];
 
     for (const attachment of candidates) {
@@ -1316,7 +1318,9 @@
       const kindLabel = CGO.escapeHtml(
         CGO.t(`attachment_kind_${attachment.kind || "attachment"}`)
       );
-      const sizeText = CGO.escapeHtml(CGO.formatBytes(attachment.fileSizeBytes));
+      const sizeText = Number(attachment.fileSizeBytes || 0) > 0
+        ? CGO.escapeHtml(CGO.formatBytes(attachment.fileSizeBytes))
+        : "";
       const meta = [kindLabel, sizeText].filter(Boolean).join(" · ");
 
       const skipLabel = getAttachmentSkipLabel(attachment);
@@ -1366,7 +1370,9 @@
       const kindLabel = CGO.escapeHtml(
         CGO.t(`attachment_kind_${attachment.kind || "attachment"}`)
       );
-      const sizeText = CGO.escapeHtml(CGO.formatBytes(attachment.fileSizeBytes));
+      const sizeText = Number(attachment.fileSizeBytes || 0) > 0
+        ? CGO.escapeHtml(CGO.formatBytes(attachment.fileSizeBytes))
+        : "";
       const meta = [kindLabel, sizeText].filter(Boolean).join(" · ");
 
       let actionHtml = "";
