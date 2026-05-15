@@ -3,7 +3,7 @@
 ![CGO Image](docs/images/CGO_rounded_transparent.png)
 
 [![Chrome Web Store Version](https://img.shields.io/chrome-web-store/v/chmaignkjgccgmacmlfgnmbfbnnfmnpl?logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/conversation-optimizer-fo/chmaignkjgccgmacmlfgnmbfbnnfmnpl)
-[![Version](https://img.shields.io/badge/version-2.0.3-blue)](../../releases)
+[![Version](https://img.shields.io/badge/version-2.0.4-blue)](../../releases)
 [![Manifest](https://img.shields.io/badge/manifest-v3-green)](./manifest.json)
 [![Platform](https://img.shields.io/badge/platform-Chrome-orange)](https://www.google.com/chrome/)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey)](./LICENSE)
