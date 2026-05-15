@@ -1607,7 +1607,7 @@
       ${sharedCss}
       ${highlightAssets?.css || ""}
     </style>
-    <link rel="icon" type="image/vnd.microsoft.icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAdklEQVR4nGPkFxT9z0ABYKJEMwMDAwMLjKFrYEaSxssXThHngsMTf+OVp9gLeA0gZDvRLjg88TdOw3AagK7BNp+VNANs81nhmnBpxmsANleQbAAh2/EacHjib4KaGRgYGBhx5QVdAzN4aiPLBcQCnC4gFlDsAgAEZB4LCldHoQAAAABJRU5ErkJggg==">
+    <link rel="icon" type="image/vnd.microsoft.icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IB2cksfwAAAARnQU1BAACxjwv8YQUAAAAgY0hSTQAAeiYAAICEAAD6AAAAgOgAAHUwAADqYAAAOpgAABdwnLpRPAAAAAlwSFlzAAALEwAACxMBAJqcGAAAAAd0SU1FB+oFDwgoOwnNG1QAAALSSURBVDjLPZNNbJRVFIafc79+/aY/UxCb0OnMWJkxgAYTJTFQw6YomnSBGomBBf4hiImaEKOyUEJYdMPKjS7UQkLUBhOSBtJIoin4gxhY0EJVAjMNAaH8JIoUO7/f6+J+5SbnnsU995znvXmvARBlSwRhwfZ8Dv1rIQRak4hiFFWxsALrX0QTF0ExxCpTnym20JopYUHBho9DaGhwhS+QwABiANg4SHBkH/GmrcQ//wFGgXBxyYEVCEK0OIdeXguVO1Cdhdpdn6tzUJtD165D0Eb+0C7Szy4DZ2BWcGDgAj8tbgDy0+cpSPL4SeJLV6lf+puVI9sgcAA4DF9cxV/GfDMzH14H1OvE/eu5uvptHDGWnHsCxdj5U9h3ZeyrMQhCbPu72MQ0dnYCe3oVhC30/PopT9z4jPj0RaQ4IXABduAcPLgCvt4LPUuwD4fglffh4Jfw20+wboD20vcoHXF56FvSj/Xw2l/bEsKupbLDTdFREKm8aOsTJ5qyZf2ydRtkB0ZlI9+o4/pZ0ZETbVnZgrzeqO0RXTk5zKFEpl/y+8wt2Pg6LFyAW7MKR82/h4QARw0zw1GvgIuxL37EnlyDHTqFnRnHjv0O44fhn5uYNQjUpO/4bhY9t5wXym9hlSqqN4EoLzqLsv1TsmNN2cikaO+TDe2Xnb8jm/xT1l2UpR/QkjP7NDA7rIFfdoiunEhlBFFWdD4kjja9/lReRFkR9YqOvPIXxkQqK1K9oi0rOnPaXPnYN4gycvekp/CGmveCC3AnRvlvahoc9/Rj0O4a8+6gBbwD7dYVGB5DWwaxrW/C/SmC3m66iw9z+6nldC1dSNrNsfKdR5mbvoka3rFGa6aECwv2yOPw0SeoL4+dHEUf7KBl6gjx86/SuXMD94WzdAe3+feHSS4Ml6ARg1T2JFGuZO/tLZDpQTu3QLMOJuylZ9DBowm6Jf+E5K+oTG2m+D++bDOvk1A/rwAAAABJRU5ErkJggg==">
   </head>
   <body>
     <header class="page-header">
