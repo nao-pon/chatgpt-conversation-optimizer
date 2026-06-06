@@ -563,6 +563,15 @@
   function isMeaningfulConversationNode(node) {
     if (!hasMessage(node)) return false;
 
+    const message = node?.message;
+    if (
+      message?.metadata?.is_visually_hidden_from_conversation ||
+      message?.metadata?.is_user_system_message ||
+      message?.content?.content_type === "user_editable_context"
+    ) {
+      return false;
+    }
+
     const role = getRole(node);
     if (role === "user") return true;
     if (role === "assistant" && getTextLength(node) > 0) return true;
