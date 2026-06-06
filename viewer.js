@@ -766,16 +766,66 @@
   }
 
   /**
+   * Load syntax highlighting assets only when the lightweight viewer rendered code blocks.
+   *
+   * @param {HTMLElement} app - Rendered conversation root.
+   * @returns {Promise<boolean>} True when highlight assets are available.
+   */
+  async function loadHighlightAssetsIfNeeded(app) {
+    if (!app?.querySelector?.("pre code")) return false;
+    if (window.hljs) return true;
+
+    const head = document.head || document.documentElement;
+
+    if (!document.getElementById("cgo-viewer-highlight-css")) {
+      const link = document.createElement("link");
+      link.id = "cgo-viewer-highlight-css";
+      link.rel = "stylesheet";
+      link.href = chrome.runtime.getURL("vendor/github-dark.min.css");
+      head.appendChild(link);
+    }
+
+    if (document.getElementById("cgo-viewer-highlight-js")) {
+      return new Promise((resolve) => {
+        const wait = () => {
+          if (window.hljs) {
+            resolve(true);
+          } else {
+            setTimeout(wait, 25);
+          }
+        };
+        wait();
+      });
+    }
+
+    return new Promise((resolve) => {
+      const script = document.createElement("script");
+      script.id = "cgo-viewer-highlight-js";
+      script.src = chrome.runtime.getURL("vendor/highlight.min.js");
+      script.onload = () => resolve(!!window.hljs);
+      script.onerror = () => {
+        console.warn("[viewer] failed to load syntax highlighting assets");
+        resolve(false);
+      };
+      head.appendChild(script);
+    });
+  }
+
+  /**
    * Initialize the optional CGO export UI (if present) with feature flags and a label resolver.
    *
-   * When a global `window.CGOExportUI` exists, calls its `init` method to enable code actions,
-   * disable built-in highlighting, and provide a `getLabel` callback that resolves localization
-   * keys via `t(key)` with fallbacks.
+   * When a global `window.CGOExportUI` exists, calls its `init` method to enable code actions
+   * and, when code blocks exist, syntax highlighting. Label strings are resolved via `t(key)`.
+   *
+   * @param {HTMLElement} app - Rendered conversation root.
+   * @returns {Promise<void>}
    */
-  function installHandlers(payload) {
+  async function installHandlers(app) {
+    const enableHighlight = await loadHighlightAssetsIfNeeded(app);
+
     window.CGOExportUI?.init({
       enableCodeActions: true,
-      enableHighlight: false,
+      enableHighlight,
       getLabel: (key, fallback) => t(key) || fallback || key,
     });
   }
@@ -822,7 +872,7 @@
         section.insertBefore(holder, section.firstChild);
       }
 
-      installHandlers(payload);
+      await installHandlers(app);
 
       if (payload.messageId) {
         document.getElementById(makeMessageDomId(payload.messageId))?.scrollIntoView({ block: "start" });
