@@ -38,6 +38,15 @@
   "conversation_id": {
     "message": "Conversation ID"
   },
+  "conversation_navigator_label": {
+    "message": "Conversation navigator"
+  },
+  "conversation_navigator_open_label": {
+    "message": "Open conversation navigator"
+  },
+  "conversation_navigator_item_fallback": {
+    "message": "User message"
+  },
   "download_button": {
     "message": "Download"
   },

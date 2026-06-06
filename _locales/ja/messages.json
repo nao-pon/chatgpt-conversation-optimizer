@@ -38,6 +38,15 @@
   "conversation_id": {
     "message": "会話 ID"
   },
+  "conversation_navigator_label": {
+    "message": "会話ナビゲーター"
+  },
+  "conversation_navigator_open_label": {
+    "message": "会話ナビゲーターを開く"
+  },
+  "conversation_navigator_item_fallback": {
+    "message": "ユーザーメッセージ"
+  },
   "download_button": {
     "message": "HTMLでダウンロード"
   },

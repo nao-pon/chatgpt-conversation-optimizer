@@ -232,6 +232,218 @@
   }
 
   /**
+   * Trim a message into a short title suitable for the conversation navigator.
+   *
+   * @param {string} text - Raw message text.
+   * @param {number} index - Zero-based fallback index.
+   * @param {Function} getLabel - Localized label resolver.
+   * @returns {string} A compact display title.
+   */
+  function getNavigatorTitle(text, index, getLabel) {
+    const source = String(text || "")
+      .replace(/\uE200(?:filecite|cite|filenavlist|navlist|schedule|forecast|standing|finance)\uE202[\s\S]*?\uE201/g, "")
+      .replace(/[\uE200\uE201\uE202]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    const fallbackBase = getLabel("conversation_navigator_item_fallback", "User message");
+    const fallback = `${fallbackBase} ${index + 1}`;
+    if (!source) return fallback;
+    return source.length > 72 ? `${source.slice(0, 71)}...` : source;
+  }
+
+  /**
+   * Build the fixed conversation navigator shown beside exported conversations.
+   *
+   * The control uses exported `.message.user` sections as anchors, so it works for
+   * both standalone HTML exports and the lightweight viewer without changing the
+   * export payload shape.
+   *
+   * @param {Object} options - Init options.
+   * @param {Function} options.getLabel - Localized label resolver.
+   * @returns {void}
+   */
+  function initConversationNavigator(options = {}) {
+    if (document.getElementById("cgo-conversation-nav")) return;
+
+    const getLabel = options.getLabel || ((key, fallback) => fallback || key);
+    const sections = Array.from(document.querySelectorAll(".message.user[id]"));
+    if (sections.length < 2) return;
+
+    const root = document.createElement("div");
+    root.id = "cgo-conversation-nav";
+    root.className = "cgo-conversation-nav";
+    const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+
+    const railLabel = getLabel("conversation_navigator_label", "Conversation navigator");
+    const openLabel = getLabel("conversation_navigator_open_label", "Open conversation navigator");
+
+    const rail = document.createElement("button");
+    rail.type = "button";
+    rail.className = "cgo-conversation-nav-rail";
+    rail.setAttribute("aria-label", openLabel);
+    rail.setAttribute("aria-expanded", "false");
+    rail.title = railLabel;
+
+    const track = document.createElement("span");
+    track.className = "cgo-conversation-nav-track";
+    rail.appendChild(track);
+
+    const popover = document.createElement("div");
+    popover.className = "cgo-conversation-nav-popover";
+    popover.hidden = true;
+    popover.setAttribute("role", "navigation");
+    popover.setAttribute("aria-label", railLabel);
+
+    const list = document.createElement("div");
+    list.className = "cgo-conversation-nav-list";
+    popover.appendChild(list);
+
+    root.appendChild(rail);
+    root.appendChild(popover);
+    document.body.appendChild(root);
+
+    const items = sections.map((section, index) => {
+      const title = getNavigatorTitle(getMessageMarkdown(section), index, getLabel);
+
+      const marker = document.createElement("span");
+      marker.className = "cgo-conversation-nav-marker";
+      marker.setAttribute("aria-hidden", "true");
+      track.appendChild(marker);
+
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "cgo-conversation-nav-row";
+      row.textContent = title;
+      row.title = title;
+      list.appendChild(row);
+
+      return { section, marker, row, title, top: 0 };
+    });
+
+    let activeIndex = -1;
+    let frame = 0;
+    let isOpen = false;
+    let closeTimer = 0;
+
+    const cancelClose = () => {
+      if (!closeTimer) return;
+      clearTimeout(closeTimer);
+      closeTimer = 0;
+    };
+
+    const scheduleClose = () => {
+      cancelClose();
+      closeTimer = setTimeout(() => {
+        closeTimer = 0;
+        setOpen(false);
+      }, 220);
+    };
+
+    const setOpen = (nextOpen) => {
+      const wasOpen = isOpen;
+      if (nextOpen) cancelClose();
+      isOpen = !!nextOpen;
+      popover.hidden = !isOpen;
+      rail.setAttribute("aria-expanded", isOpen ? "true" : "false");
+      root.classList.toggle("is-open", isOpen);
+      if (isOpen && !wasOpen && activeIndex >= 0) {
+        items[activeIndex]?.row.scrollIntoView({ block: "nearest" });
+      }
+    };
+
+    const scrollToItem = (item, options = {}) => {
+      if (!item?.section) return;
+      if (options.syncList) {
+        item.row.scrollIntoView({ block: "nearest" });
+      }
+      item.section.scrollIntoView({
+        behavior: prefersReducedMotion ? "auto" : "smooth",
+        block: "start",
+      });
+    };
+
+    const setActiveIndex = (nextIndex) => {
+      if (nextIndex === activeIndex) return;
+      if (activeIndex >= 0) {
+        items[activeIndex]?.marker.classList.remove("is-active");
+        items[activeIndex]?.row.classList.remove("is-active");
+        items[activeIndex]?.row.removeAttribute("aria-current");
+      }
+      activeIndex = nextIndex;
+      if (activeIndex >= 0) {
+        items[activeIndex]?.marker.classList.add("is-active");
+        items[activeIndex]?.row.classList.add("is-active");
+        items[activeIndex]?.row.setAttribute("aria-current", "location");
+      }
+    };
+
+    const refresh = () => {
+      frame = 0;
+      const doc = document.documentElement;
+      const scrollTop = window.scrollY || doc.scrollTop || 0;
+      const scrollMax = Math.max(1, doc.scrollHeight - window.innerHeight);
+      const probe = scrollTop + window.innerHeight * 0.42;
+      let nextActive = 0;
+
+      items.forEach((item, index) => {
+        const rect = item.section.getBoundingClientRect();
+        item.top = rect.top + scrollTop;
+        const pct = Math.max(0, Math.min(100, (item.top / scrollMax) * 100));
+        item.marker.style.top = `${pct}%`;
+        if (item.top <= probe) nextActive = index;
+      });
+
+      setActiveIndex(nextActive);
+    };
+
+    const scheduleRefresh = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(refresh);
+    };
+
+    items.forEach((item) => {
+      item.marker.addEventListener("click", (event) => {
+        event.stopPropagation();
+        scrollToItem(item, { syncList: true });
+      });
+      item.row.addEventListener("click", () => scrollToItem(item));
+    });
+
+    rail.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setOpen(!isOpen);
+    });
+
+    root.addEventListener("mouseenter", () => setOpen(true));
+    root.addEventListener("mouseleave", scheduleClose);
+    root.addEventListener("focusin", () => setOpen(true));
+    root.addEventListener("focusout", () => {
+      setTimeout(() => {
+        if (!root.contains(document.activeElement)) scheduleClose();
+      }, 0);
+    });
+
+    document.addEventListener("click", (event) => {
+      if (isOpen && !root.contains(event.target)) setOpen(false);
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && isOpen) {
+        setOpen(false);
+        rail.focus();
+      }
+    });
+    window.addEventListener("scroll", scheduleRefresh, { passive: true });
+    window.addEventListener("resize", scheduleRefresh);
+    window.addEventListener("load", scheduleRefresh, { once: true });
+    if ("ResizeObserver" in window) {
+      const observer = new ResizeObserver(scheduleRefresh);
+      observer.observe(document.body);
+    }
+
+    refresh();
+  }
+
+  /**
    * Initialize CGO export UI behavior and event handlers.
    *
    * Registers document-level handlers for markdown copying (with modal fallback), code copying, code collapse/expand, and thought-panel toggles, and optionally starts lazy syntax highlighting.
@@ -325,6 +537,7 @@
     }, { passive: false });
 
     if (enableHighlight) waitForHljs();
+    initConversationNavigator({ getLabel });
   }
 
   window.CGOExportUI = { init };
