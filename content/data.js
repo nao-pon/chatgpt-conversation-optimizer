@@ -1451,6 +1451,171 @@
   }
 
   /**
+   * Check whether a content reference can produce inline image output.
+   *
+   * @param {Object} ref - Content-reference descriptor.
+   * @returns {boolean} `true` for image-like content references.
+   */
+  function isImageContentReference(ref) {
+    return !!ref && (
+      ref.type === "image_v2" ||
+      ref.type === "image_group" ||
+      ref.type === "products"
+    );
+  }
+
+  /**
+   * Build a compact product caption for product reference images.
+   *
+   * @param {Object} product - Product descriptor from a `products` content reference.
+   * @returns {string} Human-readable caption.
+   */
+  function buildProductImageCaption(product) {
+    if (!product || typeof product !== "object") return "";
+
+    const title = typeof product.title === "string" ? product.title.trim() : "";
+    const price = typeof product.price === "string" ? product.price.trim() : "";
+    const tag = typeof product.featured_tag === "string" ? product.featured_tag.trim() : "";
+    const parts = [title, price, tag].filter(Boolean);
+
+    return parts.join(" · ");
+  }
+
+  /**
+   * Extract a navigable source URL from product metadata when available.
+   *
+   * @param {Object} product - Product descriptor from a `products` content reference.
+   * @returns {string} Normalized source URL or an empty string.
+   */
+  function extractProductSourceUrl(product) {
+    if (!product || typeof product !== "object") return "";
+
+    const normalizeUsableSourceUrl = (value) => {
+      const rawUrl = typeof value === "string" ? value.trim() : "";
+      if (!rawUrl) return "";
+
+      try {
+        const url = new URL(rawUrl, location.origin);
+        if (
+          (url.hostname === "chatgpt.com" || url.hostname === "chat.openai.com") &&
+          url.searchParams.has("hints")
+        ) {
+          return "";
+        }
+        return CGO.normalizeMaybeRelativeChatgptUrl(rawUrl);
+      } catch {
+        return "";
+      }
+    };
+
+    const directUrl = typeof product.url === "string" ? product.url.trim() : "";
+    if (directUrl) return normalizeUsableSourceUrl(directUrl);
+
+    const rawLookupData = product?.product_lookup_key?.data;
+    if (typeof rawLookupData !== "string" || !rawLookupData.trim()) return "";
+
+    try {
+      const lookupData = JSON.parse(rawLookupData);
+      const providerUrl = typeof lookupData?.provider_url === "string"
+        ? lookupData.provider_url.trim()
+        : "";
+      return normalizeUsableSourceUrl(providerUrl);
+    } catch {
+      return "";
+    }
+  }
+
+  /**
+   * Extract inline product image entries from a `products` content reference.
+   *
+   * @param {Object} ref - Products content-reference descriptor.
+   * @param {string} matchedText - Marker text to replace.
+   * @param {string} messageId - Parent message id.
+   * @param {number} refIndex - Content-reference index.
+   * @returns {Object[]} Inline image entries.
+   */
+  function extractProductInlineImageEntries(ref, matchedText, messageId, refIndex) {
+    const products = Array.isArray(ref?.products) ? ref.products : [];
+    const entries = [];
+
+    products.forEach((product) => {
+      if (!product || typeof product !== "object") return;
+
+      const imageUrls = Array.isArray(product.image_urls) ? product.image_urls : [];
+      const showcaseImage = product?.showcase_metadata?.image || {};
+      const rawUrl =
+        showcaseImage.url ||
+        imageUrls[0] ||
+        "";
+
+      if (!rawUrl) return;
+
+      const caption = buildProductImageCaption(product);
+      const sourceUrl = extractProductSourceUrl(product);
+
+      entries.push({
+        matchedText,
+        refIndex,
+        token: buildContentReferenceImageToken(messageId, refIndex),
+        image: {
+          url: CGO.normalizeMaybeRelativeChatgptUrl(rawUrl),
+          embeddedUrl: "",
+          thumbnailUrl: CGO.normalizeMaybeRelativeChatgptUrl(imageUrls[0] || rawUrl),
+          originalUrl: "",
+          sourceUrl,
+          title: product.title || caption,
+          alt: caption || product.title || "",
+          width: Number(showcaseImage.width || 0),
+          height: Number(showcaseImage.height || 0),
+          source: "content-reference-image-products",
+        },
+      });
+    });
+
+    return entries;
+  }
+
+  /**
+   * Resolve the marker text to replace in the exported source text.
+   *
+   * ChatGPT sometimes normalizes punctuation differently between `matched_text`
+   * and the visible message text, so fall back to the recorded string range.
+   *
+   * @param {Object} ref - Content-reference descriptor.
+   * @param {string} sourceText - Raw message text.
+   * @returns {string} Marker text present in `sourceText`, or the recorded marker.
+   */
+  function getContentReferenceMatchedText(ref, sourceText) {
+    const matchedText = typeof ref?.matched_text === "string"
+      ? ref.matched_text
+      : "";
+
+    if (matchedText && sourceText.includes(matchedText)) {
+      return matchedText;
+    }
+
+    const start = Number(ref?.start_idx);
+    const end = Number(ref?.end_idx);
+    if (
+      Number.isInteger(start) &&
+      Number.isInteger(end) &&
+      start >= 0 &&
+      end > start &&
+      end <= sourceText.length
+    ) {
+      const rangedText = sourceText.slice(start, end);
+      if (rangedText) return rangedText;
+    }
+
+    if (ref?.type === "products") {
+      const productMarker = sourceText.match(/\uE200products\uE202[\s\S]*?\uE201/);
+      if (productMarker) return productMarker[0];
+    }
+
+    return matchedText;
+  }
+
+  /**
    * Extract inline image-reference entries from ChatGPT content references.
    *
    * @param {Object} rawMessage - Raw message payload.
@@ -1465,13 +1630,21 @@
     const messageId = rawMessage?.id || "";
 
     refs.forEach((ref, refIndex) => {
-      if (!ref || (ref.type !== "image_v2" && ref.type !== "image_group")) return;
-      if (!Array.isArray(ref.images) || !ref.images.length) return;
+      if (!isImageContentReference(ref)) return;
 
       const matchedText = typeof ref.matched_text === "string"
         ? ref.matched_text
         : "";
       if (!matchedText) return;
+
+      if (ref.type === "products") {
+        entries.push(
+          ...extractProductInlineImageEntries(ref, matchedText, messageId, refIndex)
+        );
+        return;
+      }
+
+      if (!Array.isArray(ref.images) || !ref.images.length) return;
 
       ref.images.forEach((item, imageIndex) => {
         const imageResult = item?.image_result || item || {};
@@ -1557,7 +1730,7 @@
       return `[${safeLabel}](${url})`;
     }
 
-    if (ref.type === "image_v2" || ref.type === "image_group") {
+    if (isImageContentReference(ref)) {
       return "";
     }
 
@@ -1589,19 +1762,23 @@
       const ref = refs[refIndex];
       if (!ref || typeof ref !== "object") continue;
 
-      const matchedText = typeof ref.matched_text === "string"
-        ? ref.matched_text
-        : "";
+      const matchedText = getContentReferenceMatchedText(ref, sourceText);
       if (!matchedText) continue;
 
       let replacement = getContentReferenceReplacement(ref);
-      if (!replacement && (ref.type === "image_v2" || ref.type === "image_group")) {
+      if (!replacement && isImageContentReference(ref)) {
         const tokens = imageEntries
-          .filter((entry) => entry.refIndex === refIndex && entry.matchedText === matchedText)
+          .filter((entry) => entry.refIndex === refIndex)
           .map((entry) => entry.token);
         const uniqueTokens = Array.from(new Set(tokens));
 
         replacement = uniqueTokens.length ? `\n\n${uniqueTokens.join("\n\n")}\n\n` : "";
+        if (!replacement && ref.type === "products") {
+          const fallback = typeof ref.alt === "string" && ref.alt.trim()
+            ? ref.alt.trim()
+            : "";
+          replacement = fallback;
+        }
       }
       if (!replacement) continue;
 

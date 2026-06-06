@@ -420,7 +420,15 @@
 
       try {
         const parsed = new URL(candidate, location.href);
-        if (parsed.hostname === "images.openai.com") continue;
+        if (
+          parsed.hostname === "images.openai.com" ||
+          (
+            (parsed.hostname === "chatgpt.com" || parsed.hostname === "chat.openai.com") &&
+            parsed.searchParams.has("hints")
+          )
+        ) {
+          continue;
+        }
 
         return `<div class="cgo-image-source">
           <a href="${escapeHtml(parsed.href)}" target="_blank" rel="noopener noreferrer">

@@ -541,8 +541,91 @@
     const results = [];
     const seen = new Set();
 
+    const normalizeProductSourceUrl = (product) => {
+      if (!product || typeof product !== "object") return "";
+
+      const normalizeUsableSourceUrl = (value) => {
+        const rawUrl = typeof value === "string" ? value.trim() : "";
+        if (!rawUrl) return "";
+
+        try {
+          const url = new URL(rawUrl, location.origin);
+          if (
+            (url.hostname === "chatgpt.com" || url.hostname === "chat.openai.com") &&
+            url.searchParams.has("hints")
+          ) {
+            return "";
+          }
+          return CGO.normalizeMaybeRelativeChatgptUrl(rawUrl);
+        } catch {
+          return "";
+        }
+      };
+
+      const directUrl = typeof product.url === "string" ? product.url.trim() : "";
+      if (directUrl) return normalizeUsableSourceUrl(directUrl);
+
+      const rawLookupData = product?.product_lookup_key?.data;
+      if (typeof rawLookupData !== "string" || !rawLookupData.trim()) return "";
+
+      try {
+        const lookupData = JSON.parse(rawLookupData);
+        const providerUrl = typeof lookupData?.provider_url === "string"
+          ? lookupData.provider_url.trim()
+          : "";
+        return normalizeUsableSourceUrl(providerUrl);
+      } catch {
+        return "";
+      }
+    };
+
+    const buildProductCaption = (product) => {
+      if (!product || typeof product !== "object") return "";
+
+      const title = typeof product.title === "string" ? product.title.trim() : "";
+      const price = typeof product.price === "string" ? product.price.trim() : "";
+      const tag = typeof product.featured_tag === "string" ? product.featured_tag.trim() : "";
+
+      return [title, price, tag].filter(Boolean).join(" · ");
+    };
+
     for (const ref of refs) {
-      if (!ref || (ref.type !== "image_group" && ref.type !== "image_v2")) continue;
+      if (!ref || (ref.type !== "image_group" && ref.type !== "image_v2" && ref.type !== "products")) continue;
+
+      if (ref.type === "products") {
+        const products = Array.isArray(ref.products) ? ref.products : [];
+
+        for (const product of products) {
+          if (!product || typeof product !== "object") continue;
+
+          const imageUrls = Array.isArray(product.image_urls) ? product.image_urls : [];
+          const showcaseImage = product?.showcase_metadata?.image || {};
+          const rawUrl =
+            showcaseImage.url ||
+            imageUrls[0] ||
+            "";
+
+          const url = CGO.normalizeMaybeRelativeChatgptUrl(rawUrl);
+          if (!url || seen.has(url)) continue;
+          seen.add(url);
+
+          const caption = buildProductCaption(product);
+
+          results.push(CGO.normalizeImageMeta({
+            url,
+            thumbnailUrl: CGO.normalizeMaybeRelativeChatgptUrl(imageUrls[0] || rawUrl),
+            sourceUrl: normalizeProductSourceUrl(product),
+            alt: caption || product.title || "",
+            title: product.title || caption,
+            width: Number(showcaseImage.width || 0),
+            height: Number(showcaseImage.height || 0),
+            source: "content-reference-image-products",
+          }));
+        }
+
+        continue;
+      }
+
       if (!Array.isArray(ref.images)) continue;
 
       for (const item of ref.images) {
@@ -652,7 +735,11 @@
         if (
           u.hostname === "chatgpt.com" ||
           u.hostname === "chat.openai.com" ||
-          u.hostname === "images.openai.com"
+          u.hostname === "images.openai.com" ||
+          (
+            (u.hostname === "chatgpt.com" || u.hostname === "chat.openai.com") &&
+            u.searchParams.has("hints")
+          )
         ) {
           continue;
         }
