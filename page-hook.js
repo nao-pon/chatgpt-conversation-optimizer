@@ -1311,6 +1311,7 @@
         merged.mapping[id] = {
           ...existing,
           ...incoming,
+          parent: existing.parent || incoming.parent || null,
           message: {
             ...(existing.message || {}),
             ...(incoming.message || {}),
