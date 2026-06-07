@@ -317,7 +317,7 @@
       row.title = title;
       list.appendChild(row);
 
-      return { section, marker, row, title, top: 0 };
+      return { section, marker, row, title, top: 0, pct: 0 };
     });
 
     let activeIndex = -1;
@@ -339,14 +339,14 @@
       }, 220);
     };
 
-    const setOpen = (nextOpen) => {
+    const setOpen = (nextOpen, options = {}) => {
       const wasOpen = isOpen;
       if (nextOpen) cancelClose();
       isOpen = !!nextOpen;
       popover.hidden = !isOpen;
       rail.setAttribute("aria-expanded", isOpen ? "true" : "false");
       root.classList.toggle("is-open", isOpen);
-      if (isOpen && !wasOpen && activeIndex >= 0) {
+      if (isOpen && !wasOpen && options.syncActive !== false && activeIndex >= 0) {
         items[activeIndex]?.row.scrollIntoView({ block: "nearest" });
       }
     };
@@ -389,6 +389,7 @@
         const rect = item.section.getBoundingClientRect();
         item.top = rect.top + scrollTop;
         const pct = Math.max(0, Math.min(100, (item.top / scrollMax) * 100));
+        item.pct = pct;
         item.marker.style.top = `${pct}%`;
         if (item.top <= probe) nextActive = index;
       });
@@ -401,6 +402,25 @@
       frame = requestAnimationFrame(refresh);
     };
 
+    const getNearestRailItem = (event) => {
+      const rect = track.getBoundingClientRect();
+      if (!rect.height) return null;
+
+      const clickPct = Math.max(0, Math.min(100, ((event.clientY - rect.top) / rect.height) * 100));
+      let nearest = null;
+      let nearestDistance = Infinity;
+
+      for (const item of items) {
+        const distance = Math.abs(item.pct - clickPct);
+        if (distance < nearestDistance) {
+          nearest = item;
+          nearestDistance = distance;
+        }
+      }
+
+      return nearest;
+    };
+
     items.forEach((item) => {
       item.marker.addEventListener("click", (event) => {
         event.stopPropagation();
@@ -411,7 +431,19 @@
 
     rail.addEventListener("click", (event) => {
       event.stopPropagation();
-      setOpen(!isOpen);
+      if (event.detail === 0) {
+        setOpen(!isOpen);
+        return;
+      }
+
+      const item = getNearestRailItem(event);
+      if (!item) {
+        setOpen(!isOpen);
+        return;
+      }
+
+      setOpen(true, { syncActive: false });
+      scrollToItem(item, { syncList: true });
     });
 
     root.addEventListener("mouseenter", () => setOpen(true));
