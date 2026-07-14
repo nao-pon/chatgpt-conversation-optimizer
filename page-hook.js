@@ -33,6 +33,7 @@
   const STREAM_CACHE = new Map(); // draft
   const STREAM_STATE = new Map();
   const FILE_DOWNLOAD_CACHE = new Map();
+  const FILE_DOWNLOAD_CACHE_BY_FILE_ID = new Map();
   const PROJECT_NAME_BY_GIZMO_ID = new Map();
   const PROJECT_NAME_BY_CONVERSATION_ID = new Map();
   const STREAM_TOPIC_TO_CONVERSATION = new Map();
@@ -669,7 +670,7 @@
   function isFileDownloadRequest(url) {
     try {
       const u = new URL(url, location.origin);
-      return /^\/backend-api\/(files\/download\/file_[A-Za-z0-9]+|conversation\/[A-Za-z0-9-]+\/interpreter\/download)$/i.test(u.pathname);
+      return /^\/backend-api\/(files\/download\/file_[A-Za-z0-9_-]+|conversation\/[A-Za-z0-9-]+\/interpreter\/download)$/i.test(u.pathname);
     } catch {
       return false;
     }
@@ -683,16 +684,21 @@
    * - Interpreter sandbox downloads (/backend-api/conversation/:conversationId/interpreter/download) — returns a sandbox-style `fileId` derived from `message_id` and `sandbox_path`, and the captured `conversationId`.
    * If parsing fails or the URL does not match expected shapes, returns empty strings for both fields.
    * @param {string} url - The download URL to inspect.
-   * @returns {{fileId: string, conversationId: string}} `fileId` is the resolved file identifier (or empty string), `conversationId` is the associated conversation id (or empty string).
+   * @returns {{fileId: string, conversationId: string, gizmoId: string}} `fileId` is the resolved file identifier (or empty string), `conversationId` is the associated conversation id (or empty string), `gizmoId` is the project/gizmo id when present.
    */
   function extractFileIdAndConversationIdFromDownloadUrl(url) {
     try {
       const u = new URL(url, location.origin);
-      const matchFiles = u.pathname.match(/\/backend-api\/files\/download\/(file_[A-Za-z0-9]+)/i);
+      const matchFiles = u.pathname.match(/\/backend-api\/files\/download\/(file_[A-Za-z0-9_-]+)/i);
       if (matchFiles) {
         return {
           fileId: matchFiles[1],
-          conversationId: u.searchParams.get("conversation_id") || "",
+          conversationId:
+            u.searchParams.get("conversation_id") ||
+            getConversationIdFromLocation() ||
+            LAST_STREAM_CONVERSATION_ID ||
+            "",
+          gizmoId: u.searchParams.get("gizmo_id") || "",
         };
       } else {
         const matchInterpreter = u.pathname.match(/\/backend-api\/conversation\/([A-Za-z0-9-]+)\/interpreter\/download/i);
@@ -705,12 +711,14 @@
         return {
           fileId: buildSandboxFileId(messageId, sandboxPath),
           conversationId: matchInterpreter ? matchInterpreter[1] : "",
+          gizmoId: "",
         };
       }
     } catch {
       return {
         fileId: "",
         conversationId: "",
+        gizmoId: "",
       };
     }
   }
@@ -3686,18 +3694,34 @@
    * @param {string} [data.file_name] - Suggested filename for the download.
    * @param {number|string} [data.file_size_bytes] - Size of the file in bytes.
    *
-   * Does nothing if a cache key cannot be constructed or `data` is falsy. Stored entry contains
-   * `downloadUrl`, `fileName`, `fileSizeBytes` (numeric, defaults to 0), and a `timestamp` (milliseconds).
+   * Does nothing if `fileId` or `data` is falsy. Stored entry contains
+   * `downloadUrl`, `fileName`, `mimeType`, `fileSizeBytes` (numeric, defaults to 0), and a `timestamp` (milliseconds).
    */
-  function saveFileDownloadResultToCache(fileId, conversationId, data) {
-    const key = getFileDownloadCacheKey(fileId, conversationId);
-    if (!key || !data) return;
+  function saveFileDownloadResultToCache(fileId, conversationId, data, gizmoId = "") {
+    if (!fileId || !data) return;
 
-    FILE_DOWNLOAD_CACHE.set(key, {
+    const entry = {
       downloadUrl: typeof data.download_url === "string" ? data.download_url : "",
       fileName: typeof data.file_name === "string" ? data.file_name : "",
+      mimeType: typeof data.mime_type === "string" ? data.mime_type : "",
       fileSizeBytes: Number(data.file_size_bytes || 0),
+      gizmoId: typeof gizmoId === "string" ? gizmoId : "",
       timestamp: Date.now(),
+    };
+
+    const key = getFileDownloadCacheKey(fileId, conversationId);
+    if (key) {
+      FILE_DOWNLOAD_CACHE.set(key, entry);
+    }
+
+    FILE_DOWNLOAD_CACHE_BY_FILE_ID.set(fileId, entry);
+
+    log.stream("cached file download url", {
+      fileId,
+      conversationId: conversationId || "",
+      hasConversationId: !!conversationId,
+      hasGizmoId: !!gizmoId,
+      hasSignature: /[?&]sig=/.test(entry.downloadUrl),
     });
   }
 
@@ -5076,12 +5100,11 @@
     // download API cache
     if (isFileDownloadRequest(url)) {
       try {
-        const { fileId, conversationId } =
+        const { fileId, conversationId, gizmoId } =
           extractFileIdAndConversationIdFromDownloadUrl(url);
 
-        if (fileId && conversationId && rawData?.download_url) {
-          saveFileDownloadResultToCache(fileId, conversationId, rawData);
-          log.stream("cached file download url", { fileId, conversationId });
+        if (fileId && rawData?.download_url) {
+          saveFileDownloadResultToCache(fileId, conversationId, rawData, gizmoId);
         }
       } catch (error) {
         log.basic("failed to cache file download response", String(error));
@@ -5421,7 +5444,9 @@
 
       const { fileId, conversationId, requestId } = data;
       const key = getFileDownloadCacheKey(fileId, conversationId);
-      const cached = key ? FILE_DOWNLOAD_CACHE.get(key) : null;
+      const cached =
+        (key ? FILE_DOWNLOAD_CACHE.get(key) : null) ||
+        (fileId ? FILE_DOWNLOAD_CACHE_BY_FILE_ID.get(fileId) : null);
 
       window.postMessage(
         {

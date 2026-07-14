@@ -92,6 +92,54 @@
   // Resolve signed image URLs and embed image data with limited concurrency.
   // Full parallelism is intentionally avoided to reduce burst traffic and
   // keep export stable on large conversations.
+
+  /**
+   * Fill empty image metadata fields from `/backend-api/files/:fileId/simple`.
+   *
+   * @param {Object} image - Image metadata to update in place.
+   * @param {string} [authorization=""] - Optional authorization header.
+   * @returns {Promise<void>}
+   */
+  async function applyFileSimpleMetadataToImage(image, authorization = "") {
+    if (!image?.fileId || !CGO.getFileSimpleMetadata) return;
+
+    try {
+      const metadata = await CGO.getFileSimpleMetadata(image.fileId, authorization);
+      image.fileName = image.fileName || metadata?.file_name || "";
+      image.mimeType = image.mimeType || metadata?.mime_type || "";
+    } catch (error) {
+      CGO.log("[warn] export image simple metadata fill failed", {
+        fileId: image.fileId,
+        code: CGO.classifyFetchError(error),
+        status: error?.status,
+      });
+    }
+  }
+
+  /**
+   * Fill empty attachment metadata fields from `/backend-api/files/:fileId/simple`.
+   *
+   * @param {Object} attachment - Attachment metadata to update in place.
+   * @param {string} [authorization=""] - Optional authorization header.
+   * @returns {Promise<void>}
+   */
+  async function applyFileSimpleMetadataToAttachment(attachment, authorization = "") {
+    if (!attachment?.fileId || attachment?.isSandboxArtifact || !CGO.getFileSimpleMetadata) return;
+
+    try {
+      const metadata = await CGO.getFileSimpleMetadata(attachment.fileId, authorization);
+      attachment.name = attachment.name || metadata?.file_name || "";
+      attachment.mimeType = attachment.mimeType || metadata?.mime_type || "";
+      attachment.kind = CGO.guessAttachmentKind(attachment.name, attachment.mimeType);
+    } catch (error) {
+      CGO.log("[warn] export attachment simple metadata fill failed", {
+        fileId: attachment.fileId,
+        code: CGO.classifyFetchError(error),
+        status: error?.status,
+      });
+    }
+  }
+
   /**
    * Resolve signed download URLs for message images using cache-first lookup and the download API.
    *
@@ -141,12 +189,15 @@
           const cached = await getFileDownloadCacheEntry(image.fileId, conversationId);
 
           if (cached?.downloadUrl) {
-            image.url = cached.downloadUrl;
+            image.url = CGO.choosePreferredImageUrl
+              ? CGO.choosePreferredImageUrl(image.url, cached.downloadUrl)
+              : (image.url || cached.downloadUrl);
             image.unresolved = false;
             image.source = `${image.source || "file-id"}+download-cache`;
             image.fileName = image.fileName || cached.fileName || "";
             image.fileSizeBytes = Number(cached.fileSizeBytes || 0) || image.fileSizeBytes || 0;
             image.mimeType = image.mimeType || cached.mimeType || "";
+            await applyFileSimpleMetadataToImage(image, authorization);
           } else {
             // 2) 無ければ API
             const downloadUrl = includeImages ? await CGO.resolveDownloadUrlFromFileId(
@@ -156,9 +207,12 @@
             ) : "";
 
             if (downloadUrl) {
-              image.url = downloadUrl;
+              image.url = CGO.choosePreferredImageUrl
+                ? CGO.choosePreferredImageUrl(image.url, downloadUrl)
+                : (image.url || downloadUrl);
               image.unresolved = false;
               image.source = `${image.source || "file-id"}+download-api`;
+              await applyFileSimpleMetadataToImage(image, authorization);
             } else {
               image.unresolved = true;
             }
@@ -223,12 +277,16 @@
           const cached = await getFileDownloadCacheEntry(attachment.fileId, conversationId);
 
           if (cached?.downloadUrl) {
-            attachment.url = cached.downloadUrl;
+            attachment.url = CGO.choosePreferredImageUrl
+              ? CGO.choosePreferredImageUrl(attachment.url, cached.downloadUrl)
+              : (attachment.url || cached.downloadUrl);
             attachment.unresolved = false;
             attachment.name = attachment.name || cached.fileName || "";
+            attachment.mimeType = attachment.mimeType || cached.mimeType || "";
             attachment.fileSizeBytes = Number(cached.fileSizeBytes || 0) || attachment.fileSizeBytes || 0;
             attachment.kind = CGO.guessAttachmentKind(attachment.name, attachment.mimeType);
             attachment.source = `${attachment.source || "file-id"}+download-cache`;
+            await applyFileSimpleMetadataToAttachment(attachment, authorization);
           } else {
             let downloadUrl = "";
             if (attachment.isSandboxArtifact && attachment.sandboxPath) {
@@ -247,9 +305,12 @@
             }
 
             if (downloadUrl) {
-              attachment.url = downloadUrl;
+              attachment.url = CGO.choosePreferredImageUrl
+                ? CGO.choosePreferredImageUrl(attachment.url, downloadUrl)
+                : (attachment.url || downloadUrl);
               attachment.unresolved = false;
               attachment.source = `${attachment.source || "file-id"}+download-api`;
+              await applyFileSimpleMetadataToAttachment(attachment, authorization);
             } else {
               attachment.unresolved = true;
             }
@@ -339,7 +400,12 @@
       for (const image of asset.images || []) {
         if (!image?.fileId || !image?.url) continue;
 
-        if (!map.has(image.fileId)) {
+        if (map.has(image.fileId) && CGO.choosePreferredImageUrl) {
+          map.set(
+            image.fileId,
+            CGO.choosePreferredImageUrl(map.get(image.fileId), image.url)
+          );
+        } else if (!map.has(image.fileId)) {
           map.set(image.fileId, image.url);
         }
       }

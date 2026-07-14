@@ -1,6 +1,33 @@
 (() => {
   if (globalThis.__CGO_SKIP__) return;
   const CGO = (globalThis.__CGO ||= {});
+  const FILE_SIMPLE_METADATA_CACHE = new Map();
+
+  /**
+   * Determine whether a URL carries a signed ChatGPT download token.
+   *
+   * @param {string} url - Candidate URL.
+   * @returns {boolean} `true` when the URL contains a signature query parameter.
+   */
+  function hasUrlSignature(url) {
+    return /[?&]sig=/.test(String(url || ""));
+  }
+
+  /**
+   * Choose between two image URLs, preserving signed Estuary URLs when present.
+   *
+   * @param {string} a - Preferred URL candidate.
+   * @param {string} b - Fallback URL candidate.
+   * @returns {string} Best URL candidate.
+   */
+  function choosePreferredImageUrl(a, b) {
+    const first = String(a || "");
+    const second = String(b || "");
+
+    if (hasUrlSignature(first)) return first;
+    if (hasUrlSignature(second)) return second;
+    return first || second;
+  }
   /**
    * Request the current conversation payload from the page hook's in-memory cache.
    *
@@ -1949,7 +1976,7 @@
         image: CGO.normalizeImageMeta({
           ...baseImage,
           fileId: baseImage.fileId || attachment.fileId || "",
-          url: baseImage.url || attachment.url || "",
+          url: choosePreferredImageUrl(baseImage.url, attachment.url),
           fileName: baseImage.fileName || attachment.name || "",
           mimeType: baseImage.mimeType || attachment.mimeType || "",
           fileSizeBytes: Number(baseImage.fileSizeBytes || attachment.fileSizeBytes || 0),
@@ -3026,7 +3053,7 @@
 
     return {
       ...a,
-      url: a.url || b.url,
+      url: choosePreferredImageUrl(a.url, b.url),
       fileId: a.fileId || b.fileId,
       alt: a.alt || b.alt,
       title: a.title || b.title,
@@ -3347,6 +3374,89 @@
   }
 
   /**
+   * Read ChatGPT file metadata from the lightweight `/simple` endpoint.
+   *
+   * @param {string} fileId - File id.
+   * @param {string} [authorization=""] - Optional authorization header.
+   * @returns {Promise<Object>} Metadata JSON object.
+   */
+  async function getFileSimpleMetadata(fileId, authorization = "") {
+    if (!fileId) return {};
+
+    if (FILE_SIMPLE_METADATA_CACHE.has(fileId)) {
+      const cached = FILE_SIMPLE_METADATA_CACHE.get(fileId);
+      CGO.log("[export] files/simple cache hit", { fileId });
+      return cached instanceof Promise ? await cached : cached;
+    }
+
+    const request = (async () => {
+      const headers = new Headers();
+      if (authorization) {
+        headers.set("authorization", authorization);
+      }
+
+      const response = await fetch(
+        `/backend-api/files/${encodeURIComponent(fileId)}/simple`,
+        {
+          method: "GET",
+          credentials: "include",
+          headers,
+        }
+      );
+
+      const contentType = response.headers.get("content-type") || "";
+      let data = null;
+
+      if (/application\/json/i.test(contentType)) {
+        try {
+          data = await response.json();
+        } catch (_) {
+          data = null;
+        }
+      }
+
+      if (!response.ok) {
+        const error = CGO.createHttpError(response, "files/simple metadata");
+        if (data?.detail) {
+          error.detail = data.detail;
+        }
+
+        CGO.log("[warn] files/simple metadata failed", {
+          fileId,
+          status: response.status,
+          code: CGO.classifyFetchError(error),
+          detail: error.detail,
+        });
+
+        throw error;
+      }
+
+      if (!data) {
+        data = await response.json();
+      }
+
+      CGO.log("[export] files/simple metadata resolved", {
+        fileId,
+        isProject: !!data?.is_project,
+        isLibraryFile: !!data?.is_library_file,
+        hasGizmoId: !!data?.gizmo_id,
+      });
+
+      FILE_SIMPLE_METADATA_CACHE.set(fileId, data || {});
+      return data || {};
+    })();
+
+    FILE_SIMPLE_METADATA_CACHE.set(fileId, request);
+
+    try {
+      return await request;
+    } catch (error) {
+      FILE_SIMPLE_METADATA_CACHE.delete(fileId);
+      throw error;
+    }
+  }
+
+  /**
    * Resolve a signed download URL for an interpreter sandbox file.
    *
    * @param {string} conversationId - Conversation id.
@@ -3397,17 +3507,62 @@
    * @returns {Promise<string>} Signed download URL or an empty string.
    */
   async function resolveDownloadUrlFromFileId(fileId, conversationId, authorization = "") {
-    if (!fileId || !conversationId) return "";
+    if (!fileId) return "";
 
-    const url =
-      `https://chatgpt.com/backend-api/files/download/${encodeURIComponent(fileId)}` +
-      `?conversation_id=${encodeURIComponent(conversationId)}` +
-      `&inline=false`;
+    let metadata = null;
+    let useLegacyDownload = false;
+
+    try {
+      metadata = await getFileSimpleMetadata(fileId, authorization);
+      useLegacyDownload = !metadata?.gizmo_id;
+    } catch (error) {
+      if (error?.status === 404 || error?.code === "not_found") {
+        useLegacyDownload = true;
+        CGO.log("[export] files/simple unavailable; using legacy download", {
+          fileId,
+          status: error.status,
+          code: CGO.classifyFetchError(error),
+        });
+      } else {
+        CGO.log("[warn] files/simple metadata blocking download resolve", {
+          fileId,
+          status: error?.status,
+          code: CGO.classifyFetchError(error),
+          detail: error?.detail,
+        });
+        throw error;
+      }
+    }
+
+    if (useLegacyDownload && !conversationId) return "";
+
+    const params = new URLSearchParams();
+    const gizmoId = String(metadata?.gizmo_id || "");
+
+    if (gizmoId) {
+      params.set("gizmo_id", gizmoId);
+      params.set("post_id", "");
+      params.set("inline", "false");
+      params.set("download_intent", "false");
+    } else {
+      params.set("conversation_id", conversationId);
+      params.set("inline", "false");
+    }
+
+    const url = `/backend-api/files/download/${encodeURIComponent(fileId)}?${params}`;
 
     const headers = new Headers();
     if (authorization) {
       headers.set("authorization", authorization);
     }
+
+    CGO.log("[export] files/download resolve start", {
+      fileId,
+      mode: gizmoId ? "gizmo" : "conversation",
+      hasGizmoId: !!gizmoId,
+      isProject: !!metadata?.is_project,
+      isLibraryFile: !!metadata?.is_library_file,
+    });
 
     const response = await fetch(url, {
       method: "GET",
@@ -3431,9 +3586,27 @@
         const error = createDetailError("expired", data.detail, "files/download resolve");
         error.status = response.status;
         error.contentType = contentType;
+        CGO.log("[warn] files/download resolve failed", {
+          fileId,
+          mode: gizmoId ? "gizmo" : "conversation",
+          status: response.status,
+          code: CGO.classifyFetchError(error),
+          detail: error.detail,
+        });
         throw error;
       }
-      throw CGO.createHttpError(response, "files/download resolve");
+      const error = CGO.createHttpError(response, "files/download resolve");
+      if (data?.detail) {
+        error.detail = data.detail;
+      }
+      CGO.log("[warn] files/download resolve failed", {
+        fileId,
+        mode: gizmoId ? "gizmo" : "conversation",
+        status: response.status,
+        code: CGO.classifyFetchError(error),
+        detail: error.detail,
+      });
+      throw error;
     }
 
     if (!data) {
@@ -3444,10 +3617,48 @@
       const error = createDetailError("expired", data.detail, "files/download resolve");
       error.status = response.status;
       error.contentType = contentType;
+      CGO.log("[warn] files/download resolve failed", {
+        fileId,
+        mode: gizmoId ? "gizmo" : "conversation",
+        status: response.status,
+        code: CGO.classifyFetchError(error),
+        detail: error.detail,
+      });
       throw error;
     }
 
-    return typeof data?.download_url === "string" ? data.download_url : "";
+    if (data?.status && data.status !== "success") {
+      const error = createDetailError("http", data.detail || data.status, "files/download resolve");
+      error.status = response.status;
+      error.contentType = contentType;
+      CGO.log("[warn] files/download resolve failed", {
+        fileId,
+        mode: gizmoId ? "gizmo" : "conversation",
+        status: response.status,
+        apiStatus: data.status,
+        code: CGO.classifyFetchError(error),
+        detail: error.detail,
+      });
+      throw error;
+    }
+
+    const downloadUrl = typeof data?.download_url === "string" ? data.download_url : "";
+
+    CGO.log("[export] files/download resolve succeeded", {
+      fileId,
+      mode: gizmoId ? "gizmo" : "conversation",
+      hasDownloadUrl: !!downloadUrl,
+      hasSignature: hasUrlSignature(downloadUrl),
+    });
+
+    if (!downloadUrl) {
+      const error = createDetailError("http", "download_url missing", "files/download resolve");
+      error.status = response.status;
+      error.contentType = contentType;
+      throw error;
+    }
+
+    return downloadUrl;
   }
 
   CGO.buildExportChain = buildExportChain;
@@ -3466,18 +3677,21 @@
   CGO.extractSandboxArtifacts = extractSandboxArtifacts;
   CGO.extractUserImagesFromMessage = extractUserImagesFromMessage;
   CGO.formatBytes = formatBytes;
+  CGO.getFileSimpleMetadata = getFileSimpleMetadata;
   CGO.getAttachmentIcon = getAttachmentIcon;
   CGO.getConversationFromCache = getConversationFromCache;
   CGO.getConversationIdFromLocation = getConversationIdFromLocation;
   CGO.getTurnArticlesForExport = getTurnArticlesForExport;
   CGO.getTurnRoleFromDom = getTurnRoleFromDom;
   CGO.guessAttachmentKind = guessAttachmentKind;
+  CGO.hasUrlSignature = hasUrlSignature;
   CGO.isNonEmptyArray = isNonEmptyArray;
   CGO.mergeImageListsPreferData = mergeImageListsPreferData;
   CGO.normalizeImageMeta = normalizeImageMeta;
   CGO.normalizeMaybeRelativeChatgptUrl = normalizeMaybeRelativeChatgptUrl;
   CGO.normalizeMessagesForExport = normalizeMessagesForExport;
   CGO.prepareInlineImageData = prepareInlineImageData;
+  CGO.choosePreferredImageUrl = choosePreferredImageUrl;
   CGO.resolveDownloadUrlFromFileId = resolveDownloadUrlFromFileId;
   CGO.resolveSandboxDownloadUrl = resolveSandboxDownloadUrl;
   CGO.runWithConcurrency = runWithConcurrency;

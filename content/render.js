@@ -353,7 +353,9 @@
     return CGO.normalizeImageMeta({
       ...primary,
       fileId: primary.fileId || donor.fileId || "",
-      url: primary.url || donor.url || "",
+      url: CGO.choosePreferredImageUrl
+        ? CGO.choosePreferredImageUrl(primary.url, donor.url)
+        : (primary.url || donor.url || ""),
       embeddedUrl: primary.embeddedUrl || donor.embeddedUrl || null,
       localPath: primary.localPath || donor.localPath || "",
       thumbnailUrl: primary.thumbnailUrl || donor.thumbnailUrl || "",
