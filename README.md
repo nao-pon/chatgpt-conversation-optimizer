@@ -87,6 +87,7 @@ It may also work on other Chromium-based browsers, but compatibility can vary de
 
 > The `main` branch contains the latest development version.
 > Stable versions are available from GitHub Releases and the Chrome Web Store.
+> Release preparation notes are maintained in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### After installation
 1. Open ChatGPT in Chrome.
