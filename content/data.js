@@ -585,7 +585,7 @@
   function extractSandboxArtifacts(message) {
     const text = message.text
     const source = typeof text === "string" ? text : "";
-    const matches = source.match(/sandbox:\/mnt\/data\/[^\s)\]]+/g);
+    const matches = source.match(/sandbox:\/[^\s)\]]+/g);
     if (!matches) return [];
 
     return matches.map((url) => {
@@ -639,6 +639,8 @@
         return "📄";
       case "image":
         return "🖼️";
+      case "spreadsheet":
+        return "📊";
       case "text":
         return "📝";
       case "code":
@@ -653,7 +655,7 @@
    *
    * @param {string} name - Attachment filename.
    * @param {string} mimeType - Attachment MIME type.
-   * @returns {"archive"|"pdf"|"image"|"text"|"code"|"attachment"} Attachment kind.
+   * @returns {"archive"|"pdf"|"image"|"spreadsheet"|"text"|"code"|"attachment"} Attachment kind.
    */
   function guessAttachmentKind(name, mimeType) {
     const fileName = String(name || "").toLowerCase();
@@ -685,7 +687,19 @@
     }
 
     if (
-      /\.(txt|md|json|csv|log|yaml|yml|xml)$/i.test(fileName) ||
+      /\.(csv|tsv|xlsx|xls|xlsm|ods)$/i.test(fileName) ||
+      [
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel",
+        "application/vnd.ms-excel.sheet.macroenabled.12",
+        "application/vnd.oasis.opendocument.spreadsheet",
+      ].includes(mime)
+    ) {
+      return "spreadsheet";
+    }
+
+    if (
+      /\.(txt|md|json|log|yaml|yml|xml)$/i.test(fileName) ||
       mime.startsWith("text/") ||
       mime === "application/json"
     ) {

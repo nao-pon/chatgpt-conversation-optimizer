@@ -274,7 +274,11 @@
       attachmentsNeedingResolution,
       async (attachment) => {
         try {
-          const cached = await getFileDownloadCacheEntry(attachment.fileId, conversationId);
+          const cached = await getFileDownloadCacheEntry(
+            attachment.fileId,
+            conversationId,
+            attachment.sandboxPath || ""
+          );
 
           if (cached?.downloadUrl) {
             attachment.url = CGO.choosePreferredImageUrl
@@ -341,10 +345,11 @@
    *
    * @param {string} fileId - ChatGPT file id.
    * @param {string} conversationId - Conversation id used by the cache lookup.
+   * @param {string} [sandboxPath=""] - Optional sandbox artifact path used as a fallback cache key.
    * @param {number} [timeoutMs=800] - Time to wait for a cache response.
    * @returns {Promise<?Object>} Cached download metadata or `null`.
    */
-  function getFileDownloadCacheEntry(fileId, conversationId, timeoutMs = 800) {
+  function getFileDownloadCacheEntry(fileId, conversationId, sandboxPath = "", timeoutMs = 800) {
     return new Promise((resolve) => {
       const requestId =
         `cgo_file_cache_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -378,6 +383,7 @@
           requestId,
           fileId,
           conversationId,
+          sandboxPath,
           secret: window.__CGO_BRIDGE_SECRET__ || "",
         },
         "*"
@@ -1253,6 +1259,8 @@
         return "files/archives";
       case "pdf":
         return "files/documents";
+      case "spreadsheet":
+        return "files/spreadsheets";
       case "text":
         return "files/text";
       case "code":
