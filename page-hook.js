@@ -1301,6 +1301,11 @@
    */
   function mergeCaches(full, stream) {
     const merged = structuredClone(full);
+    if (stream?.__cgo_stream_incomplete === true || full?.__cgo_stream_incomplete === true) {
+      merged.__cgo_stream_incomplete = true;
+    } else {
+      delete merged.__cgo_stream_incomplete;
+    }
 
     for (const [id, node] of Object.entries(stream.mapping || {})) {
       if (!merged.mapping[id]) {
@@ -1337,7 +1342,12 @@
     const streamCurrent = stream.current_node || null;
     const fullCurrent = full.current_node || null;
 
+    const streamIncomplete =
+      stream?.__cgo_stream_incomplete === true ||
+      full?.__cgo_stream_incomplete === true;
+
     if (
+      !streamIncomplete &&
       streamCurrent &&
       merged.mapping[streamCurrent] &&
       isNodeConnectedToTarget(merged.mapping, streamCurrent, fullCurrent)
@@ -1355,6 +1365,7 @@
         !!streamCurrent &&
         !!fullCurrent &&
         isNodeConnectedToTarget(merged.mapping, streamCurrent, fullCurrent),
+      streamIncomplete,
       fullChainLength: buildChainDiagnostics(full.mapping || {}, full.current_node).chainLength,
       streamChainLength: buildChainDiagnostics(stream.mapping || {}, stream.current_node).chainLength,
       mergedChainLength: buildChainDiagnostics(merged.mapping || {}, merged.current_node).chainLength,
@@ -2326,25 +2337,34 @@
   function getMessagesFromPayload(payload) {
     const out = [];
     const seen = new Set();
-    const candidates = [
-      payload?.messages,
-      payload?.update_content?.messages,
-      payload?.payload?.messages,
-      payload?.payload?.update_content?.messages,
-      payload?.data?.messages,
-      payload?.data?.update_content?.messages,
-      payload?.body?.messages,
-      payload?.body?.update_content?.messages,
-      payload?.item?.messages,
-      payload?.item?.update_content?.messages,
-    ];
+    const visited = new Set();
+    const queue = [{ value: payload, depth: 0 }];
 
-    for (const candidate of candidates) {
-      if (!Array.isArray(candidate)) continue;
-      for (const msg of candidate) {
-        if (!msg?.id || seen.has(msg.id)) continue;
-        seen.add(msg.id);
-        out.push(msg);
+    while (queue.length) {
+      const { value, depth } = queue.shift();
+      if (!value || typeof value !== "object" || visited.has(value)) continue;
+      visited.add(value);
+
+      if (
+        typeof value.id === "string" &&
+        value.id &&
+        value.author &&
+        typeof value.author.role === "string" &&
+        (value.content || value.metadata || value.status || value.recipient || value.channel)
+      ) {
+        if (!seen.has(value.id)) {
+          seen.add(value.id);
+          out.push(value);
+        }
+      }
+
+      if (depth >= 6) continue;
+
+      const values = Array.isArray(value) ? value : Object.values(value);
+      for (const child of values) {
+        if (child && typeof child === "object") {
+          queue.push({ value: child, depth: depth + 1 });
+        }
       }
     }
 
@@ -2603,16 +2623,15 @@
   }
 
   /**
-   * Detect messages that should be kept in the mapping but not treated as visible conversation turns.
+   * Detect messages that must not receive stream patches or become visible conversation turns.
    *
-   * Internal/hidden/thought/context messages may be useful as structural or export metadata,
+   * Hidden/thought/context messages may be useful as structural or export metadata,
    * but must not become the stream patch target or export chain tail.
    *
    * @param {Object} message - Conversation message payload.
-   * @returns {boolean} `true` for hidden/internal messages.
+   * @returns {boolean} `true` for hard-hidden/internal messages.
    */
-  function isInternalConversationMessage(message) {
-    const role = message?.author?.role || "";
+  function isHardInternalConversationMessage(message) {
     const metadata = message?.metadata || {};
     const contentType = message?.content?.content_type || "";
 
@@ -2632,11 +2651,53 @@
       return true;
     }
 
+    return false;
+  }
+
+  /**
+   * Detect messages that should be kept in the mapping but not treated as visible conversation turns.
+   *
+   * Work streams can create `can_save:false` assistant shells that receive their text via later
+   * deltas, so this is intentionally stricter than the stream patch-target check.
+   *
+   * @param {Object} message - Conversation message payload.
+   * @returns {boolean} `true` for messages that should not become the export chain tail.
+   */
+  function isInternalConversationMessage(message) {
+    const role = message?.author?.role || "";
+    const metadata = message?.metadata || {};
+
+    if (isHardInternalConversationMessage(message)) {
+      return true;
+    }
+
     if (role === "assistant" && metadata.can_save === false) {
       return true;
     }
 
     return false;
+  }
+
+  /**
+   * Decide whether an assistant message is ready to become the stream/current tail.
+   *
+   * Work can first create `can_save:false` assistant shells and later send text or metadata deltas
+   * that make the same message renderable. Empty shells should wait; renderable assistant text
+   * should be allowed to advance the current node.
+   *
+   * @param {Object} message - Conversation message payload.
+   * @returns {boolean} `true` when the assistant message should become current.
+   */
+  function shouldPromoteAssistantMessageToCurrent(message) {
+    if (message?.author?.role !== "assistant") return false;
+    if (isHardInternalConversationMessage(message)) return false;
+
+    const metadata = message?.metadata || {};
+    if (metadata.can_save === false) {
+      return !!getMessageTextFallback(message).trim();
+    }
+
+    return true;
   }
 
   /**
@@ -2650,15 +2711,11 @@
   function shouldAdvanceConversationCurrent(message) {
     const role = message?.author?.role || "";
 
-    if (role !== "user" && role !== "assistant") {
-      return false;
-    }
+    if (role === "user") return !isHardInternalConversationMessage(message);
 
-    if (isInternalConversationMessage(message)) {
-      return false;
-    }
+    if (role === "assistant") return shouldPromoteAssistantMessageToCurrent(message);
 
-    return true;
+    return false;
   }
 
   /**
@@ -2672,7 +2729,7 @@
       return false;
     }
 
-    if (isInternalConversationMessage(message)) {
+    if (isHardInternalConversationMessage(message)) {
       return false;
     }
 
@@ -2702,6 +2759,9 @@
       pendingOpsCount: streamState.pendingOps.length,
     });
     applyDeltaOpsToMessage(cache, streamState.currentPatchedMessageId, ops);
+    if (!streamState.pendingOps.length) {
+      delete cache.__cgo_stream_incomplete;
+    }
   }
 
   /**
@@ -3410,6 +3470,130 @@
   }
 
   /**
+   * Check whether a delta batch carries visible assistant text.
+   *
+   * @param {Object[]} ops - Normalized delta operations.
+   * @returns {boolean} `true` when the batch can initialize an assistant text target.
+   */
+  function hasAssistantTextDeltaOp(ops) {
+    return (ops || []).some((op) =>
+      op?.p === "/message/content/parts/0" &&
+      (op.o === "append" || op.o === "replace" || op.o === "add") &&
+      typeof op.v === "string"
+    );
+  }
+
+  /**
+   * Build a stable synthetic assistant id for a Work conversation-turn stream.
+   *
+   * @param {string} conversationId - Conversation id.
+   * @param {string} topicId - Normalized topic/turn id.
+   * @param {string} parentId - Parent user message id.
+   * @returns {string} Synthetic message id.
+   */
+  function buildSyntheticStreamAssistantId(conversationId, topicId, parentId) {
+    const scope = topicId || parentId || "unknown";
+    return `cgo-stream-assistant-${conversationId}-${scope}`;
+  }
+
+  /**
+   * Create a minimal assistant shell for Work topic streams that deliver text deltas before
+   * exposing a patchable assistant message node.
+   *
+   * @param {Object} cache - Conversation cache.
+   * @param {string} conversationId - Conversation id.
+   * @param {string} topicId - Normalized topic id.
+   * @param {Object} streamState - Per-topic stream state.
+   * @param {Object[]} ops - Normalized delta operations.
+   * @param {string} route - Delta route name for diagnostics.
+   * @returns {string} Synthetic message id, or an empty string when no target was created.
+   */
+  function ensureSyntheticAssistantPatchTarget(
+    cache,
+    conversationId,
+    topicId,
+    streamState,
+    ops,
+    route = ""
+  ) {
+    if (streamState?.currentPatchedMessageId) return "";
+    if (!topicId) return "";
+    if (!hasAssistantTextDeltaOp(ops)) return "";
+
+    const parentId = getLatestInputMessageId(conversationId, topicId);
+    if (!parentId || !cache?.mapping?.[parentId]) return "";
+
+    const messageId = buildSyntheticStreamAssistantId(conversationId, topicId, parentId);
+    if (!cache.mapping[messageId]) {
+      const nowSeconds = Date.now() / 1000;
+      const message = {
+        id: messageId,
+        author: {
+          role: "assistant",
+          metadata: {},
+        },
+        create_time: nowSeconds,
+        update_time: null,
+        content: {
+          content_type: "text",
+          parts: [""],
+        },
+        status: "in_progress",
+        end_turn: false,
+        weight: 1,
+        metadata: {
+          can_save: false,
+          cgo: {
+            synthetic_stream_target: true,
+            synthetic_reason: "missing-work-message-shell",
+            topic_id: topicId,
+          },
+        },
+        recipient: "all",
+        channel: null,
+      };
+
+      annotateMessageForCgo(message);
+      cache.mapping[messageId] = {
+        id: messageId,
+        parent: parentId,
+        children: [],
+        message,
+      };
+
+      const parentChildren = Array.isArray(cache.mapping[parentId].children)
+        ? cache.mapping[parentId].children
+        : [];
+      if (!parentChildren.includes(messageId)) {
+        parentChildren.push(messageId);
+      }
+      cache.mapping[parentId].children = parentChildren;
+    }
+
+    streamState.currentPatchedMessageId = messageId;
+
+    const conversationState = STREAM_STATE.get(getStreamStateKey(conversationId, ""));
+    if (conversationState && !conversationState.currentPatchedMessageId) {
+      conversationState.currentPatchedMessageId = messageId;
+    }
+
+    log.stream("[stream:synthetic-patch-target]", {
+      conversationId,
+      topicId,
+      route,
+      messageId,
+      parentId,
+      pendingOpsCount: streamState.pendingOps.length,
+      opCount: ops.length,
+      firstPath: ops[0]?.p || "",
+      firstOperation: ops[0]?.o || "",
+    });
+
+    flushPendingOps(cache, streamState);
+    return messageId;
+  }
+
+  /**
    * Walk a message's parent chain to find the oldest reachable node in its branch.
    *
    * @param {Object} mapping - Conversation node map.
@@ -3634,6 +3818,12 @@
       ) {
         msg.content.parts[0] = String(op.v || "");
         applied = true;
+      } else if (op.p === "/message/create_time" && op.o === "replace") {
+        msg.create_time = op.v;
+        applied = true;
+      } else if (op.p === "/message/update_time" && op.o === "replace") {
+        msg.update_time = op.v;
+        applied = true;
       } else if (op.p === "/message/status" && op.o === "replace") {
         msg.status = op.v;
         applied = true;
@@ -3679,6 +3869,10 @@
     }
 
     annotateMessageForCgo(msg);
+
+    if (shouldPromoteAssistantMessageToCurrent(msg)) {
+      cache.current_node = messageId;
+    }
 
     if (msg.end_turn) {
       postStreamNotify(msg);
@@ -4329,6 +4523,14 @@
       if (!normalized.length) return;
 
       rememberLastTextAppendOp(streamState, normalized, route);
+      ensureSyntheticAssistantPatchTarget(
+        cache,
+        conversationId,
+        topicId,
+        streamState,
+        normalized,
+        route
+      );
 
       if (streamState.currentPatchedMessageId) {
         const shouldDedupe = shouldDedupeDeltaBatch(normalized);
@@ -4373,6 +4575,9 @@
         applyDeltaOpsToMessage(cache, streamState.currentPatchedMessageId, normalized);
       } else {
         streamState.pendingOps.push(...normalized);
+        // An export made before the missing message shell is received cannot
+        // reconstruct these deltas reliably; let export use the backend copy.
+        cache.__cgo_stream_incomplete = true;
         log.stream("[stream:delta-queue]", {
           action: "queue",
           currentPatchedMessageId: streamState.currentPatchedMessageId,
@@ -4525,11 +4730,37 @@
         }
       }
 
+      // Keep a bounded shape snapshot at stream log level as well as trace level.
+      // Work can lose the useful message wrapper before a trace session is enabled.
+      if (!nestedShapeDiagnostics.length) {
+        for (let nestedIndex = 0; nestedIndex < nestedPayloads.length; nestedIndex += 1) {
+          const nested = nestedPayloads[nestedIndex];
+          nestedShapeDiagnostics.push({
+            nestedIndex,
+            keys: nested && typeof nested === "object"
+              ? Object.keys(nested).slice(0, 30)
+              : [],
+            type: nested?.type || "",
+            kind: nested?.kind || "",
+            event: nested?.event || "",
+            id: nested?.id || "",
+            messageId: nested?.message?.id || "",
+            vMessageId: nested?.v?.message?.id || "",
+            payloadIdFields: summarizePayloadIdFields(nested),
+            p: nested?.p || "",
+            o: nested?.o || "",
+            v: summarizePayloadValueField(nested?.v),
+          });
+        }
+      }
+
       log.stream("[sse:conversation-turn-stream]", {
         eventName,
         conversationId,
         topicId,
         nestedCount: nestedPayloads.length,
+        wrapperKeys: Object.keys(payload).slice(0, 30),
+        nestedSummaries: nestedShapeDiagnostics.slice(0, 30),
       });
 
       if (shouldLogRawShape(streamState)) {
@@ -4916,16 +5147,46 @@
       return;
     }
 
-    if (payload?.type === "done" && getActiveLogLevel() >= LOG_LEVELS.STREAM) {
-      log.stream("[sse:done]", {
+    if (payload?.type === "done") {
+      if (getActiveLogLevel() >= LOG_LEVELS.STREAM) {
+        const currentMessage = cache.mapping[cache.current_node]?.message || null;
+        const currentChain = cache.current_node
+          ? buildLinearChain(cache.mapping, cache.current_node)
+          : [];
+        log.stream("[sse:done]", {
+          conversationId,
+          topicId,
+          mappingCount: Object.keys(cache.mapping || {}).length,
+          currentNodeRole: currentMessage?.author?.role || "",
+          currentNodeTextLength: getMessageTextLength(currentMessage),
+          currentChainTail: currentChain.slice(-8),
+          currentPatchedMessageId: streamState.currentPatchedMessageId,
+          pendingOpsCount: streamState.pendingOps.length,
+          hasPendingGeneratedImageContent: !!streamState.pendingGeneratedImageContent,
+          pendingImageCount: streamState.pendingGeneratedImageContent
+            ? streamState.pendingGeneratedImageContent.parts.filter(
+              (part) => part?.content_type === "image_asset_pointer"
+            ).length
+            : 0,
+        });
+      }
+
+      if (streamState.pendingOps.length) {
+        log.stream("[stream:pending-delta-at-done]", {
+          conversationId,
+          topicId,
+          currentPatchedMessageId: streamState.currentPatchedMessageId,
+          pendingOpsCount: streamState.pendingOps.length,
+          paths: streamState.pendingOps.slice(0, 20).map((op) => op?.p || ""),
+          operations: streamState.pendingOps.slice(0, 20).map((op) => op?.o || ""),
+        });
+      }
+
+      postStreamNotify({
+        type: "done",
         conversationId,
         topicId,
-        hasPendingGeneratedImageContent: !!streamState.pendingGeneratedImageContent,
-        pendingImageCount: streamState.pendingGeneratedImageContent
-          ? streamState.pendingGeneratedImageContent.parts.filter(
-            (part) => part?.content_type === "image_asset_pointer"
-          ).length
-          : 0,
+        currentNode: cache.current_node || "",
       });
 
       return;
@@ -4957,6 +5218,11 @@
         eventName,
         conversationId,
         topicId,
+        currentPatchedMessageId: streamState.currentPatchedMessageId,
+        pendingOpsCount: streamState.pendingOps.length,
+        payloadIdFields: summarizePayloadIdFields(payload),
+        payloadPathFields: summarizePayloadPathFields(payload),
+        payloadKeys: Object.keys(payload || {}).slice(0, 30),
         summary: payloadSummary,
       });
     }
