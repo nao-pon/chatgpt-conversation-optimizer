@@ -5315,6 +5315,12 @@
       isStreamingConversationRequest(url) || isEventStreamResponse(orgResponse);
     const isVoiceBootstrapRequest = isRealtimeVoiceBootstrapRequest(url);
 
+    // Capture bearer credentials before consuming or returning the stream response.
+    const auth = getAuthorizationFromFetchArgs(args);
+    if (auth) {
+      window.__CGO_LAST_AUTHORIZATION__ = auth;
+    }
+
     if (isVoiceBootstrapRequest && orgResponse.ok) {
       updateVoiceSessionState("active", resolveVoiceSessionConversationId(url), {
         source: "fetch",
@@ -5352,11 +5358,6 @@
       });
 
       return orgResponse;
-    }
-
-    const auth = getAuthorizationFromFetchArgs(args);
-    if (auth) {
-      window.__CGO_LAST_AUTHORIZATION__ = auth;
     }
 
     let rawData;

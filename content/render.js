@@ -1766,7 +1766,8 @@
       if (!conversationId) {
         throw new Error("conversationId not found");
       }
-      const conversationData = await CGO.getConversationFromCache();
+      const conversationData = await CGO.getConversationForExport?.(conversationId) ||
+        await CGO.getConversationFromCache(conversationId);
       if (!conversationData) {
         throw new Error("conversation cache not found");
       }

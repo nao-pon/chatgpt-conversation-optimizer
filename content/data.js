@@ -2,6 +2,7 @@
   if (globalThis.__CGO_SKIP__) return;
   const CGO = (globalThis.__CGO ||= {});
   const FILE_SIMPLE_METADATA_CACHE = new Map();
+  const ENABLE_CONVERSATION_API_FALLBACK = true;
 
   /**
    * Determine whether a URL carries a signed ChatGPT download token.
@@ -79,6 +80,214 @@
         "*"
       );
     });
+  }
+
+  /**
+   * Fetch the latest full conversation payload from ChatGPT before export.
+   *
+   * The in-page stream cache can contain partial Work-mode progress text until the page reloads.
+   * A direct backend read gives the same complete payload that reload later exposes.
+   *
+   * @param {string} [conversationId=CGO.getConversationIdFromLocation()] - Conversation id to fetch.
+   * @returns {Promise<Object|null>} Fresh conversation payload or `null` when unavailable.
+   */
+  async function fetchConversationFromApi(conversationId = CGO.getConversationIdFromLocation()) {
+    if (!conversationId) return null;
+
+    const authorization = await CGO.getLastAuthorizationFromPage?.() || "";
+    const headers = new Headers();
+    if (authorization) headers.set("authorization", authorization);
+
+    const response = await fetch(
+      `/backend-api/conversation/${encodeURIComponent(conversationId)}`,
+      {
+        method: "GET",
+        credentials: "include",
+        headers,
+      }
+    );
+
+    if (!response.ok) {
+      throw CGO.createHttpError(response, "conversation refresh");
+    }
+
+    const data = await response.json();
+    if (
+      data &&
+      typeof data === "object" &&
+      data.conversation_id &&
+      data.current_node &&
+      data.mapping &&
+      typeof data.mapping === "object"
+    ) {
+      return data;
+    }
+
+    const conversation = data?.conversation;
+    if (
+      conversation &&
+      typeof conversation === "object" &&
+      conversation.conversation_id &&
+      conversation.current_node &&
+      conversation.mapping &&
+      typeof conversation.mapping === "object"
+    ) {
+      return conversation;
+    }
+
+    return null;
+  }
+
+  /**
+   * Return the best conversation payload for export, using backend refresh only as a fallback.
+   *
+   * @param {string} [conversationId=CGO.getConversationIdFromLocation()] - Conversation id to load.
+   * @returns {Promise<Object>} Conversation payload.
+   */
+  async function getConversationForExport(conversationId = CGO.getConversationIdFromLocation()) {
+    let cached = null;
+    try {
+      cached = await CGO.getConversationFromCache(conversationId);
+    } catch (_) {
+      cached = null;
+    }
+
+    const refreshReason = getConversationRefreshReason(cached);
+    if (cached && (!ENABLE_CONVERSATION_API_FALLBACK || !refreshReason)) {
+      return cached;
+    }
+
+    if (!ENABLE_CONVERSATION_API_FALLBACK) {
+      return cached;
+    }
+
+    try {
+      CGO.log("[export] conversation API fallback start", {
+        conversationId,
+        reason: refreshReason || "missing-cache",
+        cachedMappingCount: Object.keys(cached?.mapping || {}).length,
+        cachedCurrentNode: cached?.current_node || "",
+        cachedTextLength: getConversationExportTextLength(cached),
+      });
+
+      const fresh = await fetchConversationFromApi(conversationId);
+      const preferenceReason = getFreshConversationPreferenceReason(fresh, cached);
+      if (preferenceReason) {
+        CGO.log("[export] conversation API fallback used", {
+          conversationId,
+          refreshReason: refreshReason || "missing-cache",
+          preferenceReason,
+          freshMappingCount: Object.keys(fresh.mapping || {}).length,
+          cachedMappingCount: Object.keys(cached?.mapping || {}).length,
+          freshCurrentNode: fresh?.current_node || "",
+          cachedCurrentNode: cached?.current_node || "",
+          freshTextLength: getConversationExportTextLength(fresh),
+          cachedTextLength: getConversationExportTextLength(cached),
+        });
+        return fresh;
+      }
+    } catch (error) {
+      CGO.log("[warn] conversation refresh failed; using cache", {
+        conversationId,
+        code: CGO.classifyFetchError?.(error) || "",
+        status: error?.status,
+        error: String(error),
+      });
+    }
+
+    return cached || CGO.getConversationFromCache(conversationId);
+  }
+
+  /**
+   * Decide whether the page cache is incomplete enough to justify a backend refresh.
+   *
+   * @param {?Object} cached - Existing page-hook export cache payload.
+   * @returns {boolean} `true` when export should try a fresh backend payload.
+   */
+  function shouldRefreshConversationForExport(cached) {
+    return !!getConversationRefreshReason(cached);
+  }
+
+  /**
+   * Explain why the page cache is incomplete enough to justify a backend refresh.
+   *
+   * @param {?Object} cached - Existing page-hook export cache payload.
+   * @returns {string} Refresh reason, or an empty string when the cache is usable.
+   */
+  function getConversationRefreshReason(cached) {
+    if (!cached) return "missing-cache";
+
+    const mapping = cached.mapping || {};
+    const currentNode = cached.current_node || "";
+    if (cached.__cgo_stream_incomplete === true) return "stream-incomplete";
+    if (!Object.keys(mapping).length) return "empty-mapping";
+    if (!currentNode) return "missing-current-node";
+    if (!mapping[currentNode]) return "current-node-not-in-mapping";
+
+    return getConversationExportTextLength(cached) === 0 ? "empty-export-text" : "";
+  }
+
+  /**
+   * Decide whether a freshly fetched conversation is richer than the cached export payload.
+   *
+   * @param {Object} fresh - Fresh backend conversation payload.
+   * @param {?Object} cached - Existing page-hook export cache payload.
+   * @returns {boolean} `true` when fresh should be used for export.
+   */
+  function isFreshConversationPreferredForExport(fresh, cached) {
+    return !!getFreshConversationPreferenceReason(fresh, cached);
+  }
+
+  /**
+   * Explain why a freshly fetched conversation should replace the cached export payload.
+   *
+   * @param {?Object} fresh - Fresh backend conversation payload.
+   * @param {?Object} cached - Existing page-hook export cache payload.
+   * @returns {string} Preference reason, or an empty string when cache should be kept.
+   */
+  function getFreshConversationPreferenceReason(fresh, cached) {
+    if (!fresh) return "";
+    if (!cached) return "missing-cache";
+
+    const freshMappingCount = Object.keys(fresh.mapping || {}).length;
+    const cachedMappingCount = Object.keys(cached.mapping || {}).length;
+    const freshTextLength = getConversationExportTextLength(fresh);
+    const cachedTextLength = getConversationExportTextLength(cached);
+
+    if (freshTextLength > cachedTextLength) return "longer-export-text";
+    if (freshMappingCount > cachedMappingCount && freshTextLength >= cachedTextLength) {
+      return "larger-mapping";
+    }
+
+    if (
+      cached.__cgo_stream_incomplete === true &&
+      fresh.current_node &&
+      fresh.current_node !== cached.current_node &&
+      freshTextLength >= cachedTextLength
+    ) {
+      return "stream-incomplete-current-node";
+    }
+
+    return "";
+  }
+
+  /**
+   * Compute rough exported text length for a conversation payload.
+   *
+   * @param {Object} conversation - Conversation payload.
+   * @returns {number} Total exportable text length.
+   */
+  function getConversationExportTextLength(conversation) {
+    const mapping = conversation?.mapping || {};
+    let total = 0;
+
+    for (const node of Object.values(mapping)) {
+      const message = node?.message;
+      if (!message) continue;
+      total += getMessageTextForExport(message).length;
+    }
+
+    return total;
   }
 
   /**
@@ -3694,6 +3903,7 @@
   CGO.getFileSimpleMetadata = getFileSimpleMetadata;
   CGO.getAttachmentIcon = getAttachmentIcon;
   CGO.getConversationFromCache = getConversationFromCache;
+  CGO.getConversationForExport = getConversationForExport;
   CGO.getConversationIdFromLocation = getConversationIdFromLocation;
   CGO.getTurnArticlesForExport = getTurnArticlesForExport;
   CGO.getTurnRoleFromDom = getTurnRoleFromDom;
