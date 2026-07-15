@@ -324,6 +324,12 @@
     let frame = 0;
     let isOpen = false;
     let closeTimer = 0;
+    let navigationTargetIndex = -1;
+    let navigationSettleTimer = 0;
+    let navigationMaxTimer = 0;
+    let navigationIgnoreScrollUntil = 0;
+    const navigationSettleMs = prefersReducedMotion ? 0 : 140;
+    const navigationMaxMs = prefersReducedMotion ? 0 : 2400;
 
     const cancelClose = () => {
       if (!closeTimer) return;
@@ -351,17 +357,6 @@
       }
     };
 
-    const scrollToItem = (item, options = {}) => {
-      if (!item?.section) return;
-      if (options.syncList) {
-        item.row.scrollIntoView({ block: "nearest" });
-      }
-      item.section.scrollIntoView({
-        behavior: prefersReducedMotion ? "auto" : "smooth",
-        block: "start",
-      });
-    };
-
     const setActiveIndex = (nextIndex) => {
       if (nextIndex === activeIndex) return;
       if (activeIndex >= 0) {
@@ -377,8 +372,20 @@
       }
     };
 
-    const refresh = () => {
+    const clearNavigationTimers = () => {
+      if (navigationSettleTimer) {
+        clearTimeout(navigationSettleTimer);
+        navigationSettleTimer = 0;
+      }
+      if (navigationMaxTimer) {
+        clearTimeout(navigationMaxTimer);
+        navigationMaxTimer = 0;
+      }
+    };
+
+    const refresh = (options = {}) => {
       frame = 0;
+      const updateActive = options.updateActive !== false && navigationTargetIndex < 0;
       const doc = document.documentElement;
       const scrollTop = window.scrollY || doc.scrollTop || 0;
       const scrollMax = Math.max(1, doc.scrollHeight - window.innerHeight);
@@ -394,12 +401,84 @@
         if (item.top <= probe) nextActive = index;
       });
 
-      setActiveIndex(nextActive);
+      if (updateActive) {
+        setActiveIndex(nextActive);
+      }
     };
 
     const scheduleRefresh = () => {
+      if (navigationTargetIndex >= 0) return;
       if (frame) return;
       frame = requestAnimationFrame(refresh);
+    };
+
+    const finishNavigation = (options = {}) => {
+      const targetIndex = navigationTargetIndex;
+      if (targetIndex < 0) return;
+
+      clearNavigationTimers();
+      navigationTargetIndex = -1;
+
+      const item = items[targetIndex];
+      if (!item?.section) return;
+
+      if (options.snap !== false) {
+        item.section.scrollIntoView({ behavior: "auto", block: "start" });
+      }
+      setActiveIndex(targetIndex);
+      if (isOpen) {
+        item.row.scrollIntoView({ block: "nearest" });
+      }
+      navigationIgnoreScrollUntil = Date.now() + 180;
+      refresh({ updateActive: false });
+    };
+
+    const scheduleNavigationSettle = () => {
+      if (navigationTargetIndex < 0) return;
+      if (navigationSettleTimer) clearTimeout(navigationSettleTimer);
+      navigationSettleTimer = setTimeout(() => finishNavigation(), navigationSettleMs);
+    };
+
+    const startNavigation = (targetIndex) => {
+      if (targetIndex < 0 || !items[targetIndex]?.section) return;
+
+      clearNavigationTimers();
+      if (frame) {
+        cancelAnimationFrame(frame);
+        frame = 0;
+      }
+      navigationIgnoreScrollUntil = 0;
+      navigationTargetIndex = targetIndex;
+      setActiveIndex(targetIndex);
+
+      if (navigationMaxMs > 0) {
+        navigationMaxTimer = setTimeout(() => finishNavigation(), navigationMaxMs);
+      }
+      scheduleNavigationSettle();
+    };
+
+    const cancelNavigation = () => {
+      navigationIgnoreScrollUntil = 0;
+      if (navigationTargetIndex < 0) return;
+      clearNavigationTimers();
+      navigationTargetIndex = -1;
+      scheduleRefresh();
+    };
+
+    const scrollToItem = (item, options = {}) => {
+      if (!item?.section) return;
+      const targetIndex = items.indexOf(item);
+      if (targetIndex < 0) return;
+
+      if (options.syncList) {
+        item.row.scrollIntoView({ block: "nearest" });
+      }
+      startNavigation(targetIndex);
+      item.section.scrollIntoView({
+        behavior: prefersReducedMotion ? "auto" : "smooth",
+        block: "start",
+      });
+      scheduleNavigationSettle();
     };
 
     const getNearestRailItem = (event) => {
@@ -464,7 +543,17 @@
         rail.focus();
       }
     });
-    window.addEventListener("scroll", scheduleRefresh, { passive: true });
+    window.addEventListener("scroll", () => {
+      if (Date.now() < navigationIgnoreScrollUntil) return;
+      if (navigationTargetIndex >= 0) {
+        scheduleNavigationSettle();
+        return;
+      }
+      scheduleRefresh();
+    }, { passive: true });
+    window.addEventListener("scrollend", () => finishNavigation());
+    window.addEventListener("wheel", cancelNavigation, { passive: true });
+    window.addEventListener("touchstart", cancelNavigation, { passive: true });
     window.addEventListener("resize", scheduleRefresh);
     window.addEventListener("load", scheduleRefresh, { once: true });
     if ("ResizeObserver" in window) {
