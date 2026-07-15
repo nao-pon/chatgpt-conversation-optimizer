@@ -33,6 +33,7 @@
   CGO.STATE = {
     domTrimTimer: null,
     domTrimTicket: 0,
+    exportToolbarVisible: false,
 
     conversationHeadMeta: null,
     domTrimState: {
@@ -690,37 +691,75 @@
    * Watch SPA route changes and refresh CGO state when the conversation changes.
    */
   function observeRouteChanges() {
-    const observer = new MutationObserver(async () => {
-      if (location.pathname !== CGO.LAST_PATHNAME) {
-        CGO.LAST_PATHNAME = location.pathname;
+    let routeChangeQueue = Promise.resolve();
 
-        CGO.STATE.projectGuide = {
-          conversationId: "",
-          projectName: "",
-          stats: null,
-          level: 0,
-        };
-        CGO.resetInitialPruneNoticeState?.(true);
-        CGO.handleConversationRouteChanged?.(CGO.getConversationIdFromLocation?.() || "");
+    function isUsableConversationCache(data) {
+      return !!(
+        data &&
+        typeof data === "object" &&
+        data.mapping &&
+        typeof data.mapping === "object" &&
+        Object.keys(data.mapping).length > 0
+      );
+    }
 
-        CGO.updateExportButtonVisibility?.(false);
-        CGO.injectExportButtonIntoHeader?.();
+    async function refreshForRouteChange() {
+      const conversationId = CGO.getConversationIdFromLocation?.() || "";
 
-        const ok = await CGO.ensurePageHooksInjected();
-        if (ok) {
-          await CGO.postSettingsToPageHook?.();
-          const panel = document.getElementById("cgo-settings-panel");
-          if (panel && typeof panel.__cgoSyncFromSettings === "function") {
-            await panel.__cgoSyncFromSettings();
-          }
+      CGO.STATE.projectGuide = {
+        conversationId: "",
+        projectName: "",
+        stats: null,
+        level: 0,
+      };
+      CGO.resetInitialPruneNoticeState?.(true);
+      CGO.handleConversationRouteChanged?.(conversationId);
+
+      CGO.updateExportButtonVisibility?.(false);
+      CGO.injectExportButtonIntoHeader?.();
+
+      const ok = await CGO.ensurePageHooksInjected();
+      if (ok) {
+        await CGO.postSettingsToPageHook?.();
+        const panel = document.getElementById("cgo-settings-panel");
+        if (panel && typeof panel.__cgoSyncFromSettings === "function") {
+          await panel.__cgoSyncFromSettings();
         }
       }
+
+      if (conversationId) {
+        try {
+          const cached = await CGO.getConversationFromCache?.(conversationId);
+          if (isUsableConversationCache(cached)) {
+            CGO.updateExportButtonVisibility?.(true);
+          }
+        } catch (_) {
+          // The cache may not be ready yet; stream/full-response events will reveal the toolbar later.
+        }
+      }
+    }
+
+    function handlePossibleRouteChange() {
+      if (location.pathname === CGO.LAST_PATHNAME) return;
+
+      CGO.LAST_PATHNAME = location.pathname;
+      routeChangeQueue = routeChangeQueue
+        .catch(() => {})
+        .then(refreshForRouteChange);
+    }
+
+    const observer = new MutationObserver(() => {
+      handlePossibleRouteChange();
     });
 
     observer.observe(document.body, {
       childList: true,
       subtree: true,
     });
+
+    window.addEventListener("popstate", handlePossibleRouteChange);
+    window.addEventListener("hashchange", handlePossibleRouteChange);
+    setInterval(handlePossibleRouteChange, 500);
   }
 
   /**

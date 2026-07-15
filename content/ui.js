@@ -711,9 +711,19 @@
    * Inject the export toolbar into the conversation header when the route supports it.
    */
   function injectExportButtonIntoHeader() {
-    if (!/^(\/g\/[^/]+)?\/c\/([^/?#]+)/i.test(location.pathname)) return;
+    if (!CGO.getConversationIdFromLocation?.()) {
+      if (CGO.toolbarBase?.isConnected) {
+        CGO.toolbarBase.hidden = true;
+      }
+      return;
+    }
 
-    if (document.querySelector("div.cgo-toolbar")) return;
+    const existingToolbar = document.querySelector("div.cgo-toolbar");
+    if (existingToolbar) {
+      CGO.toolbarBase = existingToolbar;
+      existingToolbar.hidden = !CGO.STATE?.exportToolbarVisible;
+      return;
+    }
 
     const headerActions = document.getElementById("conversation-header-actions");
     if (!headerActions) return;
@@ -721,7 +731,7 @@
     CGO.toolbarBase = document.createElement("div");
     const toolbarBase = CGO.toolbarBase;
     toolbarBase.className = "cgo-toolbar";
-    toolbarBase.hidden = true;
+    toolbarBase.hidden = !CGO.STATE?.exportToolbarVisible;
 
     const open_new_tab_button = createOpenNewTabButton();
     const download_button = createExportButton();
@@ -1198,8 +1208,17 @@
    * @param {boolean} state - Whether the toolbar should be visible.
    */
   function updateExportButtonVisibility(state) {
-    if (CGO.toolbarBase) {
-      CGO.toolbarBase.hidden = !state;
+    const visible = !!state;
+    if (CGO.STATE) {
+      CGO.STATE.exportToolbarVisible = visible;
+    }
+
+    if (visible) {
+      CGO.injectExportButtonIntoHeader?.();
+    }
+
+    if (CGO.toolbarBase?.isConnected) {
+      CGO.toolbarBase.hidden = !visible;
     }
   }
 
