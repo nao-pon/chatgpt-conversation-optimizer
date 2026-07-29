@@ -2,8 +2,8 @@
   if (globalThis.__CGO_SKIP__) return;
   const CGO = (globalThis.__CGO ||= {});
   const INITIAL_PRUNE_NOTICE_DEBOUNCE_MS = 120;
-  const INITIAL_PRUNE_NOTICE_RETRY_DELAY_MS = 180;
-  const INITIAL_PRUNE_NOTICE_MAX_RETRIES = 10;
+  const INITIAL_PRUNE_NOTICE_RETRY_DELAY_MS = 250;
+  const INITIAL_PRUNE_NOTICE_MAX_RETRIES = 40;
   const VOICE_SYNC_RETRY_DELAYS_MS = [500, 1000, 2000, 4000];
 
   /**
@@ -20,7 +20,7 @@
    *
    * The current ChatGPT DOM is not stable enough to rely on a single selector.
    * This function first tries known turn container selectors, then falls back to
-   * locating elements with `data-message-id` and climbing to a reasonable block parent.
+   * locating message marker elements and climbing to a reasonable block parent.
    *
    * @returns {HTMLElement[]} Connected turn-like block nodes in DOM order.
    */
@@ -33,9 +33,11 @@
 
     const directSelectors = [
       'article[data-testid^="conversation-turn-"]',
+      '[data-testid^="conversation-turn-"]',
       "article[data-turn-id]",
       "section[data-turn-id]",
       "div[data-turn-id]",
+      'div[class*="group/conversation-turn"]',
     ];
 
     for (const selector of directSelectors) {
@@ -51,11 +53,11 @@
       }
     }
 
-    const messageNodes = Array.from(root.querySelectorAll("[data-message-id]"))
+    const messageNodes = Array.from(root.querySelectorAll("[data-message-id], [data-message-author-role]"))
       .filter((node) => node && node.isConnected);
 
     if (!messageNodes.length) {
-      CGO.log("[dom] getTurnBlocks: no [data-message-id] nodes found");
+      CGO.log("[dom] getTurnBlocks: no message marker nodes found");
       //return [];
     }
 
@@ -64,6 +66,9 @@
 
     for (const node of messageNodes) {
       const block =
+        node.closest('[data-testid^="conversation-turn-"]') ||
+        node.closest('[data-turn-id]') ||
+        node.closest('div[class*="group/conversation-turn"]') ||
         node.closest("article") ||
         node.closest("section") ||
         node.closest("div");
@@ -74,8 +79,8 @@
       blocks.push(block);
     }
 
-    CGO.log("[dom] getTurnBlocks: fallback via [data-message-id]", {
-      messageNodeCount: messageNodes.length,
+    CGO.log("[dom] getTurnBlocks: fallback via message markers", {
+      markerNodeCount: messageNodes.length,
       blockCount: blocks.length,
     });
 
@@ -282,7 +287,6 @@
     const trim = CGO.STATE.domTrimState;
 
     if (!trim || Number(trim.omittedCount || 0) <= 0) return "done";
-    if (document.getElementById("cgo-dom-trim-notice")) return "done";
 
     const conversationId = CGO.getConversationIdFromLocation?.() || "";
     if (head?.conversationId && conversationId && head.conversationId !== conversationId) {
@@ -292,23 +296,50 @@
     const nodes = getTurnBlocks();
     if (!nodes.length) return "retry";
 
-    const preservedHead = nodes[0] || null;
-    const preservedTailFirst =
-      nodes.find((node) => getTurnMessageId(node) === trim.firstKeptId) ||
-      nodes[0] ||
-      null;
+    const firstKeptId = String(trim.firstKeptId || "");
+    let preservedTailFirst = firstKeptId
+      ? nodes.find((node) => getTurnMessageId(node) === firstKeptId) || null
+      : nodes[0] || null;
 
-    if (!preservedHead || !preservedTailFirst) return "retry";
-
-    if (head?.firstMessage && !document.getElementById("cgo-dom-initial-message")) {
-      const initialCard = createInitialMessageCard(head.firstMessage);
-      preservedHead.insertAdjacentElement("beforebegin", initialCard);
+    if (!preservedTailFirst) {
+      const retryCount = Number(CGO.STATE.initialPruneNoticeRetryCount || 0);
+      if (firstKeptId && retryCount >= INITIAL_PRUNE_NOTICE_MAX_RETRIES - 1) {
+        preservedTailFirst = nodes[0] || null;
+        CGO.log("[warn] initial prune notice falling back to first mounted turn", {
+          firstKeptId,
+          mountedTurnCount: nodes.length,
+          retryCount,
+        });
+      }
     }
 
-    const anchor = document.getElementById("cgo-dom-initial-message") || preservedHead;
+    if (!preservedTailFirst) {
+      CGO.log("[dom] initial prune notice waiting for first kept turn", {
+        firstKeptId,
+        mountedTurnCount: nodes.length,
+        retryCount: CGO.STATE.initialPruneNoticeRetryCount || 0,
+      });
+      return "retry";
+    }
+
+    let initialCard = document.getElementById("cgo-dom-initial-message");
+    if (head?.firstMessage) {
+      if (!initialCard) {
+        initialCard = createInitialMessageCard(head.firstMessage);
+      }
+      if (initialCard.nextElementSibling !== preservedTailFirst) {
+        preservedTailFirst.insertAdjacentElement("beforebegin", initialCard);
+      }
+    } else {
+      removeInitialMessageCard();
+      initialCard = null;
+    }
+
+    const anchor = initialCard || preservedTailFirst;
     if (!anchor || !anchor.isConnected) return "retry";
 
-    const notice = createTrimNotice(Number(trim.omittedCount || 0), trim.firstKeptId || "");
+    removeTrimNotice();
+    const notice = createTrimNotice(Number(trim.omittedCount || 0), firstKeptId);
     anchor.insertAdjacentElement("afterend", notice);
     return "done";
   }
@@ -323,11 +354,6 @@
 
     if (!trim || Number(trim.omittedCount || 0) <= 0) {
       resetInitialPruneNoticeState();
-      return;
-    }
-
-    if (document.getElementById("cgo-dom-trim-notice")) {
-      resetInitialPruneNoticeState(false);
       return;
     }
 
