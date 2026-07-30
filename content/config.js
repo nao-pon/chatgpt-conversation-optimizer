@@ -808,6 +808,7 @@
           const cached = await CGO.getConversationFromCache?.(conversationId);
           if (isUsableConversationCache(cached)) {
             CGO.updateExportButtonVisibility?.(true);
+            CGO.requestInitialPruneMetaFromPageHook?.(conversationId);
           }
         } catch (_) {
           // The cache may not be ready yet; stream/full-response events will reveal the toolbar later.

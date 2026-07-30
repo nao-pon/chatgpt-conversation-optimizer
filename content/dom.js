@@ -4,6 +4,9 @@
   const INITIAL_PRUNE_NOTICE_DEBOUNCE_MS = 120;
   const INITIAL_PRUNE_NOTICE_RETRY_DELAY_MS = 250;
   const INITIAL_PRUNE_NOTICE_MAX_RETRIES = 40;
+  const FIXED_TRIM_SUMMARY_ID = "cgo-dom-fixed-trim-summary";
+  const FIXED_TRIM_SUMMARY_VISIBLE_SCROLL_Y = 80;
+  const FIXED_TRIM_SUMMARY_INITIAL_SUPPRESS_MS = 1500;
   const VOICE_SYNC_RETRY_DELAYS_MS = [500, 1000, 2000, 4000];
 
   /**
@@ -95,6 +98,7 @@
     const button = notice?.querySelector("[data-cgo-export-button-key='trim_notice_lightweight']") || null;
     CGO.unregisterExportButton?.("trim_notice_lightweight", button);
     notice?.remove();
+    removeEmptyFixedTrimSummary();
   }
 
   /**
@@ -102,6 +106,326 @@
    */
   function removeInitialMessageCard() {
     document.getElementById("cgo-dom-initial-message")?.remove();
+    removeEmptyFixedTrimSummary();
+  }
+
+  /**
+   * Remove the fixed trim summary wrapper when it has no remaining content.
+   */
+  function removeEmptyFixedTrimSummary() {
+    const summary = document.getElementById(FIXED_TRIM_SUMMARY_ID);
+    if (summary && !summary.children.length) {
+      summary.remove();
+    }
+  }
+
+  /**
+   * Return the largest known vertical scroll offset for the current ChatGPT viewport.
+   *
+   * @param {Event} [event] - Optional scroll event carrying an internal scroll target.
+   * @returns {number} Best-effort vertical scroll offset.
+   */
+  function getCurrentScrollOffset(event) {
+    const target = event?.target;
+    const scrollRoot = getChatGptScrollRoot();
+    const targetScrollTop =
+      target && target !== document && target !== window
+        ? Number(target.scrollTop || 0)
+        : 0;
+    const scrollRootScrollTop = scrollRoot
+      ? Number(scrollRoot.scrollTop || 0)
+      : 0;
+
+    return Math.max(
+      targetScrollTop,
+      scrollRootScrollTop,
+      Number(window.scrollY || 0),
+      Number(window.pageYOffset || 0),
+      Number(document.scrollingElement?.scrollTop || 0),
+      Number(document.documentElement?.scrollTop || 0),
+      Number(document.body?.scrollTop || 0),
+      getLargestElementScrollTop()
+    );
+  }
+
+  /**
+   * Return ChatGPT's current internal scroll container when present.
+   *
+   * @returns {?HTMLElement} Scroll root element.
+   */
+  function getChatGptScrollRoot() {
+    const node = document.querySelector("[data-scroll-root]");
+    return node instanceof HTMLElement ? node : null;
+  }
+
+  /**
+   * Return the largest scrollTop from visible scroll containers in ChatGPT's nested layout.
+   *
+   * @returns {number} Largest element-level scroll offset.
+   */
+  function getLargestElementScrollTop() {
+    let largest = 0;
+    const nodes = Array.from(document.querySelectorAll("[data-scroll-root], main, main *"));
+
+    for (const node of nodes) {
+      if (!(node instanceof HTMLElement)) continue;
+
+      const scrollTop = Number(node.scrollTop || 0);
+      if (scrollTop <= largest) continue;
+      if (node.scrollHeight <= node.clientHeight + 80) continue;
+
+      largest = scrollTop;
+    }
+
+    return largest;
+  }
+
+  /**
+   * Show the fixed trim summary only while the user is near the top of the conversation.
+   */
+  function updateFixedTrimSummaryVisibility() {
+    const summary = document.getElementById(FIXED_TRIM_SUMMARY_ID);
+    if (!summary) return;
+
+    if (isFixedTrimSummaryInitiallySuppressed()) {
+      summary.hidden = true;
+      scheduleFixedTrimSummaryAfterSuppress();
+      return;
+    }
+
+    const hasTrim = Number(CGO.STATE.domTrimState?.omittedCount || 0) > 0;
+    const onConversationRoute = !!CGO.getConversationIdFromLocation?.();
+    const nearTop =
+      Number(CGO.STATE.fixedTrimSummaryScrollY || 0) <=
+      FIXED_TRIM_SUMMARY_VISIBLE_SCROLL_Y;
+
+    summary.hidden = !(hasTrim && onConversationRoute && nearTop);
+  }
+
+  /**
+   * Align the fixed trim summary with the visible conversation content column.
+   */
+  function updateFixedTrimSummaryLayout() {
+    const summary = document.getElementById(FIXED_TRIM_SUMMARY_ID);
+    if (!summary) return;
+
+    const rect = getConversationContentColumnRect();
+
+    if (!rect) {
+      summary.style.removeProperty("--cgo-fixed-trim-left");
+      summary.style.removeProperty("--cgo-fixed-trim-width");
+      summary.style.removeProperty("--cgo-fixed-trim-transform");
+      return;
+    }
+
+    const left = Math.max(10, Math.round(rect.left));
+    const width = Math.min(
+      Math.round(rect.width),
+      Math.max(280, window.innerWidth - left - 10)
+    );
+
+    summary.style.setProperty("--cgo-fixed-trim-left", `${left}px`);
+    summary.style.setProperty("--cgo-fixed-trim-width", `${width}px`);
+    summary.style.setProperty("--cgo-fixed-trim-transform", "none");
+  }
+
+  /**
+   * Find a visible message-content column rect rather than the full-width turn wrapper.
+   *
+   * @returns {?DOMRect} Best-effort content column rect.
+   */
+  function getConversationContentColumnRect() {
+    const root = getConversationRoot();
+    if (!root) return null;
+
+    const selectors = [
+      "[data-conversation-screenshot-content]",
+      ".markdown",
+      '[data-message-author-role="assistant"] .markdown',
+      '[data-message-author-role="assistant"]',
+      "[data-message-id] .markdown",
+      "[data-message-id]",
+      "pre",
+    ];
+    const viewportWidth = window.innerWidth || 0;
+    const maxColumnWidth = Math.min(1100, Math.max(320, viewportWidth - 40));
+    const candidates = [];
+
+    for (const selector of selectors) {
+      for (const node of root.querySelectorAll(selector)) {
+        if (!(node instanceof HTMLElement)) continue;
+        if (node.closest(`#${FIXED_TRIM_SUMMARY_ID}`)) continue;
+        if (!node.offsetParent && node.getClientRects().length === 0) continue;
+
+        const rect = node.getBoundingClientRect();
+        if (rect.width < 360 || rect.width > maxColumnWidth) continue;
+        if (rect.height < 12) continue;
+        if (rect.right < 0 || rect.left > viewportWidth) continue;
+
+        candidates.push(rect);
+      }
+    }
+
+    if (candidates.length) {
+      return candidates
+        .sort((a, b) => {
+          const aVisible = a.bottom >= 0 && a.top <= window.innerHeight;
+          const bVisible = b.bottom >= 0 && b.top <= window.innerHeight;
+          if (aVisible !== bVisible) return aVisible ? -1 : 1;
+          return b.width - a.width;
+        })[0];
+    }
+
+    const width = Math.min(960, Math.max(320, viewportWidth - 32));
+    const left = Math.max(10, Math.round((viewportWidth - width) / 2));
+    return {
+      left,
+      width,
+    };
+  }
+
+  /**
+   * Schedule a single fixed-summary visibility update for the next animation frame.
+   *
+   * @param {Event} [event] - Scroll event used to read internal scroll offsets.
+   */
+  function scheduleFixedTrimSummaryVisibilityUpdate(event) {
+    CGO.STATE.fixedTrimSummaryScrollY = getCurrentScrollOffset(event);
+    if (CGO.STATE.fixedTrimSummaryRaf) return;
+
+    const requestFrame =
+      window.requestAnimationFrame ||
+      ((callback) => window.setTimeout(callback, 16));
+
+    CGO.STATE.fixedTrimSummaryRaf = requestFrame(() => {
+      CGO.STATE.fixedTrimSummaryRaf = 0;
+      updateFixedTrimSummaryLayout();
+      updateFixedTrimSummaryVisibility();
+    });
+  }
+
+  /**
+   * Hide the fixed summary briefly while ChatGPT restores its internal scroll position.
+   */
+  function suppressFixedTrimSummaryInitialFlash() {
+    const now = getNowMs();
+    const until = now + FIXED_TRIM_SUMMARY_INITIAL_SUPPRESS_MS;
+    CGO.STATE.fixedTrimSummarySuppressUntil = Math.max(
+      Number(CGO.STATE.fixedTrimSummarySuppressUntil || 0),
+      until
+    );
+  }
+
+  /**
+   * Return true while the fixed summary is inside the initial load suppression window.
+   *
+   * @returns {boolean} Whether visibility should be suppressed.
+   */
+  function isFixedTrimSummaryInitiallySuppressed() {
+    return getNowMs() < Number(CGO.STATE.fixedTrimSummarySuppressUntil || 0);
+  }
+
+  /**
+   * Re-run visibility once the initial load suppression window expires.
+   */
+  function scheduleFixedTrimSummaryAfterSuppress() {
+    if (CGO.STATE.fixedTrimSummarySuppressTimer) return;
+
+    const remaining =
+      Number(CGO.STATE.fixedTrimSummarySuppressUntil || 0) - getNowMs();
+    if (remaining <= 0) return;
+
+    CGO.STATE.fixedTrimSummarySuppressTimer = setTimeout(() => {
+      CGO.STATE.fixedTrimSummarySuppressTimer = null;
+      scheduleFixedTrimSummaryVisibilityUpdate();
+    }, Math.max(0, remaining + 20));
+  }
+
+  /**
+   * Return a monotonic-ish timestamp for short UI timing windows.
+   *
+   * @returns {number} Current timestamp in milliseconds.
+   */
+  function getNowMs() {
+    return typeof performance !== "undefined" && performance.now
+      ? performance.now()
+      : Date.now();
+  }
+
+  /**
+   * Attach a scroll listener to ChatGPT's nested scroll root, which can change on SPA navigation.
+   */
+  function observeCurrentChatGptScrollRoot() {
+    const scrollRoot = getChatGptScrollRoot();
+    if (!scrollRoot || CGO.STATE.fixedTrimSummaryScrollRoot === scrollRoot) {
+      return;
+    }
+
+    CGO.STATE.fixedTrimSummaryScrollRoot = scrollRoot;
+    CGO.STATE.fixedTrimSummaryScrollRoots ||= new WeakSet();
+    if (!CGO.STATE.fixedTrimSummaryScrollRoots.has(scrollRoot)) {
+      CGO.STATE.fixedTrimSummaryScrollRoots.add(scrollRoot);
+      scrollRoot.addEventListener("scroll", scheduleFixedTrimSummaryVisibilityUpdate, {
+        passive: true,
+      });
+    }
+    CGO.STATE.fixedTrimSummaryScrollY = getCurrentScrollOffset();
+  }
+
+  /**
+   * Install scroll listeners used by the fixed trim summary.
+   */
+  function ensureFixedTrimSummaryScrollObserver() {
+    if (CGO.STATE.fixedTrimSummaryScrollObserverStarted) return;
+
+    CGO.STATE.fixedTrimSummaryScrollObserverStarted = true;
+    CGO.STATE.fixedTrimSummaryScrollY = getCurrentScrollOffset();
+    observeCurrentChatGptScrollRoot();
+
+    window.addEventListener("scroll", scheduleFixedTrimSummaryVisibilityUpdate, {
+      capture: true,
+      passive: true,
+    });
+    document.addEventListener("scroll", scheduleFixedTrimSummaryVisibilityUpdate, {
+      capture: true,
+      passive: true,
+    });
+    window.addEventListener("resize", scheduleFixedTrimSummaryVisibilityUpdate, {
+      passive: true,
+    });
+
+    if (document.body && typeof MutationObserver === "function") {
+      const observer = new MutationObserver(() => {
+        observeCurrentChatGptScrollRoot();
+        scheduleFixedTrimSummaryVisibilityUpdate();
+      });
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+      });
+      CGO.STATE.fixedTrimSummaryLayoutObserver = observer;
+    }
+  }
+
+  /**
+   * Ensure the body-level fixed trim summary wrapper exists.
+   *
+   * @returns {?HTMLDivElement} Fixed summary wrapper.
+   */
+  function ensureFixedTrimSummary() {
+    if (!document.body) return null;
+
+    let summary = document.getElementById(FIXED_TRIM_SUMMARY_ID);
+    if (summary) return summary;
+
+    summary = document.createElement("div");
+    summary.id = FIXED_TRIM_SUMMARY_ID;
+    summary.className = "cgo-dom-fixed-trim-summary";
+    summary.hidden = true;
+    document.body.appendChild(summary);
+    suppressFixedTrimSummaryInitialFlash();
+    ensureFixedTrimSummaryScrollObserver();
+    return summary;
   }
 
   /**
@@ -113,12 +437,17 @@
     if (CGO.STATE.initialPruneNoticeTimer) {
       clearTimeout(CGO.STATE.initialPruneNoticeTimer);
     }
+    if (CGO.STATE.fixedTrimSummarySuppressTimer) {
+      clearTimeout(CGO.STATE.fixedTrimSummarySuppressTimer);
+    }
 
     CGO.STATE.initialPruneNoticeTimer = null;
     CGO.STATE.initialPruneNoticeScheduled = false;
     CGO.STATE.initialPruneNoticeRetryCount = 0;
+    CGO.STATE.fixedTrimSummarySuppressTimer = null;
 
     if (clearMeta) {
+      CGO.STATE.fixedTrimSummarySuppressUntil = getNowMs() + FIXED_TRIM_SUMMARY_INITIAL_SUPPRESS_MS;
       CGO.STATE.conversationHeadMeta = null;
       CGO.STATE.domTrimState = {
         omittedCount: 0,
@@ -278,7 +607,7 @@
   }
 
   /**
-   * Insert the omission notice for the initial pruned response once the first and tail turns are mounted.
+   * Render the fixed omission summary for the initial pruned response as soon as metadata is available.
    *
    * @returns {"done"|"retry"} `retry` when the DOM is not ready yet.
    */
@@ -293,59 +622,51 @@
       return "done";
     }
 
-    const nodes = getTurnBlocks();
-    if (!nodes.length) return "retry";
-
     const firstKeptId = String(trim.firstKeptId || "");
-    let preservedTailFirst = firstKeptId
-      ? nodes.find((node) => getTurnMessageId(node) === firstKeptId) || null
-      : nodes[0] || null;
-
-    if (!preservedTailFirst) {
-      const retryCount = Number(CGO.STATE.initialPruneNoticeRetryCount || 0);
-      if (firstKeptId && retryCount >= INITIAL_PRUNE_NOTICE_MAX_RETRIES - 1) {
-        preservedTailFirst = nodes[0] || null;
-        CGO.log("[warn] initial prune notice falling back to first mounted turn", {
-          firstKeptId,
-          mountedTurnCount: nodes.length,
-          retryCount,
-        });
-      }
-    }
-
-    if (!preservedTailFirst) {
-      CGO.log("[dom] initial prune notice waiting for first kept turn", {
-        firstKeptId,
-        mountedTurnCount: nodes.length,
-        retryCount: CGO.STATE.initialPruneNoticeRetryCount || 0,
-      });
-      return "retry";
-    }
-
-    let initialCard = document.getElementById("cgo-dom-initial-message");
-    if (head?.firstMessage) {
-      if (!initialCard) {
-        initialCard = createInitialMessageCard(head.firstMessage);
-      }
-      if (initialCard.nextElementSibling !== preservedTailFirst) {
-        preservedTailFirst.insertAdjacentElement("beforebegin", initialCard);
-      }
-    } else {
-      removeInitialMessageCard();
-      initialCard = null;
-    }
-
-    const anchor = initialCard || preservedTailFirst;
-    if (!anchor || !anchor.isConnected) return "retry";
 
     removeTrimNotice();
+
+    let summary = null;
+    if (head?.firstMessage) {
+      removeInitialMessageCard();
+      summary = ensureFixedTrimSummary();
+      if (!summary) return "retry";
+      summary.appendChild(createInitialMessageCard(head.firstMessage));
+    } else {
+      removeInitialMessageCard();
+    }
+
+    summary = summary || ensureFixedTrimSummary();
+    if (!summary) return "retry";
+
     const notice = createTrimNotice(Number(trim.omittedCount || 0), firstKeptId);
-    anchor.insertAdjacentElement("afterend", notice);
+    summary.appendChild(notice);
+    CGO.STATE.fixedTrimSummaryScrollY = getCurrentScrollOffset();
+    updateFixedTrimSummaryLayout();
+    updateFixedTrimSummaryVisibility();
     return "done";
   }
 
   /**
-   * Debounce and retry initial-prune notice insertion until the required DOM blocks are mounted.
+   * Ask the injected page hook to restore trim metadata for a cached conversation after SPA navigation.
+   *
+   * @param {string} conversationId - Conversation id to restore.
+   */
+  function requestInitialPruneMetaFromPageHook(conversationId) {
+    if (!conversationId) return;
+
+    window.postMessage(
+      {
+        type: "CGO_TRIM_META_REQUEST",
+        conversationId,
+        secret: window.__CGO_BRIDGE_SECRET__ || "",
+      },
+      "*"
+    );
+  }
+
+  /**
+   * Debounce and retry initial-prune notice rendering until the document body is available.
    *
    * @param {number} [delayMs=INITIAL_PRUNE_NOTICE_DEBOUNCE_MS] - Delay before the next attempt.
    */
@@ -365,7 +686,7 @@
     CGO.STATE.initialPruneNoticeTimer = setTimeout(() => {
       CGO.STATE.initialPruneNoticeTimer = null;
 
-      runWhenIdle(() => {
+      runOnNextFrame(() => {
         const result = ensureInitialPruneNotice();
         CGO.STATE.initialPruneNoticeScheduled = false;
 
@@ -380,8 +701,21 @@
         }
 
         CGO.STATE.initialPruneNoticeRetryCount = 0;
-      }, 1000);
+      });
     }, Math.max(0, Number(delayMs) || 0));
+  }
+
+  /**
+   * Run a callback on the next animation frame, falling back to a zero-delay timer.
+   *
+   * @param {Function} fn - Callback to run soon.
+   */
+  function runOnNextFrame(fn) {
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(fn);
+      return;
+    }
+    setTimeout(fn, 0);
   }
 
   /**
@@ -737,6 +1071,9 @@
         firstMessageId: data.meta?.firstMessageId || "",
         firstMessage: data.meta?.firstMessage || null,
       };
+      if (Number(CGO.STATE.domTrimState?.omittedCount || 0) > 0) {
+        scheduleInitialPruneNotice(0);
+      }
       return;
     }
 
@@ -804,5 +1141,6 @@
   CGO.observeWindowMessages = observeWindowMessages;
   CGO.ensureInitialPruneNotice = ensureInitialPruneNotice;
   CGO.handleConversationRouteChanged = handleConversationRouteChanged;
+  CGO.requestInitialPruneMetaFromPageHook = requestInitialPruneMetaFromPageHook;
   CGO.resetInitialPruneNoticeState = resetInitialPruneNoticeState;
 })();

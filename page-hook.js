@@ -1049,6 +1049,68 @@
   }
 
   /**
+   * Return the cached conversation payload used by content-script bridge requests.
+   *
+   * @param {string} conversationId - Conversation identifier.
+   * @returns {?Object} Cached full/stream/merged conversation payload.
+   */
+  function getCachedConversationForBridge(conversationId) {
+    const full = EXPORT_CACHE.get(conversationId) || null;
+    const stream = STREAM_CACHE.get(conversationId) || null;
+
+    if (full && stream) {
+      return mergeCaches(full, stream);
+    }
+
+    return stream || full || null;
+  }
+
+  /**
+   * Re-post trim metadata for a cached conversation after content-side SPA navigation.
+   *
+   * @param {string} conversationId - Conversation identifier.
+   * @returns {boolean} `true` when trim metadata was posted.
+   */
+  function restoreInitialPruneMetaFromCache(conversationId) {
+    const cached = getCachedConversationForBridge(conversationId);
+    if (!cached) return false;
+
+    const data = structuredClone(cached);
+    const baseKeepDomMessages = CONFIG.baseTurnCount || CONFIG.turnCount;
+    const stats = buildConversationStats(data);
+    const effectiveKeepDomMessages =
+      CONFIG.autoAdjustEnabled && baseKeepDomMessages > 10
+        ? getRecommendedKeepDomMessages(baseKeepDomMessages, stats)
+        : baseKeepDomMessages;
+
+    const summary = analyzeConversation(data, effectiveKeepDomMessages);
+    if (summary?.error) return false;
+
+    const headMeta = buildConversationHeadMeta(data);
+    if (headMeta) {
+      postConversationHeadMeta(data.conversation_id || conversationId || "", headMeta);
+    }
+
+    if (shouldSkipPrune(summary)) return false;
+
+    pruneConversationData(data, effectiveKeepDomMessages);
+    const pruneMeta = data.__cgoInitialPruneMeta || null;
+    try {
+      delete data.__cgoInitialPruneMeta;
+    } catch (_) {}
+
+    if (!pruneMeta || Number(pruneMeta.omittedCount || 0) <= 0) return false;
+
+    postInitialPruneMeta(data.conversation_id || conversationId || "", pruneMeta);
+    log.basic("[trimMeta] restored from cache", {
+      conversationId: data.conversation_id || conversationId || "",
+      omittedCount: Number(pruneMeta.omittedCount || 0),
+      firstKeptId: pruneMeta.firstKeptId || "",
+    });
+    return true;
+  }
+
+  /**
    * Builds a linear chain of node ids from the root to the specified current node by following parent links.
    *
    * @param {Object} mapping - Map of node id to node object; nodes may include a `parent` property referencing another node id.
@@ -5782,15 +5844,7 @@
       const conversationId = data.conversationId;
       const requestId = data.requestId;
 
-      const full = EXPORT_CACHE.get(conversationId) || null;
-      const stream = STREAM_CACHE.get(conversationId) || null;
-
-      let cached = null;
-      if (full && stream) {
-        cached = mergeCaches(full, stream);
-      } else {
-        cached = stream || full || null;
-      }
+      const cached = getCachedConversationForBridge(conversationId);
 
       window.postMessage(
         {
@@ -5801,6 +5855,12 @@
         },
         "*"
       );
+    } else if (data.type === "CGO_TRIM_META_REQUEST") {
+      if (data.secret !== PAGE_BRIDGE_SECRET) {
+        return;
+      }
+
+      restoreInitialPruneMetaFromCache(data.conversationId || "");
     } else if (data.type === "CGO_LAST_AUTHORIZATION_REQUEST") {
       // Authenticate request
       if (data.secret !== PAGE_BRIDGE_SECRET) {
