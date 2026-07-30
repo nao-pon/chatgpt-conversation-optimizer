@@ -389,10 +389,11 @@
    */
   function trimOldDomTurns() {
     const nodes = getTurnBlocks();
-    const removeCount = nodes.length - CGO.SETTINGS.keepDomMessages;
+    const keepDomMessages = CGO.getActiveKeepDomMessages?.() || CGO.SETTINGS.keepDomMessages;
+    const removeCount = nodes.length - keepDomMessages;
     if (removeCount <= 0 || !nodes.length) return;
 
-    const keepCount = Math.max(1, CGO.SETTINGS.keepDomMessages);
+    const keepCount = Math.max(1, keepDomMessages);
     const tailStartIndex = Math.max(0, nodes.length - keepCount);
     const removedNodes = nodes.slice(0, tailStartIndex);
     const preservedTailFirst = nodes[tailStartIndex] || null;
@@ -424,7 +425,7 @@
     CGO.log("DOM trim", {
       total: nodes.length,
       removed: removedNodes.length,
-      kept: CGO.SETTINGS.keepDomMessages,
+      kept: keepDomMessages,
       omittedCount: CGO.STATE.domTrimState.omittedCount,
       firstKeptId: CGO.STATE.domTrimState.firstKeptId,
     });
@@ -705,7 +706,7 @@
               conversationId,
               effective,
             });
-            CGO.SETTINGS.keepDomMessages = effective;
+            CGO.STATE.effectiveKeepDomMessages = effective;
             scheduleDomTrim(0);
           })
           .catch((e) => {

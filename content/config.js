@@ -33,6 +33,7 @@
   CGO.STATE = {
     domTrimTimer: null,
     domTrimTicket: 0,
+    effectiveKeepDomMessages: null,
     exportToolbarVisible: false,
 
     conversationHeadMeta: null,
@@ -144,6 +145,7 @@
     CGO.CONFIG.keepDomMessages = normalized.keepDomMessages;
     CGO.CONFIG.debug = normalized.debugEnabled;
     CGO.CONFIG.debugLevel = normalized.debugLevel;
+    CGO.STATE.effectiveKeepDomMessages = normalized.keepDomMessages;
 
     return CGO.SETTINGS;
   }
@@ -189,7 +191,7 @@
     return next;
   }
 
-  CGO.CONVERSATION_OVERRIDE_STORAGE_KEY = "cgo_conversation_overrides";
+  CGO.CONVERSATION_OVERRIDE_STORAGE_KEY = "cgo_conversation_overrides_v2";
   const PROJECT_GUIDE_DISMISSED_STORAGE_KEY = "cgo_project_guide_dismissed";
 
   /**
@@ -390,12 +392,14 @@
    */
   async function postSettingsToPageHook() {
     const keepDomMessages = await getEffectiveKeepDomMessagesForConversation();
+    CGO.STATE.effectiveKeepDomMessages = keepDomMessages;
     window.postMessage(
       {
         source: "CGO_CONTENT",
         type: "CGO_UPDATE_SETTINGS",
         settings: {
           keepDomMessages: keepDomMessages,
+          baseKeepDomMessages: CGO.CONFIG.keepDomMessages,
           autoAdjustEnabled: CGO.SETTINGS.autoAdjustEnabled,
           debugEnabled: CGO.SETTINGS.debugEnabled,
           debugLevel: CGO.SETTINGS.debugLevel,
@@ -406,7 +410,69 @@
   }
 
   /**
-   * Derive a smaller DOM retention budget for large conversations based on conversation stats.
+   * Return the auto-adjust severity level for the computed conversation score.
+   *
+   * @param {number} score - Conversation weight score.
+   * @returns {number} Auto-adjust level from 0 to 3.
+   */
+  function getKeepDomAutoAdjustLevel(score) {
+    if (score >= 5000) return 3;
+    if (score >= 3000) return 2;
+    if (score >= 1000) return 1;
+    return 0;
+  }
+
+  /**
+   * Reduce the keep-dom value in three steps between the user's base value and the fixed floor.
+   *
+   * @param {number} baseKeepDomMessages - User-configured keep-dom count.
+   * @param {number} autoAdjustLevel - Auto-adjust level from 0 to 3.
+   * @returns {{effectiveKeepDomMessages: number, minimumKeepDomMessages: number}} Recommended keep-dom decision.
+   */
+  function getSteppedKeepDomMessages(baseKeepDomMessages, autoAdjustLevel) {
+    const base = Math.max(1, Math.round(Number(baseKeepDomMessages) || 1));
+    const minimumKeepDomMessages = Math.min(base, 25);
+    const span = base - minimumKeepDomMessages;
+    const level = Math.max(0, Math.min(3, Math.round(Number(autoAdjustLevel) || 0)));
+
+    if (level <= 0 || span <= 0) {
+      return {
+        effectiveKeepDomMessages: base,
+        minimumKeepDomMessages,
+      };
+    }
+
+    if (level >= 3) {
+      return {
+        effectiveKeepDomMessages: minimumKeepDomMessages,
+        minimumKeepDomMessages,
+      };
+    }
+
+    return {
+      effectiveKeepDomMessages: Math.max(
+        minimumKeepDomMessages,
+        base - Math.round((span * level) / 3)
+      ),
+      minimumKeepDomMessages,
+    };
+  }
+
+  /**
+   * Return the currently active keep-dom count used by DOM trimming.
+   *
+   * @returns {number} Effective keep-dom count for the current conversation.
+   */
+  function getActiveKeepDomMessages() {
+    const effective = Number(CGO.STATE.effectiveKeepDomMessages);
+    if (Number.isFinite(effective) && effective > 0) {
+      return CGO.clampKeepDomMessages(effective);
+    }
+    return CGO.SETTINGS.keepDomMessages;
+  }
+
+  /**
+   * Derive a smaller DOM retention budget only for very large conversations.
    *
    * @param {?Object} [stats=null] - Conversation metrics such as turn count and media counts.
    * @returns {number} Effective keep-dom value after applying auto-adjust thresholds.
@@ -423,15 +489,24 @@
     
     const score =
       turnCount * 3 +
-      textLength / 2000 +
+      textLength / 3000 +
       imageCount * 8 +
       attachmentCount * 4;
+    const baseKeepDomMessages = CGO.SETTINGS.keepDomMessages;
+    const autoAdjustLevel = getKeepDomAutoAdjustLevel(score);
+    const { effectiveKeepDomMessages, minimumKeepDomMessages } =
+      getSteppedKeepDomMessages(baseKeepDomMessages, autoAdjustLevel);
+
+    CGO.log("[autoAdjust] keep-dom decision", {
+      score,
+      autoAdjustLevel,
+      baseKeepDomMessages,
+      minimumKeepDomMessages,
+      effectiveKeepDomMessages,
+      stats,
+    });
     
-    if (score >= 480) return Math.max(8, Math.min(CGO.SETTINGS.keepDomMessages, 10));
-    if (score >= 220) return Math.max(10, Math.min(CGO.SETTINGS.keepDomMessages, 15));
-    if (score >= 140) return Math.max(12, Math.min(CGO.SETTINGS.keepDomMessages, 25));
-    
-    return CGO.SETTINGS.keepDomMessages;
+    return effectiveKeepDomMessages;
   }
 
   /**
@@ -583,6 +658,7 @@
             version: CGO.PAGE_HOOK_VERSION,
             settings: {
               keepDomMessages: CGO.SETTINGS.keepDomMessages,
+              baseKeepDomMessages: CGO.CONFIG.keepDomMessages,
               autoAdjustEnabled: CGO.SETTINGS.autoAdjustEnabled,
               debugEnabled: CGO.SETTINGS.debugEnabled,
               debugLevel: CGO.SETTINGS.debugLevel,
@@ -847,6 +923,7 @@
   CGO.dismissProjectGuide = dismissProjectGuide;
   CGO.ensurePageHooksInjected = ensurePageHooksInjected;
   CGO.getProjectGuideLevel = getProjectGuideLevel;
+  CGO.getActiveKeepDomMessages = getActiveKeepDomMessages;
   CGO.hash = hash;
   CGO.isProjectGuideDismissed = isProjectGuideDismissed;
   CGO.loadConversationOverride = loadConversationOverride;

@@ -22,6 +22,7 @@
 
   const CONFIG = {
     turnCount: 40,
+    baseTurnCount: 40,
     enablePrune: true,
     debug: false,
     debugLevel: "BASIC",
@@ -292,9 +293,16 @@
     if (data.type === "CGO_INIT_SETTINGS") {
       const settings = data.settings || {};
       const keepDomMessages = Number(settings.keepDomMessages);
+      const baseKeepDomMessages = Number(settings.baseKeepDomMessages);
 
       if (Number.isFinite(keepDomMessages)) {
         CONFIG.turnCount = Math.max(1, Math.round(keepDomMessages));
+      }
+
+      if (Number.isFinite(baseKeepDomMessages)) {
+        CONFIG.baseTurnCount = Math.max(1, Math.round(baseKeepDomMessages));
+      } else {
+        CONFIG.baseTurnCount = CONFIG.turnCount;
       }
 
       CONFIG.autoAdjustEnabled = !!settings.autoAdjustEnabled;
@@ -310,6 +318,7 @@
           secret: PAGE_BRIDGE_SECRET,
           applied: {
             turnCount: CONFIG.turnCount,
+            baseTurnCount: CONFIG.baseTurnCount,
             autoAdjustEnabled: CONFIG.autoAdjustEnabled,
             debugEnabled: CONFIG.debug,
             debugLevel: CONFIG.debugLevel,
@@ -323,9 +332,16 @@
     if (data.type === "CGO_UPDATE_SETTINGS") {
       const settings = data.settings || {};
       const keepDomMessages = Number(settings.keepDomMessages);
+      const baseKeepDomMessages = Number(settings.baseKeepDomMessages);
 
       if (Number.isFinite(keepDomMessages)) {
         CONFIG.turnCount = Math.max(1, Math.round(keepDomMessages));
+      }
+
+      if (Number.isFinite(baseKeepDomMessages)) {
+        CONFIG.baseTurnCount = Math.max(1, Math.round(baseKeepDomMessages));
+      } else {
+        CONFIG.baseTurnCount = CONFIG.turnCount;
       }
 
       if (typeof settings.autoAdjustEnabled === "boolean") {
@@ -340,6 +356,7 @@
 
       log.basic("page-hook settings updated", {
         turnCount: CONFIG.turnCount,
+        baseTurnCount: CONFIG.baseTurnCount,
         autoAdjustEnabled: CONFIG.autoAdjustEnabled,
         debugEnabled: CONFIG.debug,
         debugLevel: CONFIG.debugLevel,
@@ -865,7 +882,71 @@
   }
 
   /**
-   * Adjusts the recommended number of recent conversation messages to retain based on conversation statistics.
+   * Compute the heuristic score used by keep-dom auto-adjustment.
+   *
+   * @param {{turnCount?: number, textLength?: number, imageCount?: number, attachmentCount?: number}} stats - Conversation statistics.
+   * @returns {number} Auto-adjust score.
+   */
+  function getAutoAdjustScore(stats) {
+    return (
+      Number(stats?.turnCount || 0) * 3 +
+      Number(stats?.textLength || 0) / 3000 +
+      Number(stats?.imageCount || 0) * 8 +
+      Number(stats?.attachmentCount || 0) * 4
+    );
+  }
+
+  /**
+   * Return the auto-adjust severity level for the computed conversation score.
+   *
+   * @param {number} score - Conversation weight score.
+   * @returns {number} Auto-adjust level from 0 to 3.
+   */
+  function getKeepDomAutoAdjustLevel(score) {
+    if (score >= 5000) return 3;
+    if (score >= 3000) return 2;
+    if (score >= 1000) return 1;
+    return 0;
+  }
+
+  /**
+   * Reduce the keep-dom value in three steps between the user's base value and the fixed floor.
+   *
+   * @param {number} baseKeepDomMessages - User-configured keep-dom count.
+   * @param {number} autoAdjustLevel - Auto-adjust level from 0 to 3.
+   * @returns {{effectiveKeepDomMessages: number, minimumKeepDomMessages: number}} Recommended keep-dom decision.
+   */
+  function getSteppedKeepDomMessages(baseKeepDomMessages, autoAdjustLevel) {
+    const base = Math.max(1, Math.round(Number(baseKeepDomMessages) || 1));
+    const minimumKeepDomMessages = Math.min(base, 25);
+    const span = base - minimumKeepDomMessages;
+    const level = Math.max(0, Math.min(3, Math.round(Number(autoAdjustLevel) || 0)));
+
+    if (level <= 0 || span <= 0) {
+      return {
+        effectiveKeepDomMessages: base,
+        minimumKeepDomMessages,
+      };
+    }
+
+    if (level >= 3) {
+      return {
+        effectiveKeepDomMessages: minimumKeepDomMessages,
+        minimumKeepDomMessages,
+      };
+    }
+
+    return {
+      effectiveKeepDomMessages: Math.max(
+        minimumKeepDomMessages,
+        base - Math.round((span * level) / 3)
+      ),
+      minimumKeepDomMessages,
+    };
+  }
+
+  /**
+   * Adjusts the recommended number of recent conversation messages to retain for very large conversations.
    *
    * `@param` {number} baseKeepDomMessages - Preferred base keep count; when falsy the function falls back to CONFIG.turnCount or 15.
    * `@param` {{turnCount?: number, textLength?: number, imageCount?: number, attachmentCount?: number}} stats - Conversation statistics used to compute a heuristic score: `turnCount`, cumulative `textLength`, number of `imageCount`, and `attachmentCount`.
@@ -873,18 +954,10 @@
    */
   function getRecommendedKeepDomMessages(baseKeepDomMessages, stats) {
     const base = Math.max(1, Number(baseKeepDomMessages || CONFIG.turnCount || 15));
+    const score = getAutoAdjustScore(stats);
+    const autoAdjustLevel = getKeepDomAutoAdjustLevel(score);
 
-    const score =
-      Number(stats?.turnCount || 0) * 3 +
-      Number(stats?.textLength || 0) / 2000 +
-      Number(stats?.imageCount || 0) * 8 +
-      Number(stats?.attachmentCount || 0) * 4;
-
-    if (score >= 220) return Math.max(8, Math.min(base, 10));
-    if (score >= 140) return Math.max(10, Math.min(base, 15));
-    if (score >= 80) return Math.max(12, Math.min(base, 25));
-
-    return base;
+    return getSteppedKeepDomMessages(base, autoAdjustLevel).effectiveKeepDomMessages;
   }
 
   /**
@@ -894,8 +967,11 @@
    * @param {number} baseKeepDomMessages - The original configured number of DOM messages to keep.
    * @param {number} effectiveKeepDomMessages - The adjusted number of DOM messages recommended after analysis.
    * @param {Object} stats - Aggregate conversation statistics used to compute the adjustment (e.g., turnCount, textLength, imageCount, attachmentCount).
+   * @param {number} autoAdjustScore - Heuristic score used to compute the adjustment.
+   * @param {number} autoAdjustLevel - Severity level used to step down the keep-dom count.
+   * @param {number} minimumKeepDomMessages - Fixed floor for auto-adjusted keep-dom count, capped by the user's base value.
    */
-  function postAutoAdjustResult(conversationId, projectName, baseKeepDomMessages, effectiveKeepDomMessages, stats) {
+  function postAutoAdjustResult(conversationId, projectName, baseKeepDomMessages, effectiveKeepDomMessages, stats, autoAdjustScore, autoAdjustLevel, minimumKeepDomMessages) {
     window.postMessage(
       {
         source: "cgo-prune-runtime",
@@ -904,6 +980,9 @@
         projectName,
         baseKeepDomMessages,
         effectiveKeepDomMessages,
+        autoAdjustScore,
+        autoAdjustLevel,
+        minimumKeepDomMessages,
         stats,
       },
       "*"
@@ -5405,12 +5484,27 @@
     saveFullConversationToCache(data);
 
     const stats = buildConversationStats(data);
-    const baseKeepDomMessages = CONFIG.turnCount;
+    const baseKeepDomMessages = CONFIG.baseTurnCount || CONFIG.turnCount;
+    const autoAdjustScore = getAutoAdjustScore(stats);
+    const autoAdjustLevel = getKeepDomAutoAdjustLevel(autoAdjustScore);
+    const { minimumKeepDomMessages } =
+      getSteppedKeepDomMessages(baseKeepDomMessages, autoAdjustLevel);
 
     const effectiveKeepDomMessages =
       CONFIG.autoAdjustEnabled && baseKeepDomMessages > 10
         ? getRecommendedKeepDomMessages(baseKeepDomMessages, stats)
         : baseKeepDomMessages;
+
+    log.basic("[autoAdjust] keep-dom decision", {
+      conversationId: data.conversation_id || "",
+      score: autoAdjustScore,
+      autoAdjustLevel,
+      baseKeepDomMessages,
+      minimumKeepDomMessages,
+      effectiveKeepDomMessages,
+      autoAdjustEnabled: CONFIG.autoAdjustEnabled,
+      stats,
+    });
 
     const summary = analyzeConversation(data, effectiveKeepDomMessages);
     const projectName = PROJECT_NAME_BY_CONVERSATION_ID.get(data?.conversation_id || "") ||
@@ -5426,7 +5520,10 @@
       projectName,
       baseKeepDomMessages,
       effectiveKeepDomMessages,
-      stats
+      stats,
+      autoAdjustScore,
+      autoAdjustLevel,
+      minimumKeepDomMessages
     );
 
     if (!CONFIG.enablePrune) {
