@@ -1070,7 +1070,7 @@
 
   .cgo-dom-fixed-trim-summary {
     position: fixed;
-    top: calc(env(safe-area-inset-top, 0px) + 10px);
+    top: calc(env(safe-area-inset-top, 0px) + 48px);
     left: var(--cgo-fixed-trim-left, 50%);
     transform: var(--cgo-fixed-trim-transform, translateX(-50%));
     z-index: 9998;
