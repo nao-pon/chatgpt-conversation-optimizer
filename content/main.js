@@ -30,7 +30,7 @@
       CGO.startHeaderButtonObserver();
       CGO.observeRouteChanges();
       document.addEventListener("click", () => {
-        CGO.closeSettingsPanel?.();
+        void CGO.closeSettingsPanel?.();
       });
       CGO.log("content initialized");
     });

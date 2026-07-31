@@ -193,7 +193,6 @@
     return next;
   }
 
-  CGO.CONVERSATION_OVERRIDE_STORAGE_KEY = "cgo_conversation_overrides_v2";
   const PROJECT_GUIDE_DISMISSED_STORAGE_KEY = "cgo_project_guide_dismissed";
 
   /**
@@ -287,113 +286,27 @@
   }
  
   /**
-   * Read saved conversation-specific DOM retention overrides from local storage.
-   *
-   * @returns {Promise<Object>} Map of conversation ids to override objects.
-   */
-  async function loadConversationOverrides() {
-    try {
-      const stored = await chrome.storage.local.get(CGO.CONVERSATION_OVERRIDE_STORAGE_KEY);
-      return stored?.[CGO.CONVERSATION_OVERRIDE_STORAGE_KEY] || {};
-    } catch (error) {
-      CGO.log("[warn] loadConversationOverrides failed", String(error));
-      return {};
-    }
-  }
-
-  /**
-   * Load the DOM-retention override for a specific conversation.
-   *
-   * @param {string} conversationId - Conversation identifier.
-   * @returns {Promise<?Object>} Saved override record or `null`.
-   */
-  async function loadConversationOverride(conversationId) {
-    if (!conversationId) return null;
-
-    const map = await loadConversationOverrides();
-    return map?.[conversationId] || null;
-  }
-
-  /**
-   * Save a conversation-specific keep-dom override.
-   *
-   * @param {string} conversationId - Conversation identifier.
-   * @param {*} keepDomMessages - Desired keep-dom value.
-   * @returns {Promise<?Object>} Saved override record or `null`.
-   */
-  async function saveConversationOverride(conversationId, keepDomMessages) {
-    if (!conversationId) return null;
-
-    const map = await loadConversationOverrides();
-
-    map[conversationId] = {
-      keepDomMessages: CGO.clampKeepDomMessages(keepDomMessages),
-      updatedAt: Date.now(),
-    };
-
-    await chrome.storage.local.set({
-      [CGO.CONVERSATION_OVERRIDE_STORAGE_KEY]: map,
-    });
-
-    return map[conversationId];
-  }
-
-  /**
-   * Delete the saved keep-dom override for a conversation.
-   *
-   * @param {string} conversationId - Conversation identifier.
-   * @returns {Promise<void>}
-   */
-  async function clearConversationOverride(conversationId) {
-    if (!conversationId) return;
-
-    const map = await loadConversationOverrides();
-    delete map[conversationId];
-
-    await chrome.storage.local.set({
-      [CGO.CONVERSATION_OVERRIDE_STORAGE_KEY]: map,
-    });
-  }
-
-  /**
    * Compute the effective DOM retention count for the active conversation.
    *
-   * Conversation-specific overrides take precedence, followed by auto-adjusted values from
-   * conversation stats, and finally the global setting.
+   * Auto-adjusted values are derived from the user's base setting and optional conversation stats.
    *
    * @param {?string} [conversationId=null] - Explicit conversation id when already known.
    * @param {?Object} [stats=null] - Optional conversation statistics used for auto-adjust.
    * @returns {Promise<number>} Effective number of conversation turns to keep in the DOM.
    */
   async function getEffectiveKeepDomMessagesForConversation(conversationId = null, stats = null) {
-    if (!CGO.SETTINGS.autoAdjustEnabled) {
-      return CGO.SETTINGS.keepDomMessages;
-    }
-
-    if (!conversationId) {
-      conversationId = CGO.getConversationIdFromLocation()
-    }
-
-    if (conversationId) {
-      const override = await CGO.loadConversationOverride(conversationId);
-      if (override?.keepDomMessages) {
-        return CGO.clampKeepDomMessages(override.keepDomMessages);
-      }
-    }
-    if (stats) {
-      return getEffectiveKeepDomMessages(stats);
-    } else {
-      return CGO.SETTINGS.keepDomMessages;
-    }
+    void conversationId;
+    return getEffectiveKeepDomMessages(stats);
   }
 
   /**
    * Post the current effective settings to the injected page hook.
    *
+   * @param {?Object} [stats=null] - Optional current conversation stats for an immediate effective value.
    * @returns {Promise<void>}
    */
-  async function postSettingsToPageHook() {
-    const keepDomMessages = await getEffectiveKeepDomMessagesForConversation();
+  async function postSettingsToPageHook(stats = null) {
+    const keepDomMessages = await getEffectiveKeepDomMessagesForConversation(null, stats);
     CGO.STATE.effectiveKeepDomMessages = keepDomMessages;
     window.postMessage(
       {
@@ -480,8 +393,25 @@
    * @returns {number} Effective keep-dom value after applying auto-adjust thresholds.
    */
   function getEffectiveKeepDomMessages(stats = null) {
-    if (!CGO.SETTINGS.autoAdjustEnabled || !stats) {
-      return CGO.SETTINGS.keepDomMessages;
+    return getEffectiveKeepDomMessagesForSettings(CGO.SETTINGS, stats, true);
+  }
+
+  /**
+   * Compute the effective keep-dom count for a candidate settings object.
+   *
+   * @param {Object} [settings={}] - Candidate settings, usually from the settings panel.
+   * @param {?Object} [stats=null] - Conversation metrics used for auto-adjust.
+   * @param {boolean} [logDecision=false] - Whether to emit a debug decision log.
+   * @returns {number} Effective keep-dom value.
+   */
+  function getEffectiveKeepDomMessagesForSettings(settings = {}, stats = null, logDecision = false) {
+    const normalized = normalizeSettings({
+      ...CGO.SETTINGS,
+      ...settings,
+    });
+
+    if (!normalized.autoAdjustEnabled || !stats) {
+      return normalized.keepDomMessages;
     }
     
     const turnCount = Number(stats.turnCount || 0);
@@ -494,19 +424,21 @@
       textLength / 3000 +
       imageCount * 8 +
       attachmentCount * 4;
-    const baseKeepDomMessages = CGO.SETTINGS.keepDomMessages;
+    const baseKeepDomMessages = normalized.keepDomMessages;
     const autoAdjustLevel = getKeepDomAutoAdjustLevel(score);
     const { effectiveKeepDomMessages, minimumKeepDomMessages } =
       getSteppedKeepDomMessages(baseKeepDomMessages, autoAdjustLevel);
 
-    CGO.log("[autoAdjust] keep-dom decision", {
-      score,
-      autoAdjustLevel,
-      baseKeepDomMessages,
-      minimumKeepDomMessages,
-      effectiveKeepDomMessages,
-      stats,
-    });
+    if (logDecision) {
+      CGO.log("[autoAdjust] keep-dom decision", {
+        score,
+        autoAdjustLevel,
+        baseKeepDomMessages,
+        minimumKeepDomMessages,
+        effectiveKeepDomMessages,
+        stats,
+      });
+    }
     
     return effectiveKeepDomMessages;
   }
@@ -921,21 +853,21 @@
   }
 
   CGO.clampKeepDomMessages = clampKeepDomMessages;
-  CGO.clearConversationOverride = clearConversationOverride;
   CGO.clearProjectGuideDismissed = clearProjectGuideDismissed;
   CGO.dismissProjectGuide = dismissProjectGuide;
   CGO.ensurePageHooksInjected = ensurePageHooksInjected;
+  CGO.getEffectiveKeepDomMessages = getEffectiveKeepDomMessages;
+  CGO.getEffectiveKeepDomMessagesForConversation = getEffectiveKeepDomMessagesForConversation;
+  CGO.getEffectiveKeepDomMessagesForSettings = getEffectiveKeepDomMessagesForSettings;
   CGO.getProjectGuideLevel = getProjectGuideLevel;
   CGO.getActiveKeepDomMessages = getActiveKeepDomMessages;
   CGO.hash = hash;
   CGO.isProjectGuideDismissed = isProjectGuideDismissed;
-  CGO.loadConversationOverride = loadConversationOverride;
   CGO.loadSettings = loadSettings;
   CGO.log = log;
   CGO.matchesGeneratedImagePrefix = matchesGeneratedImagePrefix;
   CGO.observeRouteChanges = observeRouteChanges;
   CGO.postSettingsToPageHook = postSettingsToPageHook;
-  CGO.saveConversationOverride = saveConversationOverride;
   CGO.saveSettings = saveSettings;
   CGO.t = t;
   CGO.unescapeHtml = unescapeHtml;

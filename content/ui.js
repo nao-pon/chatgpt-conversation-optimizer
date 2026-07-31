@@ -236,16 +236,25 @@
     if (panel.hidden) {
       openSettingsPanel(button);
     } else {
-      panel.hidden = true;
+      void closeSettingsPanel();
     }
   }
 
   /**
    * Hide the settings popover if it is currently mounted.
+   *
+   * @param {{save?: boolean}} [options={}] - Close behavior options.
+   * @returns {Promise<void>} Resolves after any close-time save completes.
    */
-  function closeSettingsPanel() {
+  async function closeSettingsPanel(options = {}) {
     const panel = document.getElementById("cgo-settings-panel");
-    if (!panel) return;
+    if (!panel || panel.hidden) return;
+
+    if (options.save !== false && typeof panel.__cgoSaveSettings === "function") {
+      const saved = await panel.__cgoSaveSettings();
+      if (!saved) return;
+    }
+
     panel.hidden = true;
   }
 
@@ -378,10 +387,8 @@
      * Update the auto-adjust label text to reflect the current effective keepDomMessages value.
      *
      * If the auto-adjust toggle is off, the label is set to the configured "disabled" text.
-     * If the toggle is on, the function determines the effective value (conversation-specific override if available,
-     * otherwise CGO.SETTINGS or CGO.CONFIG with a fallback of 40), clamps it to valid bounds, and sets the label to the
-     * configured "enabled" text with that value. On error, a warning is logged and the label is set using the
-     * fallback value.
+     * If the toggle is on, the function previews the effective value from the current panel values
+     * and the latest known conversation stats.
      */
     async function updateAutoAdjustLabel() {
       if (!autoAdjustLabel) return;
@@ -394,16 +401,7 @@
       }
 
       try {
-        const conversationId = CGO.getConversationIdFromLocation?.() || "";
-        let effective = CGO.SETTINGS.keepDomMessages ?? CGO.CONFIG.keepDomMessages ?? 40;
-
-        if (conversationId) {
-          const override = await CGO.loadConversationOverride(conversationId);
-
-          if (override?.keepDomMessages) {
-            effective = CGO.clampKeepDomMessages(override.keepDomMessages);
-          }
-        }
+        const effective = getPanelEffectiveKeepDomMessages();
 
         autoAdjustLabel.textContent = CGO.t("auto_adjust_enabled_label", String(effective));
       } catch (error) {
@@ -411,6 +409,38 @@
         autoAdjustLabel.textContent =
           CGO.t("auto_adjust_enabled_label", String(CGO.SETTINGS.keepDomMessages ?? CGO.CONFIG.keepDomMessages ?? 40));
       }
+    }
+
+    function getCurrentConversationStats() {
+      const conversationId = CGO.getConversationIdFromLocation?.() || "";
+      const projectGuide = CGO.STATE.projectGuide || {};
+
+      if (
+        projectGuide.conversationId &&
+        conversationId &&
+        projectGuide.conversationId !== conversationId
+      ) {
+        return null;
+      }
+
+      return projectGuide.stats || null;
+    }
+
+    function getPanelCandidateSettings() {
+      return {
+        keepDomMessages: keepInput.value,
+        autoAdjustEnabled: !!autoAdjustInput.checked,
+        htmlDownloadIncludeImages: htmlImagesInput.checked,
+        debugEnabled: debugEnabledInput.checked,
+        debugLevel: debugLevelInput.value,
+      };
+    }
+
+    function getPanelEffectiveKeepDomMessages() {
+      return CGO.getEffectiveKeepDomMessagesForSettings?.(
+        getPanelCandidateSettings(),
+        getCurrentConversationStats()
+      ) ?? CGO.clampKeepDomMessages(keepInput.value);
     }
 
     function syncDebugLevelEnabledState() {
@@ -435,46 +465,71 @@
 
     debugEnabledInput.addEventListener("change", syncDebugLevelEnabledState);
 
-    saveBtn.addEventListener("click", async () => {
-      try {
-        const conversationId = CGO.getConversationIdFromLocation?.() || "";
-        const wasAutoAdjustEnabled = !!CGO.SETTINGS.autoAdjustEnabled;
-        const nextAutoAdjustEnabled = !!autoAdjustInput.checked;
+    async function savePanelSettings() {
+      if (panel.__cgoSavePromise) {
+        return panel.__cgoSavePromise;
+      }
 
-        await CGO.saveSettings({
-          keepDomMessages: keepInput.value,
-          autoAdjustEnabled: nextAutoAdjustEnabled,
-          htmlDownloadIncludeImages: htmlImagesInput.checked,
-          debugEnabled: debugEnabledInput.checked,
-          debugLevel: debugLevelInput.value,
-        });
+      panel.__cgoSavePromise = (async () => {
+        const stats = getCurrentConversationStats();
+        const previousEffective =
+          CGO.getEffectiveKeepDomMessagesForSettings?.(CGO.SETTINGS, stats) ??
+          CGO.getActiveKeepDomMessages?.() ??
+          CGO.SETTINGS.keepDomMessages;
+        const nextSettings = getPanelCandidateSettings();
+        const nextEffective =
+          CGO.getEffectiveKeepDomMessagesForSettings?.(nextSettings, stats) ??
+          CGO.clampKeepDomMessages(nextSettings.keepDomMessages);
 
-        if (wasAutoAdjustEnabled && !nextAutoAdjustEnabled && conversationId) {
-          await CGO.clearConversationOverride(conversationId);
-          CGO.log("[autoAdjust] cleared conversation override", { conversationId });
+        await CGO.saveSettings(nextSettings);
+        await CGO.postSettingsToPageHook?.(stats);
+
+        if (nextEffective > 0) {
+          CGO.STATE.effectiveKeepDomMessages = nextEffective;
         }
 
-        await CGO.postSettingsToPageHook?.();
+        if (nextEffective < previousEffective) {
+          CGO.scheduleDomTrim?.(0);
+        }
+
         await syncFromSettings();
-        CGO.closeSettingsPanel();
         CGO.log("settings saved", { ...CGO.SETTINGS });
-      } catch (error) {
-        CGO.log("[error] saveSettings failed", String(error));
+        return true;
+      })()
+        .catch((error) => {
+          CGO.log("[error] saveSettings failed", String(error));
+          return false;
+        })
+        .finally(() => {
+          panel.__cgoSavePromise = null;
+        });
+
+      return panel.__cgoSavePromise;
+    }
+
+    saveBtn.addEventListener("click", async () => {
+      const saved = await savePanelSettings();
+      if (saved) {
+        void CGO.closeSettingsPanel?.({ save: false });
       }
     });
 
     autoAdjustInput.addEventListener("change", () => {
       void updateAutoAdjustLabel();
     });
+    keepInput.addEventListener("input", () => {
+      void updateAutoAdjustLabel();
+    });
 
     cancelBtn.addEventListener("click", () => {
       syncFromSettings();
-      CGO.closeSettingsPanel();
+      void CGO.closeSettingsPanel?.({ save: false });
     });
 
     panel.addEventListener("click", (event) => {
       event.stopPropagation();
     });
+    panel.__cgoSaveSettings = savePanelSettings;
     panel.__cgoSyncFromSettings = syncFromSettings;
 
     syncFromSettings();
@@ -506,6 +561,7 @@
   function openSettingsPanel(buttonEl) {
     const panel = ensureSettingsPanel();
     if (!panel) return;
+    void panel.__cgoSyncFromSettings?.();
 
     const rect = buttonEl.getBoundingClientRect();
     const panelWidth = 200;

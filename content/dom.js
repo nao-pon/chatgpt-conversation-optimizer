@@ -1028,24 +1028,15 @@
 
       CGO.log("[autoAdjustResult]", data);
 
-      if (
-        CGO.SETTINGS.autoAdjustEnabled &&
-        conversationId &&
-        effective > 0 &&
-        effective < CGO.SETTINGS.keepDomMessages
-      ) {
-        CGO.saveConversationOverride(conversationId, effective)
-          .then(() => {
-            CGO.log("[autoAdjustResult] saved", {
-              conversationId,
-              effective,
-            });
-            CGO.STATE.effectiveKeepDomMessages = effective;
-            scheduleDomTrim(0);
-          })
-          .catch((e) => {
-            CGO.log("[warn] saveConversationOverride failed", String(e));
-          });
+      if (CGO.SETTINGS.autoAdjustEnabled && effective > 0) {
+        const previousEffective = CGO.getActiveKeepDomMessages?.() || CGO.SETTINGS.keepDomMessages;
+        CGO.STATE.effectiveKeepDomMessages = CGO.clampKeepDomMessages(effective);
+
+        if (CGO.STATE.effectiveKeepDomMessages < previousEffective) {
+          scheduleDomTrim(0);
+        }
+      } else {
+        CGO.STATE.effectiveKeepDomMessages = CGO.SETTINGS.keepDomMessages;
       }
 
       CGO.STATE.projectGuide = {
@@ -1057,6 +1048,10 @@
 
       void CGO.updateProjectGuideVisibility?.();
       void CGO.updateProjectGuideAlertVisibility?.();
+      const panel = document.getElementById("cgo-settings-panel");
+      if (panel && typeof panel.__cgoSyncFromSettings === "function") {
+        void panel.__cgoSyncFromSettings();
+      }
 
       if (shouldTryUnlockForConversation(conversationId)) {
         scheduleVoiceSyncCheck(conversationId, 0);
@@ -1143,4 +1138,5 @@
   CGO.handleConversationRouteChanged = handleConversationRouteChanged;
   CGO.requestInitialPruneMetaFromPageHook = requestInitialPruneMetaFromPageHook;
   CGO.resetInitialPruneNoticeState = resetInitialPruneNoticeState;
+  CGO.scheduleDomTrim = scheduleDomTrim;
 })();
