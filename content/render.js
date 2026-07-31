@@ -1657,21 +1657,32 @@
   }
 
   /**
-   * Stores a payload temporarily in chrome.storage.local under a generated token and opens the export viewer page for that token in a new tab.
+   * Store a temporary payload in IndexedDB and open the export viewer page for that token.
    *
-   * The function adds an `exportedAt` timestamp to the stored payload and generates a token used both as the storage key prefix (`cgo_viewer_<token>`) and as a `token` query parameter to viewer.html.
-   * @param {Object} payload - Arbitrary serializable data to make available to the lightweight viewer.
+   * Lightweight viewer payloads are temporary handoff data. They are deleted after 24 hours, and
+   * can optionally be deleted after successful display. The storage layer adds `exportedAt`.
+   *
+   * @param {Object} payload - Serializable data to make available to the lightweight viewer.
+   * @returns {Promise<void>}
    */
   async function openLightweightViewer(payload) {
     const token =
       Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 10);
-    const key = `cgo_viewer_${token}`;
+    const storage = window.CGOViewerStorage;
 
-    await chrome.storage.local.set({
-      [key]: {
-        ...payload,
-        exportedAt: Date.now(),
-      },
+    if (!storage?.saveViewerPayload) {
+      throw new Error("viewer storage is unavailable");
+    }
+
+    try {
+      await storage.cleanupExpiredViewerPayloads?.();
+    } catch (error) {
+      CGO.log("[warn] viewer payload cleanup failed", String(error));
+    }
+
+    await storage.saveViewerPayload(token, {
+      ...payload,
+      deleteAfterRender: CGO.VIEWER_DELETE_AFTER_RENDER === true,
     });
 
     const viewerUrl =

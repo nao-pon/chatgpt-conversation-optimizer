@@ -8,6 +8,14 @@
    * @returns {Promise<void>}
    */
   async function main() {
+    const viewerStorage = window.CGOViewerStorage;
+    viewerStorage?.cleanupExpiredViewerPayloads?.().catch((error) => {
+      CGO.log("[warn] viewer payload cleanup failed", String(error));
+    });
+    viewerStorage?.cleanupLegacyViewerStoragePayloads?.().catch((error) => {
+      CGO.log("[warn] legacy viewer payload cleanup failed", String(error));
+    });
+
     await CGO.loadSettings();
     CGO.observeWindowMessages();
     const ok = await CGO.ensurePageHooksInjected();

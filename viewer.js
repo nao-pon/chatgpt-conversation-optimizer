@@ -755,8 +755,12 @@
   }
 
   /**
-   * Loads the viewer payload stored under `cgo_viewer_<token>` where `token` is taken from the page's query string.
-   * @returns {{payload: any, key: string}} An object containing the payload and storage key.
+   * Load the temporary viewer payload stored in IndexedDB for the query-string token.
+   *
+   * Viewer payloads are temporary handoff data. They are deleted after 24 hours, or after
+   * successful display only when delete-after-render is enabled.
+   *
+   * @returns {Promise<{payload: any, token: string}>} Loaded payload and token.
    * @throws {Error} If the `token` query parameter is missing ("viewer token not found").
    * @throws {Error} If no payload is found for the token ("viewer payload not found").
    */
@@ -764,13 +768,12 @@
     const params = new URLSearchParams(location.search);
     const token = params.get("token");
     if (!token) throw new Error("viewer token not found");
+    if (!window.CGOViewerStorage?.loadViewerPayload) throw new Error("viewer storage not available");
 
-    const key = `cgo_viewer_${token}`;
-    const stored = await chrome.storage.local.get(key);
-    const payload = stored?.[key];
+    const payload = await window.CGOViewerStorage?.loadViewerPayload?.(token);
 
     if (!payload) throw new Error("viewer payload not found");
-    return { payload, key };
+    return { payload, token };
   }
 
   /**
@@ -842,14 +845,13 @@
    * Initialize and render the CGO Viewer page from a stored export payload.
    *
    * Loads the export payload, sets document language/title/meta, renders message HTML into #app,
-   * installs UI handlers, and scrolls to a specific message if requested; deletes the stored payload
-   * only after successful rendering. On failure it renders an error UI and logs the error.
+   * installs UI handlers, and scrolls to a specific message if requested. When the payload opts in
+   * to delete-after-render, deletes the stored payload only after successful rendering.
    */
   async function main() {
-    let storageKey = null;
+    let tokenToDelete = null;
     try {
-      const { payload, key } = await loadPayload();
-      storageKey = key;
+      const { payload, token } = await loadPayload();
 
       document.documentElement.lang = chrome?.i18n?.getUILanguage?.() || document.documentElement.lang || "en";
       document.title = payload.title || t("untitled_conversation") || "CGO Viewer";
@@ -886,9 +888,8 @@
         document.getElementById(makeMessageDomId(payload.messageId))?.scrollIntoView({ block: "start" });
       }
 
-      // Only remove storage after successful render
-      if (storageKey) {
-        await chrome.storage.local.remove(storageKey);
+      if (payload.deleteAfterRender === true) {
+        tokenToDelete = token;
       }
     } catch (error) {
       document.title = "CGO Viewer Error";
@@ -896,6 +897,18 @@
       document.getElementById("app").innerHTML = `<pre>${escapeHtml(String(error?.message || error))}</pre>`;
       console.error(error);
       // Do not remove storage on error, allowing retry
+      return;
+    }
+
+    if (!tokenToDelete) return;
+
+    try {
+      await window.CGOViewerStorage?.deleteViewerPayload?.(tokenToDelete);
+    } catch (error) {
+      console.warn("[viewer] viewer payload delete failed after render", {
+        token: tokenToDelete,
+        error: String(error?.message || error),
+      });
     }
   }
 

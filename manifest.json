@@ -7,6 +7,9 @@
   "permissions": [
     "storage"
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "default_locale": "en",
   "host_permissions": [
     "https://chatgpt.com/*",
@@ -33,6 +36,7 @@
         "vendor/marked.min.js",
         "vendor/purify.min.js",
         "vendor/jszip.min.js",
+        "viewer-storage.js",
         "content/config.js",
         "content/data.js",
         "content/dom.js",
@@ -58,6 +62,7 @@
       "resources": [
         "page-bootstrap.js",
         "page-hook.js",
+        "viewer-storage.js",
         "viewer.html",
         "viewer.js",
         "vendor/marked.min.js",

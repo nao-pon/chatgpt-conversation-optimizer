@@ -7,6 +7,8 @@
 
   CGO.PAGE_HOOK_VERSION = "2";
   CGO.PAGE_MAIN_HOOK_ID = "cgo-page-hook-script";
+  // Keep viewer payloads reloadable for 24 hours unless this hardcoded switch is enabled.
+  CGO.VIEWER_DELETE_AFTER_RENDER = false;
 
   CGO.DETECTION_PATTERNS = {
     ja: {
