@@ -4037,7 +4037,8 @@
    * @param {number|string} [data.file_size_bytes] - Size of the file in bytes.
    *
    * Does nothing if `fileId` or `data` is falsy. Stored entry contains
-   * `downloadUrl`, `fileName`, `mimeType`, `fileSizeBytes` (numeric, defaults to 0), and a `timestamp` (milliseconds).
+   * `downloadUrl`, `fileName`, `mimeType`, `fileSizeBytes` (numeric, defaults to 0), optional
+   * resolve failure fields, and a `timestamp` (milliseconds).
    */
   function saveFileDownloadResultToCache(fileId, conversationId, data, gizmoId = "", extra = {}) {
     if (!fileId || !data) return;
@@ -4047,6 +4048,9 @@
       fileName: typeof data.file_name === "string" ? data.file_name : "",
       mimeType: typeof data.mime_type === "string" ? data.mime_type : "",
       fileSizeBytes: Number(data.file_size_bytes || 0),
+      errorCode: typeof data.error_code === "string" ? data.error_code : "",
+      errorStatus: Number(data.error_status || 0),
+      errorDetail: typeof data.error_detail === "string" ? data.error_detail : "",
       gizmoId: typeof gizmoId === "string" ? gizmoId : "",
       sandboxPath: typeof extra.sandboxPath === "string" ? extra.sandboxPath : "",
       messageId: typeof extra.messageId === "string" ? extra.messageId : "",
@@ -4064,12 +4068,14 @@
       FILE_DOWNLOAD_CACHE_BY_SANDBOX_PATH.set(`${conversationId || ""}:${entry.sandboxPath}`, entry);
     }
 
-    log.stream("cached file download url", {
+    log.stream("cached file download resolve", {
       fileId,
       conversationId: conversationId || "",
       hasConversationId: !!conversationId,
       hasGizmoId: !!gizmoId,
       hasSignature: /[?&]sig=/.test(entry.downloadUrl),
+      errorCode: entry.errorCode,
+      errorStatus: entry.errorStatus,
     });
   }
 
@@ -5899,6 +5905,22 @@
           data: cached ? structuredClone(cached) : null,
         },
         "*"
+      );
+    } else if (data.type === "CGO_FILE_DOWNLOAD_CACHE_SAVE") {
+      // Authenticate request
+      if (data.secret !== PAGE_BRIDGE_SECRET) {
+        return; // Ignore unauthenticated requests
+      }
+
+      saveFileDownloadResultToCache(
+        data.fileId || "",
+        data.conversationId || "",
+        data.data || {},
+        data.gizmoId || "",
+        {
+          sandboxPath: data.sandboxPath || "",
+          messageId: data.messageId || "",
+        }
       );
     }
   });

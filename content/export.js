@@ -198,6 +198,10 @@
             image.fileSizeBytes = Number(cached.fileSizeBytes || 0) || image.fileSizeBytes || 0;
             image.mimeType = image.mimeType || cached.mimeType || "";
             await applyFileSimpleMetadataToImage(image, authorization);
+          } else if (getCachedDownloadResolveSkipReason(cached)) {
+            image.unresolved = true;
+            image.skipReason = getCachedDownloadResolveSkipReason(cached);
+            image.source = `${image.source || "file-id"}+download-cache`;
           } else {
             // 2) 無ければ API
             const downloadUrl = includeImages ? await CGO.resolveDownloadUrlFromFileId(
@@ -223,6 +227,7 @@
             error: String(error),
           });
           image.unresolved = true;
+          image.skipReason = CGO.classifyFetchError(error);
         }
 
         done += 1;
@@ -291,6 +296,10 @@
             attachment.kind = CGO.guessAttachmentKind(attachment.name, attachment.mimeType);
             attachment.source = `${attachment.source || "file-id"}+download-cache`;
             await applyFileSimpleMetadataToAttachment(attachment, authorization);
+          } else if (getCachedDownloadResolveSkipReason(cached)) {
+            attachment.unresolved = true;
+            attachment.skipReason = getCachedDownloadResolveSkipReason(cached);
+            attachment.source = `${attachment.source || "file-id"}+download-cache`;
           } else {
             let downloadUrl = "";
             if (attachment.isSandboxArtifact && attachment.sandboxPath) {
@@ -389,6 +398,17 @@
         "*"
       );
     });
+  }
+
+  /**
+   * Return the skip reason represented by a cached failed download resolution.
+   *
+   * @param {Object} cached - Cached file-download entry.
+   * @returns {string} Export skip reason, or an empty string for usable entries.
+   */
+  function getCachedDownloadResolveSkipReason(cached) {
+    if (!cached || cached.downloadUrl) return "";
+    return typeof cached.errorCode === "string" ? cached.errorCode : "";
   }
 
   /**

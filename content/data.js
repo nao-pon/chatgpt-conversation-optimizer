@@ -2,6 +2,8 @@
   if (globalThis.__CGO_SKIP__) return;
   const CGO = (globalThis.__CGO ||= {});
   const FILE_SIMPLE_METADATA_CACHE = new Map();
+  const FILE_DOWNLOAD_RESOLVE_CACHE = new Map();
+  const SANDBOX_DOWNLOAD_RESOLVE_CACHE = new Map();
   const ENABLE_CONVERSATION_API_FALLBACK = true;
 
   /**
@@ -28,6 +30,106 @@
     if (hasUrlSignature(first)) return first;
     if (hasUrlSignature(second)) return second;
     return first || second;
+  }
+
+  /**
+   * Build the cache key used for resolved ChatGPT file download URLs.
+   *
+   * @param {string} fileId - File id.
+   * @param {string} conversationId - Conversation id.
+   * @returns {string} Cache key.
+   */
+  function getFileDownloadResolveCacheKey(fileId, conversationId) {
+    return `${conversationId || ""}:${fileId || ""}`;
+  }
+
+  /**
+   * Build the cache key used for resolved interpreter sandbox download URLs.
+   *
+   * @param {string} conversationId - Conversation id.
+   * @param {string} messageId - Message id.
+   * @param {string} sandboxPath - Sandbox file path.
+   * @returns {string} Cache key.
+   */
+  function getSandboxDownloadResolveCacheKey(conversationId, messageId, sandboxPath) {
+    return `${conversationId || ""}:${messageId || ""}:${sandboxPath || ""}`;
+  }
+
+  /**
+   * Save a file-download resolve result in the page hook cache.
+   *
+   * @param {Object} options - Cache save options.
+   * @param {string} options.fileId - File id.
+   * @param {string} options.conversationId - Conversation id.
+   * @param {Object} options.data - Raw download API response or normalized failure.
+   * @param {string} [options.gizmoId=""] - Gizmo/project id.
+   * @param {string} [options.sandboxPath=""] - Sandbox artifact path.
+   * @param {string} [options.messageId=""] - Sandbox owner message id.
+   * @returns {void}
+   */
+  function saveFileDownloadResolveToPageCache({
+    fileId,
+    conversationId,
+    data,
+    gizmoId = "",
+    sandboxPath = "",
+    messageId = "",
+  }) {
+    if (!fileId || !data) return;
+
+    window.postMessage(
+      {
+        type: "CGO_FILE_DOWNLOAD_CACHE_SAVE",
+        fileId,
+        conversationId,
+        data,
+        gizmoId,
+        sandboxPath,
+        messageId,
+        secret: window.__CGO_BRIDGE_SECRET__ || "",
+      },
+      "*"
+    );
+  }
+
+  /**
+   * Return true when a failed resolve should suppress repeated attempts in this page session.
+   *
+   * @param {Error} error - Resolve failure.
+   * @returns {boolean} True for unavailable resources worth negative-caching.
+   */
+  function isCacheableDownloadResolveError(error) {
+    return Number(error?.status || 0) === 403;
+  }
+
+  /**
+   * Convert a resolve failure into a compact cache payload.
+   *
+   * @param {Error} error - Resolve failure.
+   * @returns {Object} Failure payload for the page cache.
+   */
+  function buildDownloadResolveFailureData(error) {
+    return {
+      download_url: "",
+      error_code: CGO.classifyFetchError(error),
+      error_status: Number(error?.status || 0),
+      error_detail: String(error?.detail || error?.message || ""),
+    };
+  }
+
+  /**
+   * Recreate an Error from a negative cache entry.
+   *
+   * @param {Object} cached - Cached failure entry.
+   * @param {string} [context=""] - Human-readable request context.
+   * @returns {Error} Error carrying cached classification fields.
+   */
+  function createDownloadResolveCachedError(cached, context = "") {
+    const error = new Error(`${context || "Download resolve"} failed from cache`);
+    error.code = cached?.errorCode || "http";
+    error.status = Number(cached?.errorStatus || 0);
+    error.detail = cached?.errorDetail || "";
+    return error;
   }
   /**
    * Request the current conversation payload from the page hook's in-memory cache.
@@ -3696,29 +3798,88 @@
   ) {
     if (!conversationId || !messageId || !sandboxPath) return "";
 
-    const url =
-      `/backend-api/conversation/${encodeURIComponent(conversationId)}` +
-      `/interpreter/download` +
-      `?message_id=${encodeURIComponent(messageId)}` +
-      `&sandbox_path=${encodeURIComponent(sandboxPath.replace(/^sandbox:/, ""))}`;
-
-    const headers = new Headers();
-    if (authorization) {
-      headers.set("authorization", authorization);
+    const cacheKey = getSandboxDownloadResolveCacheKey(conversationId, messageId, sandboxPath);
+    if (SANDBOX_DOWNLOAD_RESOLVE_CACHE.has(cacheKey)) {
+      const cached = SANDBOX_DOWNLOAD_RESOLVE_CACHE.get(cacheKey);
+      CGO.log("[export] sandbox download resolve cache hit", {
+        conversationId,
+        messageId,
+        sandboxPath,
+      });
+      if (!(cached instanceof Promise) && cached?.errorCode) {
+        throw createDownloadResolveCachedError(cached, "Sandbox download resolve");
+      }
+      return cached instanceof Promise ? await cached : cached;
     }
 
-    const res = await fetch(url, {
-      method: "GET",
-      headers,
-      credentials: "include",
-    });
+    const request = (async () => {
+      const url =
+        `/backend-api/conversation/${encodeURIComponent(conversationId)}` +
+        `/interpreter/download` +
+        `?message_id=${encodeURIComponent(messageId)}` +
+        `&sandbox_path=${encodeURIComponent(sandboxPath.replace(/^sandbox:/, ""))}`;
 
-    if (!res.ok) {
-      throw CGO.createHttpError(res, "Sandbox download resolve");
+      const headers = new Headers();
+      if (authorization) {
+        headers.set("authorization", authorization);
+      }
+
+      const res = await fetch(url, {
+        method: "GET",
+        headers,
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        throw CGO.createHttpError(res, "Sandbox download resolve");
+      }
+
+      const data = await res.json();
+      const downloadUrl = typeof data?.download_url === "string" ? data.download_url : "";
+
+      if (downloadUrl) {
+        saveFileDownloadResolveToPageCache({
+          fileId: buildSandboxFileId(messageId, sandboxPath),
+          conversationId,
+          data,
+          sandboxPath,
+          messageId,
+        });
+      }
+
+      return downloadUrl;
+    })();
+
+    SANDBOX_DOWNLOAD_RESOLVE_CACHE.set(cacheKey, request);
+
+    try {
+      const downloadUrl = await request;
+      if (downloadUrl) {
+        SANDBOX_DOWNLOAD_RESOLVE_CACHE.set(cacheKey, downloadUrl);
+      } else {
+        SANDBOX_DOWNLOAD_RESOLVE_CACHE.delete(cacheKey);
+      }
+      return downloadUrl;
+    } catch (error) {
+      if (isCacheableDownloadResolveError(error)) {
+        const failure = buildDownloadResolveFailureData(error);
+        saveFileDownloadResolveToPageCache({
+          fileId: buildSandboxFileId(messageId, sandboxPath),
+          conversationId,
+          data: failure,
+          sandboxPath,
+          messageId,
+        });
+        SANDBOX_DOWNLOAD_RESOLVE_CACHE.set(cacheKey, {
+          errorCode: failure.error_code,
+          errorStatus: failure.error_status,
+          errorDetail: failure.error_detail,
+        });
+      } else {
+        SANDBOX_DOWNLOAD_RESOLVE_CACHE.delete(cacheKey);
+      }
+      throw error;
     }
-
-    const data = await res.json();
-    return typeof data?.download_url === "string" ? data.download_url : "";
   };
 
   /**
@@ -3732,79 +3893,124 @@
   async function resolveDownloadUrlFromFileId(fileId, conversationId, authorization = "") {
     if (!fileId) return "";
 
-    let metadata = null;
-    let useLegacyDownload = false;
+    const cacheKey = getFileDownloadResolveCacheKey(fileId, conversationId);
+    if (FILE_DOWNLOAD_RESOLVE_CACHE.has(cacheKey)) {
+      const cached = FILE_DOWNLOAD_RESOLVE_CACHE.get(cacheKey);
+      CGO.log("[export] files/download resolve cache hit", {
+        fileId,
+        hasConversationId: !!conversationId,
+      });
+      if (!(cached instanceof Promise) && cached?.errorCode) {
+        throw createDownloadResolveCachedError(cached, "files/download resolve");
+      }
+      return cached instanceof Promise ? await cached : cached;
+    }
 
-    try {
-      metadata = await getFileSimpleMetadata(fileId, authorization);
-      useLegacyDownload = !metadata?.gizmo_id;
-    } catch (error) {
-      if (error?.status === 404 || error?.code === "not_found") {
-        useLegacyDownload = true;
-        CGO.log("[export] files/simple unavailable; using legacy download", {
-          fileId,
-          status: error.status,
-          code: CGO.classifyFetchError(error),
-        });
+    const request = (async () => {
+      let metadata = null;
+      let useLegacyDownload = false;
+
+      try {
+        metadata = await getFileSimpleMetadata(fileId, authorization);
+        useLegacyDownload = !metadata?.gizmo_id;
+      } catch (error) {
+        if (error?.status === 404 || error?.code === "not_found") {
+          useLegacyDownload = true;
+          CGO.log("[export] files/simple unavailable; using legacy download", {
+            fileId,
+            status: error.status,
+            code: CGO.classifyFetchError(error),
+          });
+        } else {
+          CGO.log("[warn] files/simple metadata blocking download resolve", {
+            fileId,
+            status: error?.status,
+            code: CGO.classifyFetchError(error),
+            detail: error?.detail,
+          });
+          throw error;
+        }
+      }
+
+      if (useLegacyDownload && !conversationId) return "";
+
+      const params = new URLSearchParams();
+      const gizmoId = String(metadata?.gizmo_id || "");
+
+      if (gizmoId) {
+        params.set("gizmo_id", gizmoId);
+        params.set("post_id", "");
+        params.set("inline", "false");
+        params.set("download_intent", "false");
       } else {
-        CGO.log("[warn] files/simple metadata blocking download resolve", {
+        params.set("conversation_id", conversationId);
+        params.set("inline", "false");
+      }
+
+      const url = `/backend-api/files/download/${encodeURIComponent(fileId)}?${params}`;
+
+      const headers = new Headers();
+      if (authorization) {
+        headers.set("authorization", authorization);
+      }
+
+      CGO.log("[export] files/download resolve start", {
+        fileId,
+        mode: gizmoId ? "gizmo" : "conversation",
+        hasGizmoId: !!gizmoId,
+        isProject: !!metadata?.is_project,
+        isLibraryFile: !!metadata?.is_library_file,
+      });
+
+      const response = await fetch(url, {
+        method: "GET",
+        credentials: "include",
+        headers,
+      });
+
+      const contentType = response.headers.get("content-type") || "";
+      let data = null;
+
+      if (/application\/json/i.test(contentType)) {
+        try {
+          data = await response.json();
+        } catch (_) {
+          data = null;
+        }
+      }
+
+      if (!response.ok) {
+        if (data?.detail === "File not found") {
+          const error = createDetailError("expired", data.detail, "files/download resolve");
+          error.status = response.status;
+          error.contentType = contentType;
+          CGO.log("[warn] files/download resolve failed", {
+            fileId,
+            mode: gizmoId ? "gizmo" : "conversation",
+            status: response.status,
+            code: CGO.classifyFetchError(error),
+            detail: error.detail,
+          });
+          throw error;
+        }
+        const error = CGO.createHttpError(response, "files/download resolve");
+        if (data?.detail) {
+          error.detail = data.detail;
+        }
+        CGO.log("[warn] files/download resolve failed", {
           fileId,
-          status: error?.status,
+          mode: gizmoId ? "gizmo" : "conversation",
+          status: response.status,
           code: CGO.classifyFetchError(error),
-          detail: error?.detail,
+          detail: error.detail,
         });
         throw error;
       }
-    }
 
-    if (useLegacyDownload && !conversationId) return "";
-
-    const params = new URLSearchParams();
-    const gizmoId = String(metadata?.gizmo_id || "");
-
-    if (gizmoId) {
-      params.set("gizmo_id", gizmoId);
-      params.set("post_id", "");
-      params.set("inline", "false");
-      params.set("download_intent", "false");
-    } else {
-      params.set("conversation_id", conversationId);
-      params.set("inline", "false");
-    }
-
-    const url = `/backend-api/files/download/${encodeURIComponent(fileId)}?${params}`;
-
-    const headers = new Headers();
-    if (authorization) {
-      headers.set("authorization", authorization);
-    }
-
-    CGO.log("[export] files/download resolve start", {
-      fileId,
-      mode: gizmoId ? "gizmo" : "conversation",
-      hasGizmoId: !!gizmoId,
-      isProject: !!metadata?.is_project,
-      isLibraryFile: !!metadata?.is_library_file,
-    });
-
-    const response = await fetch(url, {
-      method: "GET",
-      credentials: "include",
-      headers,
-    });
-
-    const contentType = response.headers.get("content-type") || "";
-    let data = null;
-
-    if (/application\/json/i.test(contentType)) {
-      try {
+      if (!data) {
         data = await response.json();
-      } catch (_) {
-        data = null;
       }
-    }
 
-    if (!response.ok) {
       if (data?.detail === "File not found") {
         const error = createDetailError("expired", data.detail, "files/download resolve");
         error.status = response.status;
@@ -3818,70 +4024,76 @@
         });
         throw error;
       }
-      const error = CGO.createHttpError(response, "files/download resolve");
-      if (data?.detail) {
-        error.detail = data.detail;
+
+      if (data?.status && data.status !== "success") {
+        const error = createDetailError("http", data.detail || data.status, "files/download resolve");
+        error.status = response.status;
+        error.contentType = contentType;
+        CGO.log("[warn] files/download resolve failed", {
+          fileId,
+          mode: gizmoId ? "gizmo" : "conversation",
+          status: response.status,
+          apiStatus: data.status,
+          code: CGO.classifyFetchError(error),
+          detail: error.detail,
+        });
+        throw error;
       }
-      CGO.log("[warn] files/download resolve failed", {
+
+      const downloadUrl = typeof data?.download_url === "string" ? data.download_url : "";
+
+      CGO.log("[export] files/download resolve succeeded", {
         fileId,
         mode: gizmoId ? "gizmo" : "conversation",
-        status: response.status,
-        code: CGO.classifyFetchError(error),
-        detail: error.detail,
+        hasDownloadUrl: !!downloadUrl,
+        hasSignature: hasUrlSignature(downloadUrl),
       });
-      throw error;
-    }
 
-    if (!data) {
-      data = await response.json();
-    }
+      if (!downloadUrl) {
+        const error = createDetailError("http", "download_url missing", "files/download resolve");
+        error.status = response.status;
+        error.contentType = contentType;
+        throw error;
+      }
 
-    if (data?.detail === "File not found") {
-      const error = createDetailError("expired", data.detail, "files/download resolve");
-      error.status = response.status;
-      error.contentType = contentType;
-      CGO.log("[warn] files/download resolve failed", {
+      saveFileDownloadResolveToPageCache({
         fileId,
-        mode: gizmoId ? "gizmo" : "conversation",
-        status: response.status,
-        code: CGO.classifyFetchError(error),
-        detail: error.detail,
+        conversationId,
+        data,
+        gizmoId,
       });
+
+      return downloadUrl;
+    })();
+
+    FILE_DOWNLOAD_RESOLVE_CACHE.set(cacheKey, request);
+
+    try {
+      const downloadUrl = await request;
+      if (downloadUrl) {
+        FILE_DOWNLOAD_RESOLVE_CACHE.set(cacheKey, downloadUrl);
+      } else {
+        FILE_DOWNLOAD_RESOLVE_CACHE.delete(cacheKey);
+      }
+      return downloadUrl;
+    } catch (error) {
+      if (isCacheableDownloadResolveError(error)) {
+        const failure = buildDownloadResolveFailureData(error);
+        saveFileDownloadResolveToPageCache({
+          fileId,
+          conversationId,
+          data: failure,
+        });
+        FILE_DOWNLOAD_RESOLVE_CACHE.set(cacheKey, {
+          errorCode: failure.error_code,
+          errorStatus: failure.error_status,
+          errorDetail: failure.error_detail,
+        });
+      } else {
+        FILE_DOWNLOAD_RESOLVE_CACHE.delete(cacheKey);
+      }
       throw error;
     }
-
-    if (data?.status && data.status !== "success") {
-      const error = createDetailError("http", data.detail || data.status, "files/download resolve");
-      error.status = response.status;
-      error.contentType = contentType;
-      CGO.log("[warn] files/download resolve failed", {
-        fileId,
-        mode: gizmoId ? "gizmo" : "conversation",
-        status: response.status,
-        apiStatus: data.status,
-        code: CGO.classifyFetchError(error),
-        detail: error.detail,
-      });
-      throw error;
-    }
-
-    const downloadUrl = typeof data?.download_url === "string" ? data.download_url : "";
-
-    CGO.log("[export] files/download resolve succeeded", {
-      fileId,
-      mode: gizmoId ? "gizmo" : "conversation",
-      hasDownloadUrl: !!downloadUrl,
-      hasSignature: hasUrlSignature(downloadUrl),
-    });
-
-    if (!downloadUrl) {
-      const error = createDetailError("http", "download_url missing", "files/download resolve");
-      error.status = response.status;
-      error.contentType = contentType;
-      throw error;
-    }
-
-    return downloadUrl;
   }
 
   CGO.buildExportChain = buildExportChain;
