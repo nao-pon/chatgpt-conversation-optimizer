@@ -1658,10 +1658,21 @@
     );
 
     const projectName = (conversationData?.project_name || "").trim() || fallbackProjectName;
+    const projectGizmoId =
+      CGO.getProjectGizmoIdFromLocation?.() ||
+      String(conversationData?.gizmo_id || conversationData?.conversation_template_id || "").trim() ||
+      "";
 
     const title = projectName
       ? `${projectName} / ${conversationTitle}`
       : conversationTitle;
+    const webUrl = CGO.buildChatgptWebConversationUrl?.(
+      conversationId,
+      projectGizmoId,
+      /^https:\/\/(chatgpt\.com|chat\.openai\.com)$/i.test(location.origin)
+        ? location.origin
+        : "https://chatgpt.com"
+    ) || "";
 
     const htmlFileBase = sanitizeZipFileName(conversationTitle || "ChatGPT Conversation");
     const projectFolderName = projectName
@@ -1720,6 +1731,8 @@
         includeImages,
         projectName,
         conversationTitle,
+        projectGizmoId,
+        webUrl,
         highlightAssets: {
           js: highlightJsContent,
           css: highlightCssContent,

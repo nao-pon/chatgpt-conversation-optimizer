@@ -412,6 +412,49 @@
   }
 
   /**
+   * Extract the project/gizmo route segment from ChatGPT project conversation URLs.
+   *
+   * Project chats currently use /g/<gizmo-id>/c/<conversation-id>. The helper keeps
+   * the route segment generic so it also works if ChatGPT uses another gizmo id prefix.
+   *
+   * @returns {string} Project/gizmo route segment or an empty string.
+   */
+  function getProjectGizmoIdFromLocation() {
+    const path = location.pathname || "";
+    const match = path.match(/\/g\/([^/?#]+)\/c\/[^/?#]+/i);
+    return match ? decodeURIComponent(match[1] || "") : "";
+  }
+
+  /**
+   * Build the ChatGPT web URL for an exported conversation.
+   *
+   * @param {string} conversationId - Conversation id.
+   * @param {string} [projectGizmoId=""] - Optional project/gizmo route segment.
+   * @param {string} [origin="https://chatgpt.com"] - ChatGPT origin to use.
+   * @returns {string} Absolute ChatGPT web URL or an empty string.
+   */
+  function buildChatgptWebConversationUrl(
+    conversationId,
+    projectGizmoId = "",
+    origin = "https://chatgpt.com"
+  ) {
+    const id = String(conversationId || "").trim();
+    if (!id) return "";
+
+    const base = /^https:\/\/(chatgpt\.com|chat\.openai\.com)$/i.test(String(origin || ""))
+      ? String(origin || "").replace(/\/+$/, "")
+      : "https://chatgpt.com";
+    const encodedConversationId = encodeURIComponent(id);
+    const gizmoId = String(projectGizmoId || "").trim();
+
+    if (gizmoId) {
+      return `${base}/g/${encodeURIComponent(gizmoId)}/c/${encodedConversationId}`;
+    }
+
+    return `${base}/c/${encodedConversationId}`;
+  }
+
+  /**
    * Walk backward from the current node and build the ordered message chain for export.
    *
    * @param {Object} mapping - Conversation node map keyed by node id.
@@ -4117,6 +4160,8 @@
   CGO.getConversationFromCache = getConversationFromCache;
   CGO.getConversationForExport = getConversationForExport;
   CGO.getConversationIdFromLocation = getConversationIdFromLocation;
+  CGO.getProjectGizmoIdFromLocation = getProjectGizmoIdFromLocation;
+  CGO.buildChatgptWebConversationUrl = buildChatgptWebConversationUrl;
   CGO.getTurnArticlesForExport = getTurnArticlesForExport;
   CGO.getTurnRoleFromDom = getTurnRoleFromDom;
   CGO.guessAttachmentKind = guessAttachmentKind;

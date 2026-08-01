@@ -47,6 +47,9 @@
   "conversation_navigator_item_fallback": {
     "message": "User message"
   },
+  "open_chatgpt_web_link": {
+    "message": "Open this conversation in ChatGPT Web"
+  },
   "download_button": {
     "message": "Download"
   },

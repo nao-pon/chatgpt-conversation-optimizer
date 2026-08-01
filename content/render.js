@@ -1490,6 +1490,39 @@
   };
 
   /**
+   * Return the SVG markup used for the ChatGPT web-link button.
+   *
+   * @returns {string} SVG markup string.
+   */
+  function getChatgptWebLinkIconSvg() {
+    return `
+    <svg viewBox="0 0 24 24" aria-hidden="true" class="cgo-web-link-icon">
+      <path d="M9.25 5.75H6.8A2.05 2.05 0 0 0 4.75 7.8v9.4a2.05 2.05 0 0 0 2.05 2.05h9.4a2.05 2.05 0 0 0 2.05-2.05v-2.45" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M13.25 4.75h6v6M19 5l-8.25 8.25" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`;
+  }
+
+  /**
+   * Render a fixed link to the original ChatGPT web conversation.
+   *
+   * @param {string} webUrl - Absolute ChatGPT conversation URL.
+   * @returns {string} Link HTML or an empty string when no URL is available.
+   */
+  function renderChatgptWebLink(webUrl) {
+    const href = String(webUrl || "").trim();
+    if (!/^https:\/\/(chatgpt\.com|chat\.openai\.com)\/(?:g\/[^/]+\/)?c\/[^/?#]+/i.test(href)) {
+      return "";
+    }
+
+    const label = CGO.escapeHtml(CGO.t("open_chatgpt_web_link"));
+    return `
+    <a class="cgo-icon-btn cgo-web-link" href="${CGO.escapeHtml(href)}" target="_blank" rel="noopener noreferrer" aria-label="${label}">
+      ${getChatgptWebLinkIconSvg()}
+      <span class="cgo-icon-tooltip">${label}</span>
+    </a>`;
+  }
+
+  /**
    * Get the inline SVG markup used for the voice-transcription badge icon.
    * @returns {string} SVG markup string for the voice badge.
    */
@@ -1542,9 +1575,19 @@
       includeImages = true,
       projectName = "",
       conversationTitle = "",
+      projectGizmoId = "",
+      webUrl = "",
       sharedCss = "",
       sharedUiJs = "",
     } = options;
+
+    const resolvedWebUrl = webUrl || CGO.buildChatgptWebConversationUrl?.(
+      conversationId,
+      projectGizmoId,
+      /^https:\/\/(chatgpt\.com|chat\.openai\.com)$/i.test(location.origin)
+        ? location.origin
+        : "https://chatgpt.com"
+    ) || "";
 
     const messageHtml = messages.map((message) => {
       const roleLabel = message.role === "user" ? CGO.t("role_user") : CGO.t("role_assistant");
@@ -1603,6 +1646,8 @@
     ${projectName ? `<meta name="cgo:project" content="${CGO.escapeHtml(projectName)}">` : ""}
     ${conversationTitle ? `<meta name="cgo:conversation-title" content="${CGO.escapeHtml(conversationTitle)}">` : ""}
     ${conversationId ? `<meta name="cgo:conversation-id" content="${CGO.escapeHtml(conversationId)}">` : ""}
+    ${projectGizmoId ? `<meta name="cgo:project-gizmo-id" content="${CGO.escapeHtml(projectGizmoId)}">` : ""}
+    ${resolvedWebUrl ? `<meta name="cgo:web-url" content="${CGO.escapeHtml(resolvedWebUrl)}">` : ""}
     <meta name="cgo:exported-at" content="${CGO.escapeHtml(new Date().toISOString())}">
     <title>${CGO.escapeHtml(title)}</title>
     <style>
@@ -1612,6 +1657,7 @@
     <link rel="icon" type="image/vnd.microsoft.icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IB2cksfwAAAARnQU1BAACxjwv8YQUAAAAgY0hSTQAAeiYAAICEAAD6AAAAgOgAAHUwAADqYAAAOpgAABdwnLpRPAAAAAlwSFlzAAALEwAACxMBAJqcGAAAAAd0SU1FB+oFDwgoOwnNG1QAAALSSURBVDjLPZNNbJRVFIafc79+/aY/UxCb0OnMWJkxgAYTJTFQw6YomnSBGomBBf4hiImaEKOyUEJYdMPKjS7UQkLUBhOSBtJIoin4gxhY0EJVAjMNAaH8JIoUO7/f6+J+5SbnnsU995znvXmvARBlSwRhwfZ8Dv1rIQRak4hiFFWxsALrX0QTF0ExxCpTnym20JopYUHBho9DaGhwhS+QwABiANg4SHBkH/GmrcQ//wFGgXBxyYEVCEK0OIdeXguVO1Cdhdpdn6tzUJtD165D0Eb+0C7Szy4DZ2BWcGDgAj8tbgDy0+cpSPL4SeJLV6lf+puVI9sgcAA4DF9cxV/GfDMzH14H1OvE/eu5uvptHDGWnHsCxdj5U9h3ZeyrMQhCbPu72MQ0dnYCe3oVhC30/PopT9z4jPj0RaQ4IXABduAcPLgCvt4LPUuwD4fglffh4Jfw20+wboD20vcoHXF56FvSj/Xw2l/bEsKupbLDTdFREKm8aOsTJ5qyZf2ydRtkB0ZlI9+o4/pZ0ZETbVnZgrzeqO0RXTk5zKFEpl/y+8wt2Pg6LFyAW7MKR82/h4QARw0zw1GvgIuxL37EnlyDHTqFnRnHjv0O44fhn5uYNQjUpO/4bhY9t5wXym9hlSqqN4EoLzqLsv1TsmNN2cikaO+TDe2Xnb8jm/xT1l2UpR/QkjP7NDA7rIFfdoiunEhlBFFWdD4kjja9/lReRFkR9YqOvPIXxkQqK1K9oi0rOnPaXPnYN4gycvekp/CGmveCC3AnRvlvahoc9/Rj0O4a8+6gBbwD7dYVGB5DWwaxrW/C/SmC3m66iw9z+6nldC1dSNrNsfKdR5mbvoka3rFGa6aECwv2yOPw0SeoL4+dHEUf7KBl6gjx86/SuXMD94WzdAe3+feHSS4Ml6ARg1T2JFGuZO/tLZDpQTu3QLMOJuylZ9DBowm6Jf+E5K+oTG2m+D++bDOvk1A/rwAAAABJRU5ErkJggg==">
   </head>
   <body>
+    ${renderChatgptWebLink(resolvedWebUrl)}
     <header class="page-header">
       <h1 class="page-title">${CGO.escapeHtml(title || CGO.t("untitled_conversation"))}</h1>
       <div class="page-meta">
@@ -1851,10 +1897,21 @@
         document.title, conversationTitle
       );
       const projectName = (conversationData?.project_name || "").trim() || fallbackProjectName;
+      const projectGizmoId =
+        CGO.getProjectGizmoIdFromLocation?.() ||
+        String(conversationData?.gizmo_id || conversationData?.conversation_template_id || "").trim() ||
+        "";
 
       const title = projectName
         ? `${projectName} / ${conversationTitle}`
         : conversationTitle;
+      const webUrl = CGO.buildChatgptWebConversationUrl?.(
+        conversationId,
+        projectGizmoId,
+        /^https:\/\/(chatgpt\.com|chat\.openai\.com)$/i.test(location.origin)
+          ? location.origin
+          : "https://chatgpt.com"
+      ) || "";
 
       const highlightAssets = !isLightweight
         ? await getHighlightAssets()
@@ -1872,6 +1929,8 @@
           highlightAssets,
           projectName,
           conversationTitle,
+          projectGizmoId,
+          webUrl,
           sharedCss: sharedExportAssets.css,
           sharedUiJs: sharedExportAssets.uiJs,
         }
@@ -1893,6 +1952,8 @@
           conversationId,
           projectName,
           conversationTitle,
+          projectGizmoId,
+          webUrl,
           messageId: resolvedMessageId,
           messages: messages.map((message) => ({
             id: message.id,

@@ -47,6 +47,9 @@
   "conversation_navigator_item_fallback": {
     "message": "ユーザーメッセージ"
   },
+  "open_chatgpt_web_link": {
+    "message": "ChatGPT Web版でこの会話を開く"
+  },
   "download_button": {
     "message": "HTMLでダウンロード"
   },

@@ -283,6 +283,77 @@
   }
 
   /**
+   * Return the SVG markup used for the ChatGPT web-link button.
+   *
+   * @returns {string} SVG markup string.
+   */
+  function getChatgptWebLinkIconSvg() {
+    return `
+<svg viewBox="0 0 24 24" aria-hidden="true" class="cgo-web-link-icon">
+  <path d="M9.25 5.75H6.8A2.05 2.05 0 0 0 4.75 7.8v9.4a2.05 2.05 0 0 0 2.05 2.05h9.4a2.05 2.05 0 0 0 2.05-2.05v-2.45" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M13.25 4.75h6v6M19 5l-8.25 8.25" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`;
+  }
+
+  /**
+   * Build the ChatGPT web URL for an exported conversation.
+   *
+   * @param {string} conversationId - Conversation id.
+   * @param {string} [projectGizmoId=""] - Optional project/gizmo route segment.
+   * @returns {string} Absolute ChatGPT web URL or an empty string.
+   */
+  function buildChatgptWebConversationUrl(conversationId, projectGizmoId = "") {
+    const id = String(conversationId || "").trim();
+    if (!id) return "";
+
+    const encodedConversationId = encodeURIComponent(id);
+    const gizmoId = String(projectGizmoId || "").trim();
+    if (gizmoId) {
+      return `https://chatgpt.com/g/${encodeURIComponent(gizmoId)}/c/${encodedConversationId}`;
+    }
+
+    return `https://chatgpt.com/c/${encodedConversationId}`;
+  }
+
+  /**
+   * Return a safe ChatGPT conversation URL from a payload.
+   *
+   * @param {Object} payload - Viewer payload.
+   * @returns {string} Absolute ChatGPT web URL or an empty string.
+   */
+  function getPayloadWebUrl(payload) {
+    const provided = String(payload?.webUrl || "").trim();
+    if (/^https:\/\/(chatgpt\.com|chat\.openai\.com)\/(?:g\/[^/]+\/)?c\/[^/?#]+/i.test(provided)) {
+      return provided;
+    }
+
+    return buildChatgptWebConversationUrl(
+      payload?.conversationId || "",
+      payload?.projectGizmoId || ""
+    );
+  }
+
+  /**
+   * Render a fixed link to the original ChatGPT web conversation.
+   *
+   * @param {string} webUrl - Absolute ChatGPT conversation URL.
+   * @returns {string} Link HTML or an empty string when no URL is available.
+   */
+  function renderChatgptWebLink(webUrl) {
+    const href = String(webUrl || "").trim();
+    if (!/^https:\/\/(chatgpt\.com|chat\.openai\.com)\/(?:g\/[^/]+\/)?c\/[^/?#]+/i.test(href)) {
+      return "";
+    }
+
+    const label = escapeHtml(t("open_chatgpt_web_link"));
+    return `
+    <a class="cgo-icon-btn cgo-web-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" aria-label="${label}">
+      ${getChatgptWebLinkIconSvg()}
+      <span class="cgo-icon-tooltip">${label}</span>
+    </a>`;
+  }
+
+  /**
    * Provide the inline SVG markup used for the voice-transcription badge icon.
    * @returns {string} SVG markup string for the voice badge.
    */
@@ -856,6 +927,7 @@
       document.documentElement.lang = chrome?.i18n?.getUILanguage?.() || document.documentElement.lang || "en";
       document.title = payload.title || t("untitled_conversation") || "CGO Viewer";
       document.getElementById("page-title").textContent = payload.title || t("untitled_conversation");
+      document.body.insertAdjacentHTML("afterbegin", renderChatgptWebLink(getPayloadWebUrl(payload)));
       document.getElementById("page-meta").innerHTML = `
         <span>${escapeHtml(t("conversation_id"))}: ${escapeHtml(payload.conversationId || "")}</span>
         <span>${escapeHtml(t("exported_at"))}: ${escapeHtml(new Date(payload.exportedAt || Date.now()).toLocaleString())}</span>`;
