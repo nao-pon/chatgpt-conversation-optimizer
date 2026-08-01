@@ -1,6 +1,7 @@
 (() => {
   if (globalThis.__CGO_SKIP__) return;
   const CGO = (globalThis.__CGO ||= {});
+  const HEADER_TOOLBAR_INJECTION_DEBOUNCE_MS = 120;
 
   /**
    * Create an SVG icon element for toolbar buttons.
@@ -1290,12 +1291,28 @@
   }
 
   /**
+   * Schedule toolbar injection after ChatGPT header mutations settle.
+   *
+   * @param {number} [delayMs=HEADER_TOOLBAR_INJECTION_DEBOUNCE_MS] - Delay before injection.
+   */
+  function scheduleExportButtonInjection(delayMs = HEADER_TOOLBAR_INJECTION_DEBOUNCE_MS) {
+    if (CGO.headerToolbarInjectionTimer) {
+      clearTimeout(CGO.headerToolbarInjectionTimer);
+    }
+
+    CGO.headerToolbarInjectionTimer = setTimeout(() => {
+      CGO.headerToolbarInjectionTimer = null;
+      CGO.injectExportButtonIntoHeader();
+    }, Math.max(0, Number(delayMs) || 0));
+  }
+
+  /**
    * Observe header mutations and ensure the export toolbar stays mounted across SPA updates.
    */
   function startHeaderButtonObserver() {
 
     const observer = new MutationObserver(() => {
-      CGO.injectExportButtonIntoHeader();
+      scheduleExportButtonInjection();
     });
 
     observer.observe(document.body, {
@@ -1303,7 +1320,7 @@
       subtree: true
     });
 
-    CGO.injectExportButtonIntoHeader();
+    scheduleExportButtonInjection(0);
   }
 
   /**
@@ -1318,7 +1335,7 @@
     }
 
     if (visible) {
-      CGO.injectExportButtonIntoHeader?.();
+      scheduleExportButtonInjection(0);
     }
 
     if (CGO.toolbarBase?.isConnected) {

@@ -36,6 +36,7 @@
     domTrimTimer: null,
     domTrimTicket: 0,
     effectiveKeepDomMessages: null,
+    activeConversationId: "",
     exportToolbarVisible: false,
 
     conversationHeadMeta: null,
@@ -308,6 +309,24 @@
   async function postSettingsToPageHook(stats = null) {
     const keepDomMessages = await getEffectiveKeepDomMessagesForConversation(null, stats);
     CGO.STATE.effectiveKeepDomMessages = keepDomMessages;
+    const settingsKey = JSON.stringify({
+      keepDomMessages,
+      baseKeepDomMessages: CGO.CONFIG.keepDomMessages,
+      autoAdjustEnabled: CGO.SETTINGS.autoAdjustEnabled,
+      debugEnabled: CGO.SETTINGS.debugEnabled,
+      debugLevel: CGO.SETTINGS.debugLevel,
+    });
+    const now = Date.now();
+    if (
+      CGO.lastPageHookSettingsKey === settingsKey &&
+      now - Number(CGO.lastPageHookSettingsPostedAt || 0) < 1000
+    ) {
+      return;
+    }
+
+    CGO.lastPageHookSettingsKey = settingsKey;
+    CGO.lastPageHookSettingsPostedAt = now;
+
     window.postMessage(
       {
         source: "CGO_CONTENT",
@@ -585,18 +604,22 @@
        * where `settings` contains `keepDomMessages`, `autoAdjustEnabled`, `debugEnabled`, and `debugLevel`.
        */
       function sendInit() {
+        const settings = {
+          keepDomMessages: CGO.SETTINGS.keepDomMessages,
+          baseKeepDomMessages: CGO.CONFIG.keepDomMessages,
+          autoAdjustEnabled: CGO.SETTINGS.autoAdjustEnabled,
+          debugEnabled: CGO.SETTINGS.debugEnabled,
+          debugLevel: CGO.SETTINGS.debugLevel,
+        };
+        CGO.lastPageHookSettingsKey = JSON.stringify(settings);
+        CGO.lastPageHookSettingsPostedAt = Date.now();
+
         window.postMessage(
           {
             source: "CGO_CONTENT",
             type: "CGO_INIT_SETTINGS",
             version: CGO.PAGE_HOOK_VERSION,
-            settings: {
-              keepDomMessages: CGO.SETTINGS.keepDomMessages,
-              baseKeepDomMessages: CGO.CONFIG.keepDomMessages,
-              autoAdjustEnabled: CGO.SETTINGS.autoAdjustEnabled,
-              debugEnabled: CGO.SETTINGS.debugEnabled,
-              debugLevel: CGO.SETTINGS.debugLevel,
-            },
+            settings,
           },
           "*"
         );
@@ -667,31 +690,45 @@
    * @returns {Promise<boolean>} `true` when the page hooks are ready.
    */
   async function ensurePageHooksInjected() {
-    const bootstrapAlive = await waitForBootstrapPong();
-
-    if (!bootstrapAlive) {
-      CGO.log("[warn] bootstrap not responding");
-      return false;
+    if (CGO.pageHookEnsureInFlight) {
+      return CGO.pageHookEnsureInFlight;
     }
 
-    // ChatGPT Web は SPA（シングルページアプリ）のため
-    // injection が外れることがあるので毎回 inject する
-    // 副作用は殆どない
-    try {
-      await injectMainPageHookScript();
+    CGO.pageHookEnsureInFlight = (async () => {
+      const bootstrapAlive = await waitForBootstrapPong();
 
-      //const mainHookAliveAfterInject = await waitForMainHookPong();
-      const mainHookAliveAfterInject = await waitForMainHookInitAck();
-      if (!mainHookAliveAfterInject) {
-        CGO.log("[warn] main hook did not respond after inject");
+      if (!bootstrapAlive) {
+        CGO.log("[warn] bootstrap not responding");
         return false;
       }
 
-      CGO.log("main hook injected successfully");
-      return true;
-    } catch (error) {
-      CGO.log("[error] failed to inject main hook", error);
-      return false;
+      const mainHookAliveBeforeInject = await waitForMainHookInitAck(150);
+      if (mainHookAliveBeforeInject) {
+        return true;
+      }
+
+      try {
+        await injectMainPageHookScript();
+
+        //const mainHookAliveAfterInject = await waitForMainHookPong();
+        const mainHookAliveAfterInject = await waitForMainHookInitAck();
+        if (!mainHookAliveAfterInject) {
+          CGO.log("[warn] main hook did not respond after inject");
+          return false;
+        }
+
+        CGO.log("main hook injected successfully");
+        return true;
+      } catch (error) {
+        CGO.log("[error] failed to inject main hook", error);
+        return false;
+      }
+    })();
+
+    try {
+      return await CGO.pageHookEnsureInFlight;
+    } finally {
+      CGO.pageHookEnsureInFlight = null;
     }
   }
 
@@ -715,6 +752,12 @@
 
     async function refreshForRouteChange() {
       const conversationId = CGO.getConversationIdFromLocation?.() || "";
+      const previousConversationId = CGO.STATE.activeConversationId || "";
+      const sameConversation =
+        !!conversationId &&
+        !!previousConversationId &&
+        conversationId === previousConversationId;
+      CGO.STATE.activeConversationId = conversationId;
 
       CGO.STATE.projectGuide = {
         conversationId: "",
@@ -725,8 +768,9 @@
       CGO.resetInitialPruneNoticeState?.(true);
       CGO.handleConversationRouteChanged?.(conversationId);
 
-      CGO.updateExportButtonVisibility?.(false);
-      CGO.injectExportButtonIntoHeader?.();
+      if (!conversationId || (!sameConversation && previousConversationId)) {
+        CGO.updateExportButtonVisibility?.(false);
+      }
 
       const ok = await CGO.ensurePageHooksInjected();
       if (ok) {

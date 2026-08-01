@@ -29,6 +29,9 @@
     rootNodeId: "client-created-root",
     targetPathFragment: "/backend-api/conversation/",
   };
+  const ENABLE_VOICE_EXPORT_GUARD = false;
+  const VOICE_SESSION_BOOTSTRAP_WINDOW_MS = 30000;
+  const VOICE_SESSION_USER_MEDIA_WINDOW_MS = 120000;
 
   const EXPORT_CACHE = new Map(); // full
   const STREAM_CACHE = new Map(); // draft
@@ -47,6 +50,8 @@
     state: "idle",
     conversationId: "",
     lastChangedAt: 0,
+    bootstrapExpiresAt: 0,
+    userMediaExpiresAt: 0,
   };
 
   // =========================================================
@@ -140,6 +145,8 @@
    * @param {object} [extra={}] - Optional metadata forwarded alongside the state update.
    */
   function postVoiceSessionState(conversationId, state, extra = {}) {
+    if (!ENABLE_VOICE_EXPORT_GUARD) return;
+
     window.postMessage(
       {
         ...extra,
@@ -192,6 +199,8 @@
    * @param {object} [extra={}] - Optional metadata forwarded with the notification.
    */
   function updateVoiceSessionState(nextState, conversationId = "", extra = {}) {
+    if (!ENABLE_VOICE_EXPORT_GUARD) return;
+
     const resolvedConversationId =
       conversationId ||
       resolveVoiceSessionConversationId(extra?.url || "");
@@ -211,6 +220,49 @@
   }
 
   /**
+   * Mark a realtime voice bootstrap response as a short-lived hint, without locking export yet.
+   *
+   * ChatGPT can fetch voice metadata/bootstrap endpoints while opening a normal conversation page.
+   * Export should only lock after an RTC voice session actually starts.
+   *
+   * @param {string} url - Fetch request URL associated with the bootstrap response.
+   */
+  function rememberVoiceSessionBootstrap(url = "") {
+    if (!ENABLE_VOICE_EXPORT_GUARD) return;
+
+    VOICE_SESSION_STATE.conversationId = resolveVoiceSessionConversationId(url);
+    VOICE_SESSION_STATE.bootstrapExpiresAt =
+      Date.now() + VOICE_SESSION_BOOTSTRAP_WINDOW_MS;
+  }
+
+  /**
+   * Return whether a recent realtime bootstrap makes incoming RTC events likely to be voice chat.
+   *
+   * @returns {boolean} `true` while the short-lived bootstrap hint is still valid.
+   */
+  function hasRecentVoiceSessionBootstrap() {
+    return Date.now() <= Number(VOICE_SESSION_STATE.bootstrapExpiresAt || 0);
+  }
+
+  /**
+   * Return whether an audio getUserMedia call recently succeeded.
+   *
+   * @returns {boolean} `true` while the short-lived microphone hint is still valid.
+   */
+  function hasRecentVoiceSessionUserMedia() {
+    return Date.now() <= Number(VOICE_SESSION_STATE.userMediaExpiresAt || 0);
+  }
+
+  /**
+   * Return whether recent browser signals indicate a user-started voice session.
+   *
+   * @returns {boolean} `true` when both realtime bootstrap and microphone access were observed.
+   */
+  function isVoiceSessionStartLikely() {
+    return hasRecentVoiceSessionBootstrap() && hasRecentVoiceSessionUserMedia();
+  }
+
+  /**
    * Determine whether a fetch URL is the lightweight voice-session bootstrap request.
    * @param {string} url - Fetch request URL.
    * @returns {boolean} `true` when the URL matches the realtime voice bootstrap endpoint.
@@ -224,17 +276,71 @@
   }
 
   /**
+   * Determine whether media constraints request microphone/audio access.
+   *
+   * @param {*} constraints - Constraints passed to getUserMedia.
+   * @returns {boolean} `true` when audio capture is requested.
+   */
+  function requestsAudioMedia(constraints) {
+    return !!(
+      constraints &&
+      typeof constraints === "object" &&
+      constraints.audio
+    );
+  }
+
+  /**
+   * Patch getUserMedia so voice locking only follows user-started microphone capture.
+   */
+  function patchGetUserMedia() {
+    if (!ENABLE_VOICE_EXPORT_GUARD) return;
+
+    try {
+      const mediaDevices = navigator.mediaDevices;
+      const nativeGetUserMedia = mediaDevices?.getUserMedia;
+      if (
+        !mediaDevices ||
+        typeof nativeGetUserMedia !== "function" ||
+        mediaDevices.__CGO_GET_USER_MEDIA_PATCHED__
+      ) {
+        return;
+      }
+
+      mediaDevices.__CGO_ORIGINAL_GET_USER_MEDIA__ =
+        mediaDevices.__CGO_ORIGINAL_GET_USER_MEDIA__ || nativeGetUserMedia;
+
+      mediaDevices.getUserMedia = async function (...args) {
+        const stream = await nativeGetUserMedia.apply(this, args);
+        if (requestsAudioMedia(args[0])) {
+          VOICE_SESSION_STATE.userMediaExpiresAt =
+            Date.now() + VOICE_SESSION_USER_MEDIA_WINDOW_MS;
+        }
+        return stream;
+      };
+
+      mediaDevices.__CGO_GET_USER_MEDIA_PATCHED__ = true;
+    } catch (error) {
+      log.basic("getUserMedia patch failed", String(error));
+    }
+  }
+
+  /**
    * Attach minimal lifecycle listeners to a RTC data channel without inspecting message payloads.
    * @param {RTCDataChannel|object} channel - Data channel instance to observe.
    * @param {RTCPeerConnection|object} peerConnection - Peer connection associated with the channel.
    * @returns {*} The same channel instance.
    */
   function attachVoiceSessionChannelStateHandlers(channel, peerConnection) {
+    if (!ENABLE_VOICE_EXPORT_GUARD) return channel;
+
     if (!channel || channel.__CGO_VOICE_SESSION_STATE_ATTACHED__) return channel;
 
     channel.__CGO_VOICE_SESSION_STATE_ATTACHED__ = true;
     channel.addEventListener("open", () => {
-      if (VOICE_SESSION_STATE.state !== "active" && !peerConnection.__CGO_VOICE_SESSION_LIVE__) {
+      if (
+        !peerConnection.__CGO_VOICE_SESSION_LIVE__ &&
+        !isVoiceSessionStartLikely()
+      ) {
         return;
       }
 
@@ -262,6 +368,7 @@
           label: channel.label || "",
         }
       );
+      peerConnection.__CGO_VOICE_SESSION_LIVE__ = false;
     });
 
     return channel;
@@ -5469,10 +5576,7 @@
     }
 
     if (isVoiceBootstrapRequest && orgResponse.ok) {
-      updateVoiceSessionState("active", resolveVoiceSessionConversationId(url), {
-        source: "fetch",
-        url,
-      });
+      rememberVoiceSessionBootstrap(url);
     }
 
     if (
@@ -5550,6 +5654,18 @@
     }
 
     saveFullConversationToCache(data);
+
+    if (
+      VOICE_SESSION_STATE.state === "syncing" &&
+      (!VOICE_SESSION_STATE.conversationId ||
+        !data.conversation_id ||
+        VOICE_SESSION_STATE.conversationId === data.conversation_id)
+    ) {
+      updateVoiceSessionState("idle", data.conversation_id || "", {
+        source: "conversation-fetch",
+        url,
+      });
+    }
 
     const stats = buildConversationStats(data);
     const baseKeepDomMessages = CONFIG.baseTurnCount || CONFIG.turnCount;
@@ -5655,6 +5771,8 @@
    * and leave them disabled in a `syncing` state until the normal conversation fetch completes.
    */
   function patchRTCPeerConnection() {
+    if (!ENABLE_VOICE_EXPORT_GUARD) return;
+
     const NativeRTCPeerConnection = window.RTCPeerConnection;
     if (!NativeRTCPeerConnection || window.__CGO_RTCPEERCONNECTION_PATCHED__) return;
 
@@ -5671,7 +5789,7 @@
       const pc = new NativeRTCPeerConnection(...args);
 
       const markActive = (source, extra = {}) => {
-        if (VOICE_SESSION_STATE.state !== "active" && !pc.__CGO_VOICE_SESSION_LIVE__) {
+        if (!pc.__CGO_VOICE_SESSION_LIVE__ && !isVoiceSessionStartLikely()) {
           return;
         }
 
@@ -5692,6 +5810,7 @@
           reason,
           ...extra,
         });
+        pc.__CGO_VOICE_SESSION_LIVE__ = false;
       };
 
       try {
@@ -5709,7 +5828,7 @@
 
         pc.addEventListener("connectionstatechange", () => {
           const state = pc.connectionState || "";
-          if (state === "connecting" || state === "connected") {
+          if (state === "connected") {
             markActive("rtc-connection-state", { rtcConnectionState: state });
             return;
           }
@@ -5721,7 +5840,7 @@
 
         pc.addEventListener("iceconnectionstatechange", () => {
           const state = pc.iceConnectionState || "";
-          if (state === "checking" || state === "connected" || state === "completed") {
+          if (state === "connected" || state === "completed") {
             markActive("rtc-ice-connection-state", { rtcIceConnectionState: state });
             return;
           }
@@ -5748,6 +5867,7 @@
     handleFetchResponse,
   };
 
+  patchGetUserMedia();
   patchRTCPeerConnection();
   patchWebSocket();
   patchEventSource();

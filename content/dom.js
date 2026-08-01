@@ -7,6 +7,7 @@
   const FIXED_TRIM_SUMMARY_ID = "cgo-dom-fixed-trim-summary";
   const FIXED_TRIM_SUMMARY_VISIBLE_SCROLL_Y = 80;
   const FIXED_TRIM_SUMMARY_INITIAL_SUPPRESS_MS = 1500;
+  const ENABLE_VOICE_EXPORT_GUARD = false;
   const VOICE_SYNC_RETRY_DELAYS_MS = [500, 1000, 2000, 4000];
 
   /**
@@ -815,18 +816,29 @@
   }
 
   /**
-   * Return the most useful conversation id for the voice export guard, preferring the current route.
+   * Return the most useful conversation id for the voice export guard.
    *
    * @param {string} [conversationId=""] - Optional conversation id from a runtime event.
    * @returns {string} Resolved conversation id, or an empty string when unavailable.
    */
   function resolveVoiceGuardConversationId(conversationId = "") {
     return (
-      CGO.getConversationIdFromLocation?.() ||
       conversationId ||
       CGO.STATE.voiceExportGuard?.conversationId ||
+      CGO.getConversationIdFromLocation?.() ||
       ""
     );
+  }
+
+  /**
+   * Check whether a voice-session event belongs to the active route before locking this page.
+   *
+   * @param {string} [conversationId=""] - Conversation id carried by the event.
+   * @returns {boolean} `true` when the event can safely affect the current toolbar.
+   */
+  function isVoiceGuardEventForCurrentRoute(conversationId = "") {
+    const currentConversationId = CGO.getConversationIdFromLocation?.() || "";
+    return !conversationId || !currentConversationId || conversationId === currentConversationId;
   }
 
   /**
@@ -998,7 +1010,17 @@
    */
   function handleRuntimeMessage(data) {
     if (data.type === "voiceSessionState") {
-      const conversationId = resolveVoiceGuardConversationId(data.conversationId || "");
+      if (!ENABLE_VOICE_EXPORT_GUARD) {
+        setVoiceExportGuardState("normal", "", "");
+        return;
+      }
+
+      const eventConversationId = data.conversationId || "";
+      if (!isVoiceGuardEventForCurrentRoute(eventConversationId)) {
+        return;
+      }
+
+      const conversationId = resolveVoiceGuardConversationId(eventConversationId);
 
       if (data.state === "active") {
         setVoiceExportGuardState("voice_active", conversationId, CGO.t("voice_export_guard_active"));
@@ -1014,7 +1036,7 @@
       }
 
       if (data.state === "idle") {
-        // Reserved for future voice-session handling; intentionally no-op for now.
+        setVoiceExportGuardState("normal", "", "");
         return;
       }
     }
