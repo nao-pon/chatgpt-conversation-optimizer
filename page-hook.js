@@ -4,7 +4,7 @@
   // =========================================================
   // INSTALL GUARD / CONSTANTS / CONFIG / STATE
   // =========================================================
-  const PAGE_HOOK_VERSION = "2";
+  const PAGE_HOOK_VERSION = "3";
   const PAGE_BRIDGE_SECRET = "CGO_BRIDGE_" + Math.random().toString(36).slice(2, 15);
 
   if (window.__CGO_MAIN_HOOK_INSTALLED__) {
@@ -44,6 +44,12 @@
   const STREAM_TOPIC_TO_CONVERSATION = new Map();
   const STREAM_TURN_EXCHANGE_TO_CONVERSATION = new Map();
   const WS_STREAM_PARSER_STATE = new Map();
+  const PAGINATED_HISTORY_STATE = new Map();
+
+  const HISTORY_PAGE_TURN_COUNT = 10;
+  const HISTORY_IDLE_DELAY_MS = 750;
+  const HISTORY_IDLE_TIMEOUT_MS = 5000;
+  const HISTORY_EXPORT_TIMEOUT_MS = 120000;
 
   let LAST_STREAM_CONVERSATION_ID = null;
   const VOICE_SESSION_STATE = {
@@ -720,6 +726,599 @@
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Parse the paginated ChatGPT conversation endpoints introduced for partial history loading.
+   *
+   * @param {string} url - Absolute or relative request URL.
+   * @returns {{kind:"initial"|"messages",conversationId:string,before:string,includeHasVersions:boolean,numTurns:number}|null}
+   *   Parsed request metadata, or `null` when the URL is unrelated.
+   */
+  function parsePaginatedConversationRequest(url) {
+    try {
+      const parsed = new URL(url, location.origin);
+      const initialMatch = parsed.pathname.match(
+        /^\/backend-api\/conversations\/([^/]+)$/i
+      );
+      const messagesMatch = parsed.pathname.match(
+        /^\/backend-api\/conversations\/([^/]+)\/messages$/i
+      );
+      const match = messagesMatch || initialMatch;
+      if (!match) return null;
+
+      const requestedTurns = Number(parsed.searchParams.get("num_turns"));
+      return {
+        kind: messagesMatch ? "messages" : "initial",
+        conversationId: decodeURIComponent(match[1] || ""),
+        before: parsed.searchParams.get("before") || "",
+        includeHasVersions:
+          parsed.searchParams.get("include_has_versions") !== "false",
+        numTurns: Number.isFinite(requestedTurns) && requestedTurns > 0
+          ? Math.max(1, Math.min(100, Math.round(requestedTurns)))
+          : HISTORY_PAGE_TURN_COUNT,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Determine whether a request belongs to the paginated conversation-history API.
+   *
+   * @param {string} url - Absolute or relative request URL.
+   * @returns {boolean} `true` for the initial conversation or older-message endpoint.
+   */
+  function isPaginatedConversationRequest(url) {
+    return !!parsePaginatedConversationRequest(url);
+  }
+
+  /**
+   * Return the mutable pagination state for a conversation, creating it when needed.
+   *
+   * @param {string} conversationId - Conversation identifier.
+   * @returns {Object} Pagination state.
+   */
+  function ensurePaginatedHistoryState(conversationId) {
+    let state = PAGINATED_HISTORY_STATE.get(conversationId);
+    if (state) return state;
+
+    state = {
+      conversationId,
+      metadata: { conversation_id: conversationId },
+      messagesById: new Map(),
+      orderedMessageIds: [],
+      pageInfo: {},
+      nextBefore: "",
+      hasPreviousPage: true,
+      complete: false,
+      initialSeen: false,
+      pageCount: 0,
+      loadedPageKeys: new Set(),
+      includeHasVersions: true,
+      numTurns: HISTORY_PAGE_TURN_COUNT,
+      inFlight: null,
+      idleDelayTimer: null,
+      idleHandle: null,
+      idleScheduled: false,
+      backgroundFailed: false,
+      lastError: "",
+    };
+    PAGINATED_HISTORY_STATE.set(conversationId, state);
+    return state;
+  }
+
+  /**
+   * Merge one ordered message page into a conversation's accumulated history.
+   *
+   * Server pages are ordered oldest-to-newest. Initial pages replace the known newest
+   * suffix when they overlap; `/messages?before=...` pages are prepended.
+   *
+   * @param {Object} state - Pagination state.
+   * @param {Object[]} messages - Raw message records.
+   * @param {"initial"|"messages"} kind - Source page kind.
+   * @returns {number} Number of previously unseen message ids.
+   */
+  function mergePaginatedMessages(state, messages, kind) {
+    const incomingIds = [];
+    let addedCount = 0;
+
+    for (const message of Array.isArray(messages) ? messages : []) {
+      const id = String(message?.id || "");
+      if (!id) continue;
+
+      if (!state.messagesById.has(id)) {
+        addedCount += 1;
+      }
+      state.messagesById.set(id, structuredClone(message));
+      incomingIds.push(id);
+    }
+
+    const dedupe = (ids) => {
+      const seen = new Set();
+      return ids.filter((id) => {
+        if (!id || seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
+    };
+
+    if (!state.orderedMessageIds.length) {
+      state.orderedMessageIds = dedupe(incomingIds);
+      return addedCount;
+    }
+
+    if (kind === "messages") {
+      state.orderedMessageIds = dedupe([
+        ...incomingIds,
+        ...state.orderedMessageIds,
+      ]);
+      return addedCount;
+    }
+
+    const overlapAt = incomingIds.findIndex((id) =>
+      state.orderedMessageIds.includes(id)
+    );
+    if (overlapAt >= 0) {
+      const existingOverlapAt = state.orderedMessageIds.indexOf(
+        incomingIds[overlapAt]
+      );
+      state.orderedMessageIds = dedupe([
+        ...state.orderedMessageIds.slice(0, existingOverlapAt),
+        ...incomingIds,
+      ]);
+    } else {
+      state.orderedMessageIds = dedupe([
+        ...state.orderedMessageIds,
+        ...incomingIds,
+      ]);
+    }
+
+    return addedCount;
+  }
+
+  /**
+   * Convert accumulated paginated messages to the legacy mapping shape consumed by CGO export.
+   *
+   * The paginated endpoint does not expose a complete branch graph. CGO therefore creates a
+   * deterministic linear chain in server order while preserving every original message object.
+   *
+   * @param {Object} state - Pagination state.
+   * @returns {Object} Legacy-compatible conversation payload.
+   */
+  function buildConversationFromPaginatedHistory(state) {
+    const data = structuredClone(state.metadata || {});
+    delete data.messages;
+    delete data.page_info;
+
+    const mapping = {};
+    let previousId = null;
+
+    for (const id of state.orderedMessageIds) {
+      const message = state.messagesById.get(id);
+      if (!message) continue;
+
+      mapping[id] = {
+        id,
+        message: structuredClone(message),
+        parent: previousId,
+        children: [],
+      };
+
+      if (previousId && mapping[previousId]) {
+        mapping[previousId].children.push(id);
+      }
+      previousId = id;
+    }
+
+    const metadataCurrentNode = String(state.metadata?.current_node || "");
+    data.conversation_id = state.conversationId;
+    data.mapping = mapping;
+    data.current_node = mapping[metadataCurrentNode]
+      ? metadataCurrentNode
+      : previousId;
+    data.__cgo_paginated_history = true;
+    data.__cgo_history_complete = !!state.complete;
+    data.__cgo_history_page_count = state.pageCount;
+    data.__cgo_history_next_before = state.nextBefore || "";
+    if (state.lastError) {
+      data.__cgo_history_error = state.lastError;
+    } else {
+      delete data.__cgo_history_error;
+    }
+
+    return data;
+  }
+
+  /**
+   * Publish export-toolbar and large-conversation metadata without rewriting ChatGPT's response.
+   *
+   * @param {Object} data - Legacy-compatible accumulated conversation.
+   * @param {string} url - Source request URL.
+   * @param {boolean} complete - Whether the oldest page has been loaded.
+   */
+  function publishPaginatedConversationAnalysis(data, url, complete) {
+    const stats = buildConversationStats(data);
+    const baseKeepDomMessages = CONFIG.baseTurnCount || CONFIG.turnCount;
+    const autoAdjustScore = getAutoAdjustScore(stats);
+    const autoAdjustLevel = getKeepDomAutoAdjustLevel(autoAdjustScore);
+    const { minimumKeepDomMessages } =
+      getSteppedKeepDomMessages(baseKeepDomMessages, autoAdjustLevel);
+    const effectiveKeepDomMessages =
+      CONFIG.autoAdjustEnabled && baseKeepDomMessages > 10
+        ? getRecommendedKeepDomMessages(baseKeepDomMessages, stats)
+        : baseKeepDomMessages;
+    const summary = analyzeConversation(data, effectiveKeepDomMessages);
+    const projectName =
+      PROJECT_NAME_BY_CONVERSATION_ID.get(data?.conversation_id || "") ||
+      PROJECT_NAME_BY_GIZMO_ID.get(
+        data?.gizmo_id || data?.conversation_template_id || ""
+      ) ||
+      "";
+
+    postAnalysis(url, summary);
+    if (summary?.original) {
+      Object.assign(stats, summary.original);
+    }
+    postAutoAdjustResult(
+      data.conversation_id || "",
+      projectName,
+      baseKeepDomMessages,
+      effectiveKeepDomMessages,
+      stats,
+      autoAdjustScore,
+      autoAdjustLevel,
+      minimumKeepDomMessages
+    );
+
+    if (complete) {
+      const headMeta = buildConversationHeadMeta(data);
+      if (headMeta) {
+        postConversationHeadMeta(data.conversation_id || "", headMeta);
+      }
+    }
+  }
+
+  /**
+   * Ingest an initial or older-message response into the export cache.
+   *
+   * @param {Object} rawData - Parsed response body.
+   * @param {string} url - Source request URL.
+   * @param {{schedule?:boolean,publish?:boolean}} [options={}] - Ingestion controls.
+   * @returns {Object|null} Accumulated legacy-compatible conversation.
+   */
+  function ingestPaginatedConversationResponse(rawData, url, options = {}) {
+    const request = parsePaginatedConversationRequest(url);
+    if (!request || !rawData || typeof rawData !== "object") return null;
+    if (!Array.isArray(rawData.messages)) return null;
+
+    const state = ensurePaginatedHistoryState(request.conversationId);
+    const previousPagination = {
+      initialSeen: state.initialSeen,
+      complete: state.complete,
+      hasPreviousPage: state.hasPreviousPage,
+      nextBefore: state.nextBefore,
+    };
+    const overlapsExistingHistory = rawData.messages.some((message) =>
+      state.messagesById.has(String(message?.id || ""))
+    );
+    state.includeHasVersions = request.includeHasVersions;
+    state.numTurns = request.numTurns;
+    state.backgroundFailed = false;
+    state.lastError = "";
+
+    if (request.kind === "initial") {
+      const metadata = structuredClone(rawData);
+      delete metadata.messages;
+      delete metadata.page_info;
+      state.metadata = {
+        ...state.metadata,
+        ...metadata,
+        conversation_id:
+          metadata.conversation_id || request.conversationId,
+      };
+      state.initialSeen = true;
+    }
+
+    const addedCount = mergePaginatedMessages(
+      state,
+      rawData.messages,
+      request.kind
+    );
+    const pageInfo =
+      rawData.page_info && typeof rawData.page_info === "object"
+        ? structuredClone(rawData.page_info)
+        : {};
+    state.pageInfo = pageInfo;
+    state.hasPreviousPage = pageInfo.has_previous_page === true;
+    state.complete = pageInfo.has_previous_page === false;
+    state.nextBefore = state.hasPreviousPage
+      ? String(
+        pageInfo.start_cursor || rawData.messages[0]?.id || ""
+      )
+      : "";
+
+    // A repeated initial request can refresh the newest suffix after SPA navigation or a
+    // newly sent turn. Preserve the already loaded older prefix instead of downloading it again.
+    if (
+      request.kind === "initial" &&
+      previousPagination.initialSeen &&
+      overlapsExistingHistory
+    ) {
+      if (previousPagination.complete) {
+        state.hasPreviousPage = false;
+        state.complete = true;
+        state.nextBefore = "";
+      } else if (
+        previousPagination.hasPreviousPage &&
+        previousPagination.nextBefore
+      ) {
+        state.hasPreviousPage = true;
+        state.complete = false;
+        state.nextBefore = previousPagination.nextBefore;
+      }
+    }
+
+    const pageKey = request.kind === "initial"
+      ? `initial:${pageInfo.end_cursor || rawData.messages.at(-1)?.id || ""}`
+      : `before:${request.before || pageInfo.end_cursor || ""}`;
+    if (!state.loadedPageKeys.has(pageKey)) {
+      state.loadedPageKeys.add(pageKey);
+      state.pageCount += 1;
+    }
+
+    const data = buildConversationFromPaginatedHistory(state);
+    saveFullConversationToCache(data);
+
+    const shouldPublish = options.publish !== false &&
+      (request.kind === "initial" || state.complete);
+    if (shouldPublish) {
+      publishPaginatedConversationAnalysis(data, url, state.complete);
+    }
+
+    log.basic("[history] paginated conversation cached", {
+      conversationId: state.conversationId,
+      kind: request.kind,
+      addedCount,
+      messageCount: state.orderedMessageIds.length,
+      pageCount: state.pageCount,
+      hasPreviousPage: state.hasPreviousPage,
+      nextBefore: state.nextBefore,
+    });
+
+    if (options.schedule !== false && state.hasPreviousPage) {
+      schedulePaginatedHistoryPrefetch(state.conversationId);
+    }
+
+    return data;
+  }
+
+  /**
+   * Build an older-message URL using the cursor supplied by the preceding page.
+   *
+   * @param {Object} state - Pagination state.
+   * @returns {string} Relative ChatGPT backend URL.
+   */
+  function buildPaginatedMessagesUrl(state) {
+    const params = new URLSearchParams();
+    params.set("before", state.nextBefore || "");
+    params.set(
+      "include_has_versions",
+      state.includeHasVersions ? "true" : "false"
+    );
+    params.set("num_turns", String(state.numTurns || HISTORY_PAGE_TURN_COUNT));
+    return `/backend-api/conversations/${encodeURIComponent(
+      state.conversationId
+    )}/messages?${params.toString()}`;
+  }
+
+  /**
+   * Perform one history request with the fetch implementation preserved before CGO interception.
+   *
+   * @param {string} url - Relative request URL.
+   * @returns {Promise<Object>} Parsed JSON response.
+   */
+  async function fetchPaginatedHistoryJson(url) {
+    const nativeFetch = window.__CGO_ORIGINAL_FETCH__;
+    if (typeof nativeFetch !== "function") {
+      throw new Error("Original fetch is unavailable");
+    }
+
+    const headers = new Headers();
+    headers.set("accept", "application/json");
+    const authorization = window.__CGO_LAST_AUTHORIZATION__ || "";
+    if (authorization) {
+      headers.set("authorization", authorization);
+    }
+
+    const response = await nativeFetch.call(window, url, {
+      method: "GET",
+      credentials: "include",
+      headers,
+    });
+    if (!response.ok) {
+      const error = new Error(
+        `Conversation history request failed (${response.status})`
+      );
+      error.status = response.status;
+      throw error;
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Fetch and ingest the initial paginated conversation response.
+   *
+   * @param {string} conversationId - Conversation identifier.
+   * @returns {Promise<Object|null>} Accumulated conversation.
+   */
+  async function fetchInitialPaginatedHistory(conversationId) {
+    const params = new URLSearchParams({
+      include_has_versions: "true",
+      num_turns: String(HISTORY_PAGE_TURN_COUNT),
+    });
+    const url = `/backend-api/conversations/${encodeURIComponent(
+      conversationId
+    )}?${params.toString()}`;
+    const rawData = await fetchPaginatedHistoryJson(url);
+    return ingestPaginatedConversationResponse(rawData, url, {
+      schedule: false,
+      publish: true,
+    });
+  }
+
+  /**
+   * Fetch and ingest exactly one older history page, sharing an in-flight request per conversation.
+   *
+   * @param {Object} state - Pagination state.
+   * @returns {Promise<Object|null>} Updated accumulated conversation.
+   */
+  async function fetchNextPaginatedHistoryPage(state) {
+    if (!state?.hasPreviousPage) {
+      return state ? buildConversationFromPaginatedHistory(state) : null;
+    }
+    if (state.inFlight) return state.inFlight;
+    if (!state.nextBefore) {
+      throw new Error("Conversation history cursor is missing");
+    }
+
+    const requestBefore = state.nextBefore;
+    const previousCount = state.orderedMessageIds.length;
+    const url = buildPaginatedMessagesUrl(state);
+
+    state.inFlight = (async () => {
+      const rawData = await fetchPaginatedHistoryJson(url);
+      const data = ingestPaginatedConversationResponse(rawData, url, {
+        schedule: false,
+        publish: true,
+      });
+
+      if (
+        state.hasPreviousPage &&
+        state.nextBefore === requestBefore &&
+        state.orderedMessageIds.length === previousCount
+      ) {
+        throw new Error("Conversation history pagination made no progress");
+      }
+
+      return data;
+    })();
+
+    try {
+      const data = await state.inFlight;
+      state.lastError = "";
+      return data;
+    } catch (error) {
+      state.lastError = String(error?.message || error || "History fetch failed");
+      const partial = buildConversationFromPaginatedHistory(state);
+      saveFullConversationToCache(partial);
+      throw error;
+    } finally {
+      state.inFlight = null;
+    }
+  }
+
+  /**
+   * Schedule one low-priority history request and reschedule only after it completes.
+   *
+   * @param {string} conversationId - Conversation identifier.
+   */
+  function schedulePaginatedHistoryPrefetch(conversationId) {
+    const state = PAGINATED_HISTORY_STATE.get(conversationId);
+    if (
+      !state ||
+      state.complete ||
+      !state.hasPreviousPage ||
+      state.idleScheduled ||
+      state.backgroundFailed
+    ) {
+      return;
+    }
+
+    state.idleScheduled = true;
+    state.idleDelayTimer = setTimeout(() => {
+      state.idleDelayTimer = null;
+
+      const run = async (deadline) => {
+        state.idleScheduled = false;
+        state.idleHandle = null;
+
+        if (getConversationIdFromLocation() !== conversationId) return;
+        if (
+          deadline &&
+          !deadline.didTimeout &&
+          typeof deadline.timeRemaining === "function" &&
+          deadline.timeRemaining() < 8
+        ) {
+          schedulePaginatedHistoryPrefetch(conversationId);
+          return;
+        }
+
+        try {
+          await fetchNextPaginatedHistoryPage(state);
+        } catch (error) {
+          state.backgroundFailed = true;
+          log.basic("[history] idle prefetch paused", {
+            conversationId,
+            error: String(error),
+          });
+          return;
+        }
+
+        if (state.hasPreviousPage) {
+          schedulePaginatedHistoryPrefetch(conversationId);
+        }
+      };
+
+      if (typeof window.requestIdleCallback === "function") {
+        state.idleHandle = window.requestIdleCallback(run, {
+          timeout: HISTORY_IDLE_TIMEOUT_MS,
+        });
+      } else {
+        state.idleHandle = setTimeout(
+          () => run({ didTimeout: true, timeRemaining: () => 0 }),
+          HISTORY_IDLE_DELAY_MS
+        );
+      }
+    }, HISTORY_IDLE_DELAY_MS);
+  }
+
+  /**
+   * Load every missing history page immediately for an export request.
+   *
+   * @param {string} conversationId - Conversation identifier.
+   * @returns {Promise<Object>} Complete legacy-compatible conversation.
+   */
+  async function ensurePaginatedHistoryComplete(conversationId) {
+    let state = PAGINATED_HISTORY_STATE.get(conversationId) || null;
+    if (!state?.initialSeen) {
+      await fetchInitialPaginatedHistory(conversationId);
+      state = PAGINATED_HISTORY_STATE.get(conversationId) || null;
+    }
+    if (!state) {
+      throw new Error("Conversation history state is unavailable");
+    }
+
+    state.backgroundFailed = false;
+    const deadlineAt = Date.now() + HISTORY_EXPORT_TIMEOUT_MS;
+    let requestCount = 0;
+
+    while (state.hasPreviousPage && !state.complete) {
+      if (Date.now() >= deadlineAt) {
+        throw new Error("Conversation history loading timed out");
+      }
+      if (requestCount >= 1000) {
+        throw new Error("Conversation history page limit exceeded");
+      }
+
+      requestCount += 1;
+      await fetchNextPaginatedHistoryPage(state);
+    }
+
+    const data = buildConversationFromPaginatedHistory(state);
+    saveFullConversationToCache(data);
+    return data;
   }
 
   /**
@@ -5583,6 +6182,7 @@
       !isFileDownloadRequest(url) &&
       !shouldObserveEventStream &&
       !isTargetConversationRequest(url) &&
+      !isPaginatedConversationRequest(url) &&
       !isSnorlaxSidebarRequest(url)
     ) {
       return orgResponse;
@@ -5642,6 +6242,21 @@
         }
       } catch (error) {
         log.basic("failed to cache file download response", String(error));
+      }
+
+      return orgResponse;
+    }
+
+    // New partial-history API. Cache the accumulating full export payload but leave
+    // ChatGPT's paginated response untouched so its own rendering stays compatible.
+    if (isPaginatedConversationRequest(url)) {
+      try {
+        ingestPaginatedConversationResponse(rawData, url, {
+          schedule: true,
+          publish: true,
+        });
+      } catch (error) {
+        log.basic("failed to cache paginated conversation response", String(error));
       }
 
       return orgResponse;
@@ -5956,6 +6571,45 @@
   // =========================================================
   // EXPORT CACHE BRIDGE
   // =========================================================
+  /**
+   * Reply to a content-layer export cache request, optionally completing paginated history first.
+   *
+   * @param {Object} request - Authenticated bridge request.
+   * @returns {Promise<void>}
+   */
+  async function respondToExportCacheRequest(request) {
+    const conversationId = request.conversationId || "";
+    const requestId = request.requestId;
+    let completionError = "";
+
+    if (request.complete === true && conversationId) {
+      try {
+        await ensurePaginatedHistoryComplete(conversationId);
+      } catch (error) {
+        completionError = String(
+          error?.message || error || "Conversation history loading failed"
+        );
+        log.basic("[history] export completion failed", {
+          conversationId,
+          error: completionError,
+        });
+      }
+    }
+
+    const cached = getCachedConversationForBridge(conversationId);
+    window.postMessage(
+      {
+        type: "CGO_EXPORT_CACHE_RESPONSE",
+        requestId,
+        data: cached ? structuredClone(cached) : null,
+        error:
+          completionError ||
+          (cached ? null : "Conversation cache not found"),
+      },
+      "*"
+    );
+  }
+
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
     const data = event.data;
@@ -5967,20 +6621,7 @@
         return; // Ignore unauthenticated requests
       }
 
-      const conversationId = data.conversationId;
-      const requestId = data.requestId;
-
-      const cached = getCachedConversationForBridge(conversationId);
-
-      window.postMessage(
-        {
-          type: "CGO_EXPORT_CACHE_RESPONSE",
-          requestId,
-          data: cached ? structuredClone(cached) : null,
-          error: cached ? null : "Conversation cache not found",
-        },
-        "*"
-      );
+      void respondToExportCacheRequest(data);
     } else if (data.type === "CGO_TRIM_META_REQUEST") {
       if (data.secret !== PAGE_BRIDGE_SECRET) {
         return;

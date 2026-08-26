@@ -69,6 +69,7 @@ It may also work on other Chromium-based browsers, but compatibility can vary de
 - Open a **Lightweight HTML** viewer for fast local browsing
 - Download a standalone **HTML** archive of the conversation
 - Download a **ZIP** archive that can also preserve attached files
+- Preloads paginated conversation history during browser idle time and completes any missing pages when export starts
 
 ### 📋 Copy support for everyday use
 - Copy conversation content as Markdown

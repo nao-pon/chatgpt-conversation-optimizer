@@ -76,6 +76,7 @@ $CommonExcludeNames = @(
     "node_modules",
     "release",
     "scripts",
+    "tests",
     "Thumbs.db"
 )
 

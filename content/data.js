@@ -135,16 +135,25 @@
    * Request the current conversation payload from the page hook's in-memory cache.
    *
    * @param {string} [conversationId=CGO.getConversationIdFromLocation()] - Conversation id to request from the page cache.
+   * @param {{complete?:boolean,timeoutMs?:number}} [options={}] - Request options. `complete` asks the page hook to fetch all missing history pages first.
    * @returns {Promise<Object>} Cached conversation data used for export.
    */
-  function getConversationFromCache(conversationId = CGO.getConversationIdFromLocation()) {
+  function getConversationFromCache(
+    conversationId = CGO.getConversationIdFromLocation(),
+    options = {}
+  ) {
     return new Promise((resolve, reject) => {
-      const requestId = "cgo_export_" + Date.now();
+      const requestId =
+        "cgo_export_" + Date.now() + "_" + Math.random().toString(36).slice(2);
+      const requestedTimeout = Number(options.timeoutMs);
+      const timeoutMs = Number.isFinite(requestedTimeout) && requestedTimeout > 0
+        ? requestedTimeout
+        : 5000;
 
       const timer = setTimeout(() => {
         window.removeEventListener("message", handler);
         reject(new Error("Export cache response timeout"));
-      }, 5000);
+      }, timeoutMs);
 
       /**
        * Handle window "message" events for CGO export cache responses and settle the export promise.
@@ -177,6 +186,7 @@
           type: "CGO_EXPORT_CACHE_REQUEST",
           requestId,
           conversationId,
+          complete: options.complete === true,
           secret: window.__CGO_BRIDGE_SECRET__ || "",
         },
         "*"
@@ -248,10 +258,35 @@
    */
   async function getConversationForExport(conversationId = CGO.getConversationIdFromLocation()) {
     let cached = null;
+    let paginatedCompletionError = null;
     try {
       cached = await CGO.getConversationFromCache(conversationId);
     } catch (_) {
       cached = null;
+    }
+
+    if (!cached || cached.__cgo_history_complete === false) {
+      try {
+        CGO.log("[export] completing paginated conversation history", {
+          conversationId,
+          cachedMessageCount: Object.keys(cached?.mapping || {}).length,
+          pageCount: Number(cached?.__cgo_history_page_count || 0),
+          nextBefore: cached?.__cgo_history_next_before || "",
+        });
+        const completed = await CGO.getConversationFromCache(conversationId, {
+          complete: true,
+          timeoutMs: 125000,
+        });
+        if (completed) {
+          cached = completed;
+        }
+      } catch (error) {
+        paginatedCompletionError = error;
+        CGO.log("[warn] paginated conversation completion failed", {
+          conversationId,
+          error: String(error),
+        });
+      }
     }
 
     const refreshReason = getConversationRefreshReason(cached);
@@ -297,6 +332,14 @@
       });
     }
 
+    if (
+      paginatedCompletionError &&
+      cached?.__cgo_paginated_history === true &&
+      cached?.__cgo_history_complete !== true
+    ) {
+      throw paginatedCompletionError;
+    }
+
     return cached || CGO.getConversationFromCache(conversationId);
   }
 
@@ -318,6 +361,12 @@
    */
   function getConversationRefreshReason(cached) {
     if (!cached) return "missing-cache";
+    if (
+      cached.__cgo_paginated_history === true &&
+      cached.__cgo_history_complete !== true
+    ) {
+      return "history-incomplete";
+    }
 
     const mapping = cached.mapping || {};
     const currentNode = cached.current_node || "";
