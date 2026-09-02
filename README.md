@@ -1,182 +1,149 @@
 # Conversation Optimizer for ChatGPT [![Available in the Chrome Web Store](https://developer.chrome.com/static/docs/webstore/branding/image/tbyBjqi7Zu733AAKA5n4.png)](https://chromewebstore.google.com/detail/conversation-optimizer-fo/chmaignkjgccgmacmlfgnmbfbnnfmnpl)
 
-![CGO Image](docs/images/CGO_rounded_transparent.png)
+![CGO](docs/images/CGO_rounded_transparent.png)
 
 [![Chrome Web Store Version](https://img.shields.io/chrome-web-store/v/chmaignkjgccgmacmlfgnmbfbnnfmnpl?logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/conversation-optimizer-fo/chmaignkjgccgmacmlfgnmbfbnnfmnpl)
-[![Version](https://img.shields.io/badge/version-2.0.9-blue)](../../releases)
+[![Version](https://img.shields.io/badge/version-2.1.0-blue)](../../releases)
 [![Manifest](https://img.shields.io/badge/manifest-v3-green)](./manifest.json)
 [![Platform](https://img.shields.io/badge/platform-Chrome-orange)](https://www.google.com/chrome/)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey)](./LICENSE)
 
-**Keep long ChatGPT conversations usable — and worth keeping.**
+**Export, preserve, and revisit the ChatGPT conversations worth keeping.**
 
-> Chat is meant to flow.
-> Useful in the moment, and not always meant to remain on the screen forever.
->
-> But some conversations carry things worth keeping.
-> Decisions, context, experiments, and ideas that may matter again later.
->
-> CGO lives somewhere in between:
-> letting conversation stay light,
-> while giving important words a way to remain.
+Conversation Optimizer for ChatGPT (CGO) is a Chrome extension focused on exporting conversations from ChatGPT Web. It collects history that ChatGPT loads page by page and turns it into a lightweight viewer, a standalone HTML file, or a ZIP archive with downloadable assets where available.
 
-Conversation Optimizer for ChatGPT is a Chrome extension designed to keep long conversations usable by reducing live UI weight and focusing on practical export.
+CGO works in the signed-in ChatGPT Web session. It does not require an OpenAI API key or send conversation data to a CGO-operated server.
+
+---
+
+## What CGO does today
+
+### Export long conversations
+
+- Detects ChatGPT's paginated conversation format
+- Accumulates older conversation pages while the browser is idle
+- Fetches any remaining pages when an export starts
+- Shows the number of collected messages while export-time history loading is in progress
+- Reconstructs the available conversation in chronological order for export
+
+### Choose the right export format
+
+| Format | Best for | What it provides |
+| --- | --- | --- |
+| **Lightweight viewer** | Quickly reopening and reading a conversation | A dedicated local viewer with fast navigation and reading tools |
+| **HTML** | Keeping a simple, portable archive | A standalone browser-readable conversation file, with optional embedded images |
+| **ZIP** | Preserving the conversation and related files together | HTML plus downloadable images and attachments where ChatGPT makes them available |
+
+### Read and reuse exported content
+
+- Navigate between user messages from the conversation navigator
+- Copy individual messages as Markdown
+- Copy, collapse, and expand code blocks
+- Review thoughts, generated images, and attachments when that data is available
+- Open the original conversation in ChatGPT Web from the exported view
+
+---
+
+## Why CGO changed
+
+CGO was originally created to address a problem with very large ChatGPT conversations. As an entire conversation remained loaded and rendered in the browser, the page could become increasingly heavy and eventually difficult to continue using. Early CGO versions reduced older off-screen content in the DOM so that long-running conversations could remain practical.
+
+Export features were added gradually during that development: first as a way to revisit content removed from the live page, and later as useful tools in their own right.
+
+ChatGPT Web now loads large conversation histories in pages. This change addresses much of the original browser-load problem, so CGO no longer removes rendered messages when the current paginated format is detected. Its main role is now to collect the available history and create useful, readable local exports.
+
+The earlier DOM-retention behavior remains only as compatibility support for legacy full-conversation responses. Its settings are shown only when that older mode is detected.
+
+---
+
+## How it works
+
+1. Open a conversation in ChatGPT Web.
+2. CGO detects the conversation response and adds export tools to the conversation header.
+3. For paginated conversations, CGO gradually collects older pages during idle time.
+4. Choose the lightweight viewer, HTML, or ZIP export.
+5. If history is still missing, CGO completes it first and displays the collected message count.
+6. The selected output is generated locally in the browser.
+
+CGO uses the interfaces available to the ChatGPT web app rather than the public OpenAI developer API. Because those web interfaces can change, CGO may occasionally require compatibility updates.
+
+---
+
+## Screenshots
+
+### Conversation header tools
+
+<img alt="Conversation header export tools" src="docs/images/header-tools.png" width="50%" />
+
+### Settings panel
+
+Settings adapt to the history format detected for the current conversation.
+
+<img alt="CGO settings panel" src="docs/images/settings-panel.png" width="50%" />
+
+### Lightweight viewer
+
+<img alt="CGO lightweight conversation viewer" src="docs/images/lightweight-html.png" width="50%" />
+
+### ZIP export
+
+<img alt="CGO ZIP export workflow" src="docs/images/zip-export.png" width="50%" />
+
+### Toolbar guide
+
+![CGO toolbar feature guide](docs/images/CGO-Mennu-Feature-Guide.png)
+
+---
+
+## Installation
+
+### Chrome Web Store
+
+Install [Conversation Optimizer for ChatGPT from the Chrome Web Store](https://chromewebstore.google.com/detail/conversation-optimizer-fo/chmaignkjgccgmacmlfgnmbfbnnfmnpl).
+
+### From source
+
+1. Download or clone this repository.
+2. Open `chrome://extensions/` in Chrome.
+3. Enable **Developer mode**.
+4. Select **Load unpacked**.
+5. Choose this project folder.
+
+The `main` branch contains the latest development version. Stable builds are published through GitHub Releases and the Chrome Web Store. See [Release preparation](docs/RELEASE.md) for packaging notes.
 
 ---
 
 ## Compatibility
 
-Conversation Optimizer for ChatGPT is designed for Google Chrome and confirmed to work on Microsoft Edge.
+CGO is designed for Google Chrome and is also confirmed to work on Microsoft Edge.
 
-It may also work on other Chromium-based browsers, but compatibility can vary depending on browser behavior and changes to the ChatGPT web interface.
-
----
-
-## 🖼 Screenshots
-
-### Conversation header tools
-
-<img alt="Conversation header tools" src="docs/images/header-tools.png" width="50%" />
-
-### Settings panel
-
-<img alt="Settings panel" src="docs/images/settings-panel.png" width="50%" />
-
-### Lightweight HTML viewer
-
-<img alt="Lightweight HTML viewer" src="docs/images/lightweight-html.png" width="50%" />
-
-### ZIP / export workflow
-
-<img alt="ZIP export" src="docs/images/zip-export.png" width="50%" />
+Other Chromium-based browsers may work, but behavior can vary with the browser and with changes to ChatGPT Web.
 
 ---
 
-## ✨ Features
+## Privacy
 
-![CGO Mennu Feature Guide](docs/images/CGO-Mennu-Feature-Guide.png)
+CGO runs locally in the browser and is intended for exporting your own conversation data.
 
-### ⚡ Performance optimization for long conversations
-- Uses ChatGPT's paginated conversation loading without removing rendered messages again
-- Retains the earlier DOM-reduction behavior only as compatibility support for legacy conversation responses
-- Helps long conversations remain responsive for much longer
-- Designed for code-heavy, media-rich, and context-heavy chats
+- No CGO account or external CGO service is required
+- No OpenAI developer API key is required
+- Export data is prepared locally and saved or opened only when you request it
+- Requests needed to collect conversation history and files use the active ChatGPT Web session
 
-### 🎛️ Legacy message control
-- Automatically adjusts how many messages stay visible only when ChatGPT returns the legacy full-conversation format
-- Hides DOM-retention controls for conversations already using server-side pagination
-
-### 📦 Practical export tools
-- Open a **Lightweight HTML** viewer for fast local browsing
-- Download a standalone **HTML** archive of the conversation
-- Download a **ZIP** archive that can also preserve attached files
-- Preloads paginated conversation history during browser idle time and completes any missing pages when export starts
-
-### 📋 Copy support for everyday use
-- Copy conversation content as Markdown
-- Copy code blocks with one click
+See [PRIVACY.md](PRIVACY.md) for the project privacy policy.
 
 ---
 
-## 🛠 Installation
+## Limitations
 
-### From source
-1. Download or clone this repository.
-2. Open `chrome://extensions/` in Chrome.
-3. Enable **Developer mode**.
-4. Click **Load unpacked**.
-5. Select this project folder.
-
-> The `main` branch contains the latest development version.
-> Stable versions are available from GitHub Releases and the Chrome Web Store.
-> Release preparation notes are maintained in [docs/RELEASE.md](docs/RELEASE.md).
-
-### After installation
-1. Open ChatGPT in Chrome.
-2. Start or open a conversation.
-3. The extension UI will appear in the conversation header when supported pages are detected.
+- CGO depends on ChatGPT Web's internal response formats and endpoints, which may change without notice
+- Export can include only the conversation data and files available to the current ChatGPT session
+- Some images, generated files, or attachments may be unavailable because of expired links, access restrictions, unsupported formats, or ChatGPT-side issues
+- The paginated format exposes an ordered message history rather than the complete legacy branch graph, so alternate branches or versions may not always be reconstructed exactly as before
+- Legacy DOM optimization is compatibility behavior and is not used for conversations handled by ChatGPT's current paginated format
 
 ---
 
-## 🚀 Usage
+## License
 
-### Basic usage
-Once installed, the extension works directly on the ChatGPT web interface.
-
-It helps keep long conversations lighter by reducing how much past content remains actively rendered in the browser at one time.
-
-### Message visibility control
-You can use the settings panel to:
-- choose how many messages remain visible
-- enable or disable automatic adjustment
-- configure HTML export behavior
-
-### Copy tools
-Within exported views and supported UI areas, you can:
-- copy message content as Markdown
-- copy code blocks directly
-
-### Recommended workflow
-For very long conversations:
-
-1. Continue working normally while the extension keeps the visible conversation lighter.
-2. To revisit older content, open the **Lightweight HTML** viewer.
-3. For a local archive, use **HTML Download**.
-4. To also preserve attachments, use **ZIP Download**.
-
----
-
-## 📁 Export formats
-
-### 💨 Lightweight HTML
-Best for quickly reopening and browsing older conversation content.
-
-- Fast and lightweight
-- Good for local review
-- Useful when you want smooth scrolling and quick access to past messages
-
-### 🌐 HTML Download
-Best for saving a standalone copy of the conversation.
-
-- Easy to keep as a local archive
-- Convenient for reading later in a browser
-- Suitable when you mainly want the conversation itself
-
-### 🗜️ ZIP Download
-Best for fuller preservation.
-
-- Saves the conversation in an exportable package
-- Can include attached files
-- Useful when you want to keep both the conversation and related assets together
-
----
-
-## 🔒 Privacy
-
-This extension is designed to work locally in your browser while interacting with the ChatGPT web app.
-
-Its purpose is to optimize conversation display and export conversation data for the user’s own use.
-
-- No separate external service is required for the core workflow
-- The extension is intended to help you manage and preserve your own conversation content
-
----
-
-## ⚠️ Limitations
-
-- This extension depends on the structure and behavior of the ChatGPT web interface, which may change over time
-- Older conversation content may not remain fully visible on screen at all times, by design
-- Export results may vary depending on the type of content in the conversation
-- Some images or attachments may not always be recoverable in every export mode
-- Browser performance improvements can vary depending on conversation size, content type, and Chrome environment
-
----
-
-## 🎯 Version 2 focus
-
-Version 2 is designed around two goals:
-
-1. keeping very long ChatGPT conversations practical  
-2. making older conversation content easier to preserve and revisit
-
-It is not only a performance tool, but also a workflow tool for people who rely on long ChatGPT sessions.
+Conversation Optimizer for ChatGPT is available under the [MIT License](LICENSE).
