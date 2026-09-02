@@ -68,6 +68,9 @@
   "exporting": {
     "message": "Exporting..."
   },
+  "export_conversation_history_progress": {
+    "message": "Loading conversation data... ($1 items)"
+  },
   "export_progress": {
     "message": "Exporting...($1/$2)"
   },

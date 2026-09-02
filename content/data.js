@@ -135,7 +135,7 @@
    * Request the current conversation payload from the page hook's in-memory cache.
    *
    * @param {string} [conversationId=CGO.getConversationIdFromLocation()] - Conversation id to request from the page cache.
-   * @param {{complete?:boolean,timeoutMs?:number}} [options={}] - Request options. `complete` asks the page hook to fetch all missing history pages first.
+   * @param {{complete?:boolean,timeoutMs?:number,onProgress?:(progress:Object)=>void}} [options={}] - Request options. `complete` asks the page hook to fetch all missing history pages first.
    * @returns {Promise<Object>} Cached conversation data used for export.
    */
   function getConversationFromCache(
@@ -166,8 +166,21 @@
         if (event.source !== window) return;
 
         const data = event.data;
-        if (!data || data.type !== "CGO_EXPORT_CACHE_RESPONSE") return;
+        if (!data) return;
         if (data.requestId !== requestId) return;
+
+        if (data.type === "CGO_EXPORT_CACHE_PROGRESS") {
+          if (typeof options.onProgress === "function") {
+            try {
+              options.onProgress(data.progress || {});
+            } catch (error) {
+              CGO.log("[warn] export cache progress callback failed", String(error));
+            }
+          }
+          return;
+        }
+
+        if (data.type !== "CGO_EXPORT_CACHE_RESPONSE") return;
 
         clearTimeout(timer);
         window.removeEventListener("message", handler);
@@ -254,9 +267,13 @@
    * Return the best conversation payload for export, using backend refresh only as a fallback.
    *
    * @param {string} [conversationId=CGO.getConversationIdFromLocation()] - Conversation id to load.
+   * @param {{onHistoryProgress?:(progress:Object)=>void}} [options={}] - Export-time history loading callbacks.
    * @returns {Promise<Object>} Conversation payload.
    */
-  async function getConversationForExport(conversationId = CGO.getConversationIdFromLocation()) {
+  async function getConversationForExport(
+    conversationId = CGO.getConversationIdFromLocation(),
+    options = {}
+  ) {
     let cached = null;
     let paginatedCompletionError = null;
     try {
@@ -276,6 +293,7 @@
         const completed = await CGO.getConversationFromCache(conversationId, {
           complete: true,
           timeoutMs: 125000,
+          onProgress: options.onHistoryProgress,
         });
         if (completed) {
           cached = completed;

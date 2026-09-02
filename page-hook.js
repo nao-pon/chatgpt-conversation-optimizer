@@ -4,7 +4,7 @@
   // =========================================================
   // INSTALL GUARD / CONSTANTS / CONFIG / STATE
   // =========================================================
-  const PAGE_HOOK_VERSION = "4";
+  const PAGE_HOOK_VERSION = "5";
   const PAGE_BRIDGE_SECRET = "CGO_BRIDGE_" + Math.random().toString(36).slice(2, 15);
 
   if (window.__CGO_MAIN_HOOK_INSTALLED__) {
@@ -1284,9 +1284,10 @@
    * Load every missing history page immediately for an export request.
    *
    * @param {string} conversationId - Conversation identifier.
+   * @param {(progress:Object)=>void} [onProgress] - Called with the accumulated message count after each loading step.
    * @returns {Promise<Object>} Complete legacy-compatible conversation.
    */
-  async function ensurePaginatedHistoryComplete(conversationId) {
+  async function ensurePaginatedHistoryComplete(conversationId, onProgress) {
     let state = PAGINATED_HISTORY_STATE.get(conversationId) || null;
     if (!state?.initialSeen) {
       await fetchInitialPaginatedHistory(conversationId);
@@ -1299,6 +1300,17 @@
     state.backgroundFailed = false;
     const deadlineAt = Date.now() + HISTORY_EXPORT_TIMEOUT_MS;
     let requestCount = 0;
+    const reportProgress = () => {
+      if (typeof onProgress !== "function") return;
+      onProgress({
+        conversationId,
+        messageCount: state.orderedMessageIds.length,
+        pageCount: state.pageCount,
+        complete: !!state.complete,
+      });
+    };
+
+    reportProgress();
 
     while (state.hasPreviousPage && !state.complete) {
       if (Date.now() >= deadlineAt) {
@@ -1310,6 +1322,7 @@
 
       requestCount += 1;
       await fetchNextPaginatedHistoryPage(state);
+      reportProgress();
     }
 
     const data = buildConversationFromPaginatedHistory(state);
@@ -6586,7 +6599,16 @@
 
     if (request.complete === true && conversationId) {
       try {
-        await ensurePaginatedHistoryComplete(conversationId);
+        await ensurePaginatedHistoryComplete(conversationId, (progress) => {
+          window.postMessage(
+            {
+              type: "CGO_EXPORT_CACHE_PROGRESS",
+              requestId,
+              progress,
+            },
+            "*"
+          );
+        });
       } catch (error) {
         completionError = String(
           error?.message || error || "Conversation history loading failed"

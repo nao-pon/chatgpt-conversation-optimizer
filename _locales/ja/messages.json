@@ -68,6 +68,9 @@
   "exporting": {
     "message": "エクスポート中..."
   },
+  "export_conversation_history_progress": {
+    "message": "会話データ取得中... ($1件)"
+  },
   "export_progress": {
     "message": "エクスポート中...($1/$2)"
   },

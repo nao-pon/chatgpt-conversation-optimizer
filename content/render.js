@@ -1823,10 +1823,22 @@
       if (!conversationId) {
         throw new Error("conversationId not found");
       }
-      const conversationData = await CGO.getConversationForExport?.(conversationId) ||
+      const conversationData = await CGO.getConversationForExport?.(conversationId, {
+        onHistoryProgress: ({ messageCount }) => {
+          if (button) {
+            CGO.setToolbarButtonText(
+              button,
+              CGO.t("export_conversation_history_progress", [messageCount])
+            );
+          }
+        },
+      }) ||
         await CGO.getConversationFromCache(conversationId);
       if (!conversationData) {
         throw new Error("conversation cache not found");
+      }
+      if (button) {
+        CGO.setToolbarButtonText(button, CGO.t("exporting"));
       }
       const mapping = conversationData?.mapping || {};
       const currentNode = conversationData?.current_node || null;

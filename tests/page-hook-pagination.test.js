@@ -215,8 +215,14 @@ test("paginated ChatGPT history is accumulated for export without rewriting resp
     filename: contentDataPath,
   });
 
+  const progressMessageCounts = [];
   const complete = await harness.window.__CGO.getConversationForExport(
-    "conversation-1"
+    "conversation-1",
+    {
+      onHistoryProgress({ messageCount }) {
+        progressMessageCounts.push(messageCount);
+      },
+    }
   );
   assert.equal(complete.__cgo_history_complete, true);
   assert.equal(complete.__cgo_history_page_count, 3);
@@ -230,6 +236,7 @@ test("paginated ChatGPT history is accumulated for export without rewriting resp
     "user-newest",
     "assistant-newest",
   ]);
+  assert.deepEqual(progressMessageCounts, [2, 4, 7]);
   assert.equal(complete.mapping["system-oldest"].parent, null);
   assert.deepEqual(complete.mapping["system-oldest"].children, ["user-oldest"]);
   assert.equal(complete.mapping["assistant-middle"].children[0], "user-newest");
