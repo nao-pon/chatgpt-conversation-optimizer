@@ -460,6 +460,80 @@
   }
 
   /**
+   * Cancel a scheduled DOM trim and invalidate any idle callback that was already queued.
+   */
+  function cancelPendingDomTrim() {
+    if (CGO.STATE.domTrimTimer) {
+      clearTimeout(CGO.STATE.domTrimTimer);
+      CGO.STATE.domTrimTimer = null;
+    }
+    CGO.STATE.domTrimTicket = Number(CGO.STATE.domTrimTicket || 0) + 1;
+  }
+
+  /**
+   * Return whether the active conversation uses ChatGPT's server-side paginated history.
+   *
+   * @returns {boolean} `true` when CGO must not remove conversation DOM nodes.
+   */
+  function isPaginatedHistoryActive() {
+    return CGO.STATE.activeConversationHistoryMode === "paginated";
+  }
+
+  /**
+   * Return whether legacy DOM pruning is explicitly enabled for the active conversation.
+   *
+   * Unknown mode remains non-destructive until the transport has been identified.
+   *
+   * @returns {boolean} `true` only for the legacy full-conversation API.
+   */
+  function isDomPruningEnabled() {
+    return CGO.STATE.activeConversationHistoryMode === "legacy";
+  }
+
+  /**
+   * Record the active conversation transport mode and apply its DOM-pruning policy.
+   *
+   * @param {"unknown"|"legacy"|"paginated"} mode - Detected history transport mode.
+   * @param {string} [conversationId=""] - Conversation associated with the detection.
+   * @returns {boolean} Whether the mode was accepted for the current route.
+   */
+  function setActiveConversationHistoryMode(mode, conversationId = "") {
+    const normalizedMode =
+      mode === "paginated" || mode === "legacy" ? mode : "unknown";
+    const currentConversationId = CGO.getConversationIdFromLocation?.() || "";
+    if (
+      conversationId &&
+      currentConversationId &&
+      conversationId !== currentConversationId
+    ) {
+      return false;
+    }
+
+    const changed =
+      CGO.STATE.activeConversationHistoryMode !== normalizedMode ||
+      CGO.STATE.activeConversationHistoryModeConversationId !== conversationId;
+    CGO.STATE.activeConversationHistoryMode = normalizedMode;
+    CGO.STATE.activeConversationHistoryModeConversationId =
+      conversationId || currentConversationId || "";
+
+    if (normalizedMode !== "legacy") {
+      cancelPendingDomTrim();
+    }
+    if (normalizedMode === "paginated") {
+      resetInitialPruneNoticeState(true);
+    }
+
+    if (changed) {
+      const panel = document.getElementById("cgo-settings-panel");
+      if (panel && typeof panel.__cgoSyncFromSettings === "function") {
+        void panel.__cgoSyncFromSettings();
+      }
+    }
+
+    return true;
+  }
+
+  /**
    * Extract the best-effort message id from a visible conversation block node.
    *
    * @param {HTMLElement|null|undefined} node - Chat turn block element.
@@ -723,6 +797,11 @@
    * Remove the oldest visible turns once the DOM exceeds the configured retention budget.
    */
   function trimOldDomTurns() {
+    if (!isDomPruningEnabled()) {
+      CGO.log("[dom] trim skipped outside legacy history mode");
+      return;
+    }
+
     const nodes = getTurnBlocks();
     const keepDomMessages = CGO.getActiveKeepDomMessages?.() || CGO.SETTINGS.keepDomMessages;
     const removeCount = nodes.length - keepDomMessages;
@@ -786,6 +865,11 @@
    * @param {number} [delayMs=CGO.CONFIG.domTrimDelayMs] - Delay before trimming begins.
    */
   function scheduleDomTrim(delayMs = CGO.CONFIG.domTrimDelayMs) {
+    if (!isDomPruningEnabled()) {
+      cancelPendingDomTrim();
+      return;
+    }
+
     if (CGO.STATE.domTrimTimer) {
       clearTimeout(CGO.STATE.domTrimTimer);
     }
@@ -1047,10 +1131,14 @@
       const stats = data.stats || null;
       const level = CGO.getProjectGuideLevel(stats);
       const effective = Number(data.effectiveKeepDomMessages || 0);
+      const historyMode = data.historyMode === "paginated" ? "paginated" : "legacy";
+
+      setActiveConversationHistoryMode(historyMode, conversationId);
+      const domPruningEnabled = isDomPruningEnabled();
 
       CGO.log("[autoAdjustResult]", data);
 
-      if (CGO.SETTINGS.autoAdjustEnabled && effective > 0) {
+      if (domPruningEnabled && CGO.SETTINGS.autoAdjustEnabled && effective > 0) {
         const previousEffective = CGO.getActiveKeepDomMessages?.() || CGO.SETTINGS.keepDomMessages;
         CGO.STATE.effectiveKeepDomMessages = CGO.clampKeepDomMessages(effective);
 
@@ -1083,6 +1171,8 @@
     }
 
     if (data.type === "conversationHeadMeta") {
+      if (isPaginatedHistoryActive()) return;
+
       CGO.STATE.conversationHeadMeta = {
         conversationId: data.conversationId || "",
         firstMessageId: data.meta?.firstMessageId || "",
@@ -1095,6 +1185,8 @@
     }
 
     if (data.type === "initialPruneMeta") {
+      if (isPaginatedHistoryActive()) return;
+
       resetInitialPruneNoticeState();
       CGO.STATE.domTrimState = {
         omittedCount: Number(data.meta?.omittedCount || 0),
@@ -1106,6 +1198,15 @@
     }
 
     if (data.type === "analysis") {
+      const conversationId =
+        data.summary?.conversationId ||
+        CGO.getConversationIdFromLocation?.() ||
+        "";
+      const historyMode = data.summary?.historyMode === "paginated"
+        ? "paginated"
+        : "legacy";
+      setActiveConversationHistoryMode(historyMode, conversationId);
+
       CGO.updateExportButtonVisibility?.(true);
       if (CGO.CONFIG.debug) {
         console.group("[CGO prune analysis]");
@@ -1114,10 +1215,6 @@
         console.groupEnd();
       }
 
-      const conversationId =
-        data.summary?.conversationId ||
-        CGO.getConversationIdFromLocation?.() ||
-        "";
       if (shouldTryUnlockForConversation(conversationId)) {
         scheduleVoiceSyncCheck(conversationId, 0);
       }
@@ -1158,7 +1255,10 @@
   CGO.observeWindowMessages = observeWindowMessages;
   CGO.ensureInitialPruneNotice = ensureInitialPruneNotice;
   CGO.handleConversationRouteChanged = handleConversationRouteChanged;
+  CGO.isDomPruningEnabled = isDomPruningEnabled;
+  CGO.isPaginatedHistoryActive = isPaginatedHistoryActive;
   CGO.requestInitialPruneMetaFromPageHook = requestInitialPruneMetaFromPageHook;
   CGO.resetInitialPruneNoticeState = resetInitialPruneNoticeState;
   CGO.scheduleDomTrim = scheduleDomTrim;
+  CGO.setActiveConversationHistoryMode = setActiveConversationHistoryMode;
 })();

@@ -5,7 +5,7 @@
   const CGO = (globalThis.__CGO ||= {});
 
 
-  CGO.PAGE_HOOK_VERSION = "3";
+  CGO.PAGE_HOOK_VERSION = "4";
   CGO.PAGE_MAIN_HOOK_ID = "cgo-page-hook-script";
   // Keep viewer payloads reloadable for 24 hours unless this hardcoded switch is enabled.
   CGO.VIEWER_DELETE_AFTER_RENDER = false;
@@ -37,6 +37,8 @@
     domTrimTicket: 0,
     effectiveKeepDomMessages: null,
     activeConversationId: "",
+    activeConversationHistoryMode: "unknown",
+    activeConversationHistoryModeConversationId: "",
     exportToolbarVisible: false,
 
     conversationHeadMeta: null,
@@ -758,6 +760,7 @@
         !!previousConversationId &&
         conversationId === previousConversationId;
       CGO.STATE.activeConversationId = conversationId;
+      CGO.setActiveConversationHistoryMode?.("unknown", conversationId);
 
       CGO.STATE.projectGuide = {
         conversationId: "",
@@ -785,8 +788,14 @@
         try {
           const cached = await CGO.getConversationFromCache?.(conversationId);
           if (isUsableConversationCache(cached)) {
+            const historyMode = cached.__cgo_paginated_history === true
+              ? "paginated"
+              : "legacy";
+            CGO.setActiveConversationHistoryMode?.(historyMode, conversationId);
             CGO.updateExportButtonVisibility?.(true);
-            CGO.requestInitialPruneMetaFromPageHook?.(conversationId);
+            if (historyMode !== "paginated") {
+              CGO.requestInitialPruneMetaFromPageHook?.(conversationId);
+            }
           }
         } catch (_) {
           // The cache may not be ready yet; stream/full-response events will reveal the toolbar later.

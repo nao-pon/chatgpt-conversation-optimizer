@@ -340,12 +340,12 @@
     panel.innerHTML = `
         <div class="cgo-settings-title">${CGO.escapeHtml(CGO.t("settings_button") || "Settings")}</div>
 
-        <label class="cgo-settings-row">
+        <label class="cgo-settings-row cgo-dom-optimization-setting">
           <span>${CGO.escapeHtml(CGO.t("keep_dom_messages_label"))}</span>
           <input id="cgo-setting-keep-dom-messages" type="number" min="5" max="200" step="1">
         </label>
 
-        <label class="cgo-settings-row cgo-settings-check">
+        <label class="cgo-settings-row cgo-settings-check cgo-dom-optimization-setting">
           <input id="cgo-setting-auto-adjust-enabled" type="checkbox">
           <span id="cgo-setting-auto-adjust-label">${CGO.escapeHtml(CGO.t("auto_adjust_disabled_label"))}</span>
         </label>
@@ -449,6 +449,17 @@
     }
 
     /**
+     * Hide legacy DOM-retention controls when ChatGPT already paginates the active conversation.
+     */
+    function syncDomOptimizationVisibility() {
+      const hidden = CGO.STATE.activeConversationHistoryMode === "paginated";
+      for (const row of panel.querySelectorAll(".cgo-dom-optimization-setting")) {
+        row.hidden = hidden;
+        row.style.display = hidden ? "none" : "";
+      }
+    }
+
+    /**
      * Populate the settings panel inputs from persisted configuration and refresh the auto-adjust label.
      *
      * Reads values from `CGO.SETTINGS` (falling back to `CGO.CONFIG` and defaults) to set the keep-dom-messages input,
@@ -460,6 +471,7 @@
       htmlImagesInput.checked = CGO.SETTINGS.htmlDownloadIncludeImages !== false;
       debugEnabledInput.checked = !!CGO.SETTINGS.debugEnabled;
       debugLevelInput.value = CGO.SETTINGS.debugLevel ?? CGO.CONFIG.debugLevel ?? "BASIC";
+      syncDomOptimizationVisibility();
       syncDebugLevelEnabledState();
       await updateAutoAdjustLabel();
     }

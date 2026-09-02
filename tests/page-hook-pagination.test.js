@@ -196,6 +196,16 @@ test("paginated ChatGPT history is accumulated for export without rewriting resp
     harness.postedMessages.some((message) => message.type === "analysis"),
     "the initial response should reveal the export UI"
   );
+  assert.equal(
+    harness.postedMessages.find((message) => message.type === "analysis")
+      ?.summary?.historyMode,
+    "paginated"
+  );
+  assert.equal(
+    harness.postedMessages.find((message) => message.type === "autoAdjustResult")
+      ?.historyMode,
+    "paginated"
+  );
 
   harness.window.__CGO = {
     log() {},
@@ -232,6 +242,27 @@ test("paginated ChatGPT history is accumulated for export without rewriting resp
       new URL(url, "https://chatgpt.com").searchParams.get("before")
     ),
     ["user-newest", "user-middle"]
+  );
+  assert.equal(
+    harness.postedMessages.some((message) => message.type === "conversationHeadMeta"),
+    false,
+    "paginated history should not publish legacy head restoration metadata"
+  );
+
+  const pruneMetaCount = harness.postedMessages.filter(
+    (message) => message.type === "initialPruneMeta"
+  ).length;
+  harness.window.postMessage({
+    type: "CGO_TRIM_META_REQUEST",
+    conversationId: "conversation-1",
+    secret: harness.window.__CGO_BRIDGE_SECRET__,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(
+    harness.postedMessages.filter((message) => message.type === "initialPruneMeta")
+      .length,
+    pruneMetaCount,
+    "paginated history should not restore legacy omission metadata"
   );
 
   const refreshedPayload = {

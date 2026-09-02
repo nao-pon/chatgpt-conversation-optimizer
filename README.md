@@ -57,13 +57,14 @@ It may also work on other Chromium-based browsers, but compatibility can vary de
 ![CGO Mennu Feature Guide](docs/images/CGO-Mennu-Feature-Guide.png)
 
 ### ⚡ Performance optimization for long conversations
-- Reduces browser rendering load by keeping the active on-screen conversation smaller
+- Uses ChatGPT's paginated conversation loading without removing rendered messages again
+- Retains the earlier DOM-reduction behavior only as compatibility support for legacy conversation responses
 - Helps long conversations remain responsive for much longer
 - Designed for code-heavy, media-rich, and context-heavy chats
 
-### 🎛️ Automatic and manual message control
-- Automatically adjusts how many messages stay visible based on conversation size
-- Allows manual control over the number of messages kept in the browser DOM
+### 🎛️ Legacy message control
+- Automatically adjusts how many messages stay visible only when ChatGPT returns the legacy full-conversation format
+- Hides DOM-retention controls for conversations already using server-side pagination
 
 ### 📦 Practical export tools
 - Open a **Lightweight HTML** viewer for fast local browsing

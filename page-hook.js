@@ -4,7 +4,7 @@
   // =========================================================
   // INSTALL GUARD / CONSTANTS / CONFIG / STATE
   // =========================================================
-  const PAGE_HOOK_VERSION = "3";
+  const PAGE_HOOK_VERSION = "4";
   const PAGE_BRIDGE_SECRET = "CGO_BRIDGE_" + Math.random().toString(36).slice(2, 15);
 
   if (window.__CGO_MAIN_HOOK_INSTALLED__) {
@@ -935,9 +935,8 @@
    *
    * @param {Object} data - Legacy-compatible accumulated conversation.
    * @param {string} url - Source request URL.
-   * @param {boolean} complete - Whether the oldest page has been loaded.
    */
-  function publishPaginatedConversationAnalysis(data, url, complete) {
+  function publishPaginatedConversationAnalysis(data, url) {
     const stats = buildConversationStats(data);
     const baseKeepDomMessages = CONFIG.baseTurnCount || CONFIG.turnCount;
     const autoAdjustScore = getAutoAdjustScore(stats);
@@ -948,7 +947,10 @@
       CONFIG.autoAdjustEnabled && baseKeepDomMessages > 10
         ? getRecommendedKeepDomMessages(baseKeepDomMessages, stats)
         : baseKeepDomMessages;
-    const summary = analyzeConversation(data, effectiveKeepDomMessages);
+    const summary = {
+      ...analyzeConversation(data, effectiveKeepDomMessages),
+      historyMode: "paginated",
+    };
     const projectName =
       PROJECT_NAME_BY_CONVERSATION_ID.get(data?.conversation_id || "") ||
       PROJECT_NAME_BY_GIZMO_ID.get(
@@ -968,15 +970,9 @@
       stats,
       autoAdjustScore,
       autoAdjustLevel,
-      minimumKeepDomMessages
+      minimumKeepDomMessages,
+      "paginated"
     );
-
-    if (complete) {
-      const headMeta = buildConversationHeadMeta(data);
-      if (headMeta) {
-        postConversationHeadMeta(data.conversation_id || "", headMeta);
-      }
-    }
   }
 
   /**
@@ -1073,7 +1069,7 @@
     const shouldPublish = options.publish !== false &&
       (request.kind === "initial" || state.complete);
     if (shouldPublish) {
-      publishPaginatedConversationAnalysis(data, url, state.complete);
+      publishPaginatedConversationAnalysis(data, url);
     }
 
     log.basic("[history] paginated conversation cached", {
@@ -1676,8 +1672,9 @@
    * @param {number} autoAdjustScore - Heuristic score used to compute the adjustment.
    * @param {number} autoAdjustLevel - Severity level used to step down the keep-dom count.
    * @param {number} minimumKeepDomMessages - Fixed floor for auto-adjusted keep-dom count, capped by the user's base value.
+   * @param {"legacy"|"paginated"} [historyMode="legacy"] - Transport mode used to control content-side DOM pruning.
    */
-  function postAutoAdjustResult(conversationId, projectName, baseKeepDomMessages, effectiveKeepDomMessages, stats, autoAdjustScore, autoAdjustLevel, minimumKeepDomMessages) {
+  function postAutoAdjustResult(conversationId, projectName, baseKeepDomMessages, effectiveKeepDomMessages, stats, autoAdjustScore, autoAdjustLevel, minimumKeepDomMessages, historyMode = "legacy") {
     window.postMessage(
       {
         source: "cgo-prune-runtime",
@@ -1689,6 +1686,7 @@
         autoAdjustScore,
         autoAdjustLevel,
         minimumKeepDomMessages,
+        historyMode,
         stats,
       },
       "*"
@@ -1780,6 +1778,10 @@
   function restoreInitialPruneMetaFromCache(conversationId) {
     const cached = getCachedConversationForBridge(conversationId);
     if (!cached) return false;
+    if (cached.__cgo_paginated_history === true) {
+      log.basic("[trimMeta] skipped for paginated history", { conversationId });
+      return false;
+    }
 
     const data = structuredClone(cached);
     const baseKeepDomMessages = CONFIG.baseTurnCount || CONFIG.turnCount;
