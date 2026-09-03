@@ -272,6 +272,54 @@ test("paginated ChatGPT history is accumulated for export without rewriting resp
     "paginated history should not restore legacy omission metadata"
   );
 
+  const refreshedMiddlePage = structuredClone(middlePage);
+  refreshedMiddlePage.messages[0].content.parts = ["Middle question refreshed"];
+  const repeatedMiddleUrl =
+    "/backend-api/conversations/conversation-1/messages?before=user-newest&include_has_versions=true&num_turns=10";
+  const repeatedMiddleResponse =
+    await harness.window.__CGO_MAIN_HOOK_API__.handleFetchResponse({
+      args: [repeatedMiddleUrl],
+      response: jsonResponse(refreshedMiddlePage),
+      url: repeatedMiddleUrl,
+    });
+  assert.deepEqual(await repeatedMiddleResponse.json(), refreshedMiddlePage);
+
+  const afterRepeatedMiddle = await harness.requestCache();
+  assert.equal(
+    afterRepeatedMiddle.__cgo_history_complete,
+    true,
+    "an interior browser page must not roll completed history back"
+  );
+  assert.equal(afterRepeatedMiddle.__cgo_history_next_before, "");
+  assert.equal(afterRepeatedMiddle.__cgo_history_page_count, 3);
+  assert.deepEqual(Object.keys(afterRepeatedMiddle.mapping), [
+    "system-oldest",
+    "user-oldest",
+    "assistant-oldest",
+    "user-middle",
+    "assistant-middle",
+    "user-newest",
+    "assistant-newest",
+  ]);
+  assert.equal(
+    afterRepeatedMiddle.mapping["user-middle"].message.content.parts[0],
+    "Middle question refreshed",
+    "a repeated page may refresh message data without moving its ids"
+  );
+
+  const repeatProgressCounts = [];
+  await harness.window.__CGO.getConversationForExport("conversation-1", {
+    onHistoryProgress({ messageCount }) {
+      repeatProgressCounts.push(messageCount);
+    },
+  });
+  assert.deepEqual(repeatProgressCounts, []);
+  assert.equal(
+    fetchUrls.length,
+    2,
+    "export must not refetch history after an interior browser request"
+  );
+
   const refreshedPayload = {
     ...initialPayload,
     current_node: "assistant-added",
@@ -298,4 +346,94 @@ test("paginated ChatGPT history is accumulated for export without rewriting resp
   assert.equal(refreshed.current_node, "assistant-added");
   assert.equal(Object.keys(refreshed.mapping).length, 9);
   assert.equal(fetchUrls.length, 2, "known older pages should not be fetched again");
+});
+
+test("an interior browser page does not move an incomplete history frontier backward", async () => {
+  const harness = createPageHookHarness(async () => {
+    throw new Error("the test should not issue its own history request");
+  });
+  const initialUrl =
+    "/backend-api/conversations/conversation-1?include_has_versions=true&num_turns=10";
+  const middleUrl =
+    "/backend-api/conversations/conversation-1/messages?before=user-newest&include_has_versions=true&num_turns=10";
+  const oldestUrl =
+    "/backend-api/conversations/conversation-1/messages?before=user-middle&include_has_versions=true&num_turns=10";
+  const initialPayload = {
+    conversation_id: "conversation-1",
+    current_node: "assistant-newest",
+    messages: [
+      makeMessage("user-newest", "user", "Newest question"),
+      makeMessage("assistant-newest", "assistant", "Newest answer"),
+    ],
+    page_info: {
+      start_cursor: "user-newest",
+      end_cursor: "assistant-newest",
+      has_previous_page: true,
+      has_next_page: false,
+    },
+  };
+  const middlePayload = {
+    messages: [
+      makeMessage("user-middle", "user", "Middle question"),
+      makeMessage("assistant-middle", "assistant", "Middle answer"),
+    ],
+    page_info: {
+      start_cursor: "user-middle",
+      end_cursor: "assistant-middle",
+      has_previous_page: true,
+      has_next_page: true,
+    },
+  };
+  const oldestPayload = {
+    messages: [
+      makeMessage("user-oldest", "user", "Oldest question"),
+      makeMessage("assistant-oldest", "assistant", "Oldest answer"),
+    ],
+    page_info: {
+      start_cursor: "user-oldest",
+      end_cursor: "assistant-oldest",
+      has_previous_page: false,
+      has_next_page: true,
+    },
+  };
+
+  for (const [url, payload] of [
+    [initialUrl, initialPayload],
+    [middleUrl, middlePayload],
+    [middleUrl, middlePayload],
+  ]) {
+    await harness.window.__CGO_MAIN_HOOK_API__.handleFetchResponse({
+      args: [url],
+      response: jsonResponse(payload),
+      url,
+    });
+  }
+
+  const afterRepeatedMiddle = await harness.requestCache();
+  assert.equal(afterRepeatedMiddle.__cgo_history_complete, false);
+  assert.equal(afterRepeatedMiddle.__cgo_history_next_before, "user-middle");
+  assert.equal(afterRepeatedMiddle.__cgo_history_page_count, 2);
+  assert.deepEqual(Object.keys(afterRepeatedMiddle.mapping), [
+    "user-middle",
+    "assistant-middle",
+    "user-newest",
+    "assistant-newest",
+  ]);
+
+  await harness.window.__CGO_MAIN_HOOK_API__.handleFetchResponse({
+    args: [oldestUrl],
+    response: jsonResponse(oldestPayload),
+    url: oldestUrl,
+  });
+  const complete = await harness.requestCache();
+  assert.equal(complete.__cgo_history_complete, true);
+  assert.equal(complete.__cgo_history_next_before, "");
+  assert.deepEqual(Object.keys(complete.mapping), [
+    "user-oldest",
+    "assistant-oldest",
+    "user-middle",
+    "assistant-middle",
+    "user-newest",
+    "assistant-newest",
+  ]);
 });

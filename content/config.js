@@ -5,7 +5,7 @@
   const CGO = (globalThis.__CGO ||= {});
 
 
-  CGO.PAGE_HOOK_VERSION = "5";
+  CGO.PAGE_HOOK_VERSION = "6";
   CGO.PAGE_MAIN_HOOK_ID = "cgo-page-hook-script";
   // Keep viewer payloads reloadable for 24 hours unless this hardcoded switch is enabled.
   CGO.VIEWER_DELETE_AFTER_RENDER = false;

@@ -4,7 +4,7 @@
   // =========================================================
   // INSTALL GUARD / CONSTANTS / CONFIG / STATE
   // =========================================================
-  const PAGE_HOOK_VERSION = "5";
+  const PAGE_HOOK_VERSION = "6";
   const PAGE_BRIDGE_SECRET = "CGO_BRIDGE_" + Math.random().toString(36).slice(2, 15);
 
   if (window.__CGO_MAIN_HOOK_INSTALLED__) {
@@ -812,14 +812,16 @@
    * Merge one ordered message page into a conversation's accumulated history.
    *
    * Server pages are ordered oldest-to-newest. Initial pages replace the known newest
-   * suffix when they overlap; `/messages?before=...` pages are prepended.
+   * suffix when they overlap. Older-message pages are inserted immediately before
+   * their requested `before` anchor so repeated browser requests cannot reorder history.
    *
    * @param {Object} state - Pagination state.
    * @param {Object[]} messages - Raw message records.
    * @param {"initial"|"messages"} kind - Source page kind.
+   * @param {string} [before=""] - Message cursor that follows an older-message page.
    * @returns {number} Number of previously unseen message ids.
    */
-  function mergePaginatedMessages(state, messages, kind) {
+  function mergePaginatedMessages(state, messages, kind, before = "") {
     const incomingIds = [];
     let addedCount = 0;
 
@@ -849,10 +851,24 @@
     }
 
     if (kind === "messages") {
-      state.orderedMessageIds = dedupe([
-        ...incomingIds,
-        ...state.orderedMessageIds,
-      ]);
+      const incomingSet = new Set(incomingIds);
+      const existingWithoutIncoming = state.orderedMessageIds.filter(
+        (id) => !incomingSet.has(id)
+      );
+      const anchorIndex = existingWithoutIncoming.indexOf(String(before || ""));
+
+      if (anchorIndex >= 0) {
+        state.orderedMessageIds = dedupe([
+          ...existingWithoutIncoming.slice(0, anchorIndex),
+          ...incomingIds,
+          ...existingWithoutIncoming.slice(anchorIndex),
+        ]);
+      } else if (addedCount > 0) {
+        state.orderedMessageIds = dedupe([
+          ...incomingIds,
+          ...existingWithoutIncoming,
+        ]);
+      }
       return addedCount;
     }
 
@@ -994,6 +1010,7 @@
       complete: state.complete,
       hasPreviousPage: state.hasPreviousPage,
       nextBefore: state.nextBefore,
+      pageInfo: structuredClone(state.pageInfo || {}),
     };
     const overlapsExistingHistory = rawData.messages.some((message) =>
       state.messagesById.has(String(message?.id || ""))
@@ -1019,7 +1036,8 @@
     const addedCount = mergePaginatedMessages(
       state,
       rawData.messages,
-      request.kind
+      request.kind,
+      request.before
     );
     const pageInfo =
       rawData.page_info && typeof rawData.page_info === "object"
@@ -1034,6 +1052,25 @@
       )
       : "";
 
+    // Only a response requested from the current oldest cursor may advance the
+    // accumulated pagination frontier. Browser scrolling can re-request an interior
+    // page that CGO already prefetched; that response must not roll completion back.
+    if (
+      request.kind === "messages" &&
+      (
+        previousPagination.complete ||
+        (
+          previousPagination.nextBefore &&
+          request.before !== previousPagination.nextBefore
+        )
+      )
+    ) {
+      state.pageInfo = previousPagination.pageInfo;
+      state.hasPreviousPage = previousPagination.hasPreviousPage;
+      state.complete = previousPagination.complete;
+      state.nextBefore = previousPagination.nextBefore;
+    }
+
     // A repeated initial request can refresh the newest suffix after SPA navigation or a
     // newly sent turn. Preserve the already loaded older prefix instead of downloading it again.
     if (
@@ -1041,6 +1078,7 @@
       previousPagination.initialSeen &&
       overlapsExistingHistory
     ) {
+      state.pageInfo = previousPagination.pageInfo;
       if (previousPagination.complete) {
         state.hasPreviousPage = false;
         state.complete = true;

@@ -1,7 +1,7 @@
 (() => {
   if (window.__CGO_PAGE_BOOTSTRAP_READY__) return;
 
-  const VERSION = "5";
+  const VERSION = "6";
   window.__CGO_PAGE_BOOTSTRAP_READY__ = true;
   window.__CGO_PAGE_BOOTSTRAP_VERSION__ = VERSION;
 
