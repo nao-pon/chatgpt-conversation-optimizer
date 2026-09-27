@@ -6,6 +6,8 @@
     '[data-testid="app-shell-header-context-menu-surface"]';
   const MODERN_HEADER_TITLEBAR_SELECTOR =
     'header[data-app-shell-titlebar="true"]';
+  const MODERN_CONVERSATION_CONTENT_SELECTOR =
+    '[data-thread-user-message-navigation-content="true"]';
 
   /**
    * Resolve the current ChatGPT conversation-header surface.
@@ -66,6 +68,59 @@
     if (!titlebar) return null;
 
     return { element: titlebar, layout: "app-shell" };
+  }
+
+  /**
+   * Align the modern fixed project guide with ChatGPT's conversation column.
+   *
+   * @param {?HTMLElement} [guide=document.getElementById("cgo-project-guide")]
+   */
+  function positionProjectGuide(
+    guide = document.getElementById("cgo-project-guide")
+  ) {
+    if (!guide || guide.dataset.cgoHeaderLayout !== "app-shell") return;
+
+    const content = document.querySelector(MODERN_CONVERSATION_CONTENT_SELECTOR);
+    const rect = content?.getBoundingClientRect?.();
+    if (
+      !rect ||
+      !Number.isFinite(rect.left) ||
+      !Number.isFinite(rect.width) ||
+      rect.width <= 0
+    ) {
+      guide.style.left = "";
+      guide.style.right = "";
+      guide.style.width = "";
+      guide.style.transform = "";
+      return;
+    }
+
+    const viewportWidth = Math.max(0, Number(window.innerWidth) || 0);
+    const viewportInset = 16;
+    const maximumWidth = Math.max(0, viewportWidth - viewportInset * 2);
+    const width = Math.min(rect.width, maximumWidth);
+    const centeredLeft = rect.left + (rect.width - width) / 2;
+    const left = Math.min(
+      Math.max(viewportInset, centeredLeft),
+      Math.max(viewportInset, viewportWidth - viewportInset - width)
+    );
+
+    guide.style.left = `${Math.round(left)}px`;
+    guide.style.right = "auto";
+    guide.style.width = `${Math.round(width)}px`;
+    guide.style.transform = "none";
+
+    if (
+      typeof ResizeObserver === "function" &&
+      CGO.projectGuidePositionTarget !== content
+    ) {
+      CGO.projectGuidePositionObserver?.disconnect();
+      CGO.projectGuidePositionObserver = new ResizeObserver(() => {
+        positionProjectGuide();
+      });
+      CGO.projectGuidePositionObserver.observe(content);
+      CGO.projectGuidePositionTarget = content;
+    }
   }
 
   /**
@@ -713,6 +768,7 @@
     if (anchor.layout === "app-shell") {
       guide.dataset.cgoHeaderLayout = "app-shell";
       document.body.appendChild(guide);
+      positionProjectGuide(guide);
     } else {
       anchor.element.after(guide);
     }
@@ -787,6 +843,7 @@
 
     guide.dataset.level = String(level);
     guide.hidden = false;
+    positionProjectGuide(guide);
     await CGO.updateProjectGuideAlertVisibility?.();
   }
 
@@ -867,6 +924,7 @@
       }
       existingToolbar.hidden = !CGO.STATE?.exportToolbarVisible;
       ensureSettingsPanel();
+      positionProjectGuide();
       void CGO.updateProjectGuideAlertVisibility?.();
       return;
     }
@@ -1037,8 +1095,11 @@
     padding: 10px 12px;
     border-radius: 12px;
     border: 1px solid rgba(255,255,255,0.14);
-    background: rgba(255, 196, 0, 0.08);
+    background: rgba(24, 22, 14, 0.88);
     color: #f5f5f5;
+    -webkit-backdrop-filter: blur(16px) saturate(120%);
+    backdrop-filter: blur(16px) saturate(120%);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.28);
     display: flex;
     gap: 12px;
     align-items: center;
@@ -1046,32 +1107,35 @@
   }
 
   .cgo-project-guide[data-cgo-header-layout="app-shell"] {
+    box-sizing: border-box;
     position: fixed;
     top: calc(
       var(--app-shell-root-banner-height, 0px) +
       var(--app-shell-page-banner-height, 0px) +
       var(--app-shell-application-menu-height, 0px) +
       var(--app-shell-titlebar-top-inset, 0px) +
-      var(--app-shell-titlebar-height, var(--height-toolbar, 48px)) +
-      8px
+      var(--app-shell-titlebar-height, var(--height-toolbar, 48px))
     );
-    inset-inline-start: calc(var(--app-shell-left-panel-width, 0px) + 16px);
-    inset-inline-end: 16px;
+    left: 50%;
+    right: auto;
+    width: min(48rem, calc(100vw - 32px));
+    max-width: calc(100vw - 32px);
+    transform: translateX(-50%);
     margin: 0;
     z-index: 29;
     pointer-events: auto;
   }
 
   .cgo-project-guide[data-level="1"] {
-    background: rgba(255, 196, 0, 0.06);
+    background: rgba(26, 24, 15, 0.88);
   }
 
   .cgo-project-guide[data-level="2"] {
-    background: rgba(255, 166, 0, 0.09);
+    background: rgba(30, 24, 12, 0.9);
   }
 
   .cgo-project-guide[data-level="3"] {
-    background: rgba(255, 120, 0, 0.12);
+    background: rgba(34, 23, 10, 0.92);
     border-color: rgba(255,255,255,0.22);
   }
 
@@ -1423,6 +1487,10 @@
       subtree: true
     });
 
+    window.addEventListener("resize", () => {
+      positionProjectGuide();
+    });
+
     scheduleExportButtonInjection(0);
   }
 
@@ -1470,6 +1538,7 @@
   CGO.injectExportButtonIntoHeader = injectExportButtonIntoHeader;
   CGO.injectExportButtonStyle = injectExportButtonStyle;
   CGO.onDomReady = onDomReady;
+  CGO.positionProjectGuide = positionProjectGuide;
   CGO.applyVoiceExportGuardToButton = applyVoiceExportGuardToButton;
   CGO.refreshExportButtonsLockState = refreshExportButtonsLockState;
   CGO.registerExportButton = registerExportButton;

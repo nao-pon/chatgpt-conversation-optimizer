@@ -4,8 +4,8 @@ const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
-function loadUi(document) {
-  const window = { __CGO: {} };
+function loadUi(document, windowOverrides = {}) {
+  const window = { __CGO: {}, ...windowOverrides };
   const context = vm.createContext({
     window,
     globalThis: window,
@@ -110,4 +110,35 @@ test("header action lookup falls back to a native button inside an app-shell obs
 
   const CGO = loadUi(document);
   assert.equal(CGO.findConversationHeaderActions(), actionRow);
+});
+
+test("project guide aligns with the current conversation content column", () => {
+  const guide = {
+    dataset: { cgoHeaderLayout: "app-shell" },
+    style: {},
+  };
+  const content = {
+    getBoundingClientRect() {
+      return { left: 420.25, width: 760.4 };
+    },
+  };
+  const document = {
+    getElementById(id) {
+      return id === "cgo-project-guide" ? guide : null;
+    },
+    querySelector(selector) {
+      return selector ===
+        '[data-thread-user-message-navigation-content="true"]'
+        ? content
+        : null;
+    },
+  };
+
+  const CGO = loadUi(document, { innerWidth: 1600 });
+  CGO.positionProjectGuide();
+
+  assert.equal(guide.style.left, "420px");
+  assert.equal(guide.style.right, "auto");
+  assert.equal(guide.style.width, "760px");
+  assert.equal(guide.style.transform, "none");
 });
