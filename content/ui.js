@@ -2,6 +2,71 @@
   if (globalThis.__CGO_SKIP__) return;
   const CGO = (globalThis.__CGO ||= {});
   const HEADER_TOOLBAR_INJECTION_DEBOUNCE_MS = 120;
+  const MODERN_HEADER_SURFACE_SELECTOR =
+    '[data-testid="app-shell-header-context-menu-surface"]';
+  const MODERN_HEADER_TITLEBAR_SELECTOR =
+    'header[data-app-shell-titlebar="true"]';
+
+  /**
+   * Resolve the current ChatGPT conversation-header surface.
+   *
+   * @returns {?HTMLElement} The modern app-shell header surface, when present.
+   */
+  function findConversationHeaderSurface() {
+    return document.querySelector(MODERN_HEADER_SURFACE_SELECTOR);
+  }
+
+  /**
+   * Resolve the row that owns ChatGPT's native conversation actions.
+   *
+   * Supports both the legacy `#conversation-header-actions` container and the
+   * current app-shell header, where the action row is a sibling of the main
+   * toolbar rather than one of its descendants.
+   *
+   * @returns {?HTMLElement} Container suitable for prepending CGO toolbar actions.
+   */
+  function findConversationHeaderActions() {
+    const legacyActions = document.getElementById("conversation-header-actions");
+    if (legacyActions) return legacyActions;
+
+    const surface = findConversationHeaderSurface();
+    if (!surface) return null;
+
+    const nativeMenuButton = surface.querySelector('button[aria-haspopup="menu"]');
+    if (nativeMenuButton?.parentElement) {
+      return nativeMenuButton.parentElement;
+    }
+
+    const obstacles = surface.querySelectorAll(
+      '[data-app-shell-header-obstacle="true"]'
+    );
+    for (const obstacle of obstacles) {
+      const nativeButton = obstacle.querySelector("button");
+      if (nativeButton?.parentElement) {
+        return nativeButton.parentElement;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Resolve an anchor for the large-conversation guide.
+   *
+   * @returns {{element: HTMLElement, layout: "legacy"|"app-shell"}|null}
+   */
+  function findProjectGuideAnchor() {
+    const legacyActions = document.getElementById("conversation-header-actions");
+    if (legacyActions) {
+      return { element: legacyActions, layout: "legacy" };
+    }
+
+    const surface = findConversationHeaderSurface();
+    const titlebar = surface?.closest(MODERN_HEADER_TITLEBAR_SELECTOR);
+    if (!titlebar) return null;
+
+    return { element: titlebar, layout: "app-shell" };
+  }
 
   /**
    * Create an SVG icon element for toolbar buttons.
@@ -558,8 +623,7 @@
     let panel = document.getElementById("cgo-settings-panel");
     if (panel) return panel;
 
-    const headerActions = document.getElementById("conversation-header-actions");
-    if (!headerActions) return null;
+    if (!document.body) return null;
 
     panel = buildSettingsPanel();
     document.body.appendChild(panel);
@@ -598,8 +662,8 @@
     let guide = document.getElementById("cgo-project-guide");
     if (guide) return guide;
 
-    const headerActions = document.getElementById("conversation-header-actions");
-    if (!headerActions) return null;
+    const anchor = findProjectGuideAnchor();
+    if (!anchor) return null;
 
     guide = document.createElement("div");
     guide.id = "cgo-project-guide";
@@ -646,7 +710,12 @@
       }
     });
 
-    headerActions.after(guide);
+    if (anchor.layout === "app-shell") {
+      guide.dataset.cgoHeaderLayout = "app-shell";
+      document.body.appendChild(guide);
+    } else {
+      anchor.element.after(guide);
+    }
     return guide;
   }
 
@@ -787,15 +856,20 @@
       return;
     }
 
+    const headerActions = findConversationHeaderActions();
+    if (!headerActions) return;
+
     const existingToolbar = document.querySelector("div.cgo-toolbar");
     if (existingToolbar) {
       CGO.toolbarBase = existingToolbar;
+      if (existingToolbar.parentElement !== headerActions) {
+        headerActions.prepend(existingToolbar);
+      }
       existingToolbar.hidden = !CGO.STATE?.exportToolbarVisible;
+      ensureSettingsPanel();
+      void CGO.updateProjectGuideAlertVisibility?.();
       return;
     }
-
-    const headerActions = document.getElementById("conversation-header-actions");
-    if (!headerActions) return;
 
     CGO.toolbarBase = document.createElement("div");
     const toolbarBase = CGO.toolbarBase;
@@ -969,6 +1043,23 @@
     gap: 12px;
     align-items: center;
     justify-content: space-between;
+  }
+
+  .cgo-project-guide[data-cgo-header-layout="app-shell"] {
+    position: fixed;
+    top: calc(
+      var(--app-shell-root-banner-height, 0px) +
+      var(--app-shell-page-banner-height, 0px) +
+      var(--app-shell-application-menu-height, 0px) +
+      var(--app-shell-titlebar-top-inset, 0px) +
+      var(--app-shell-titlebar-height, var(--height-toolbar, 48px)) +
+      8px
+    );
+    inset-inline-start: calc(var(--app-shell-left-panel-width, 0px) + 16px);
+    inset-inline-end: 16px;
+    margin: 0;
+    z-index: 29;
+    pointer-events: auto;
   }
 
   .cgo-project-guide[data-level="1"] {
@@ -1373,6 +1464,9 @@
   }
 
   CGO.closeSettingsPanel = closeSettingsPanel;
+  CGO.findConversationHeaderActions = findConversationHeaderActions;
+  CGO.findConversationHeaderSurface = findConversationHeaderSurface;
+  CGO.findProjectGuideAnchor = findProjectGuideAnchor;
   CGO.injectExportButtonIntoHeader = injectExportButtonIntoHeader;
   CGO.injectExportButtonStyle = injectExportButtonStyle;
   CGO.onDomReady = onDomReady;
