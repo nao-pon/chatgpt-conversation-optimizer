@@ -34,18 +34,20 @@
     const surface = findConversationHeaderSurface();
     if (!surface) return null;
 
-    const nativeMenuButton = surface.querySelector('button[aria-haspopup="menu"]');
-    if (nativeMenuButton?.parentElement) {
-      return nativeMenuButton.parentElement;
+    for (const button of surface.querySelectorAll('button[aria-haspopup="menu"]')) {
+      if (!button.closest(".cgo-toolbar") && button.parentElement) {
+        return button.parentElement;
+      }
     }
 
     const obstacles = surface.querySelectorAll(
       '[data-app-shell-header-obstacle="true"]'
     );
     for (const obstacle of obstacles) {
-      const nativeButton = obstacle.querySelector("button");
-      if (nativeButton?.parentElement) {
-        return nativeButton.parentElement;
+      for (const button of obstacle.querySelectorAll("button")) {
+        if (!button.closest(".cgo-toolbar") && button.parentElement) {
+          return button.parentElement;
+        }
       }
     }
 
@@ -919,7 +921,10 @@
     const existingToolbar = document.querySelector("div.cgo-toolbar");
     if (existingToolbar) {
       CGO.toolbarBase = existingToolbar;
-      if (existingToolbar.parentElement !== headerActions) {
+      if (
+        existingToolbar.parentElement !== headerActions &&
+        !existingToolbar.contains(headerActions)
+      ) {
         headerActions.prepend(existingToolbar);
       }
       existingToolbar.hidden = !CGO.STATE?.exportToolbarVisible;

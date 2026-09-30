@@ -42,15 +42,17 @@ test("header action lookup preserves the legacy ChatGPT container", () => {
 test("header action lookup supports the current app-shell sibling layout", () => {
   const titlebar = { id: "modern-titlebar" };
   const actionRow = { id: "modern-action-row" };
-  const nativeMenuButton = { parentElement: actionRow };
-  const surface = {
-    querySelector(selector) {
-      return selector === 'button[aria-haspopup="menu"]'
-        ? nativeMenuButton
-        : null;
+  const nativeMenuButton = {
+    parentElement: actionRow,
+    closest() {
+      return null;
     },
-    querySelectorAll() {
-      return [];
+  };
+  const surface = {
+    querySelectorAll(selector) {
+      return selector === 'button[aria-haspopup="menu"]'
+        ? [nativeMenuButton]
+        : [];
     },
     closest(selector) {
       return selector === 'header[data-app-shell-titlebar="true"]'
@@ -80,16 +82,18 @@ test("header action lookup supports the current app-shell sibling layout", () =>
 
 test("header action lookup falls back to a native button inside an app-shell obstacle", () => {
   const actionRow = { id: "fallback-action-row" };
-  const nativeButton = { parentElement: actionRow };
+  const nativeButton = {
+    parentElement: actionRow,
+    closest() {
+      return null;
+    },
+  };
   const obstacle = {
-    querySelector(selector) {
-      return selector === "button" ? nativeButton : null;
+    querySelectorAll(selector) {
+      return selector === "button" ? [nativeButton] : [];
     },
   };
   const surface = {
-    querySelector() {
-      return null;
-    },
     querySelectorAll(selector) {
       return selector === '[data-app-shell-header-obstacle="true"]'
         ? [obstacle]
@@ -110,6 +114,122 @@ test("header action lookup falls back to a native button inside an app-shell obs
 
   const CGO = loadUi(document);
   assert.equal(CGO.findConversationHeaderActions(), actionRow);
+});
+
+test("header action lookup ignores buttons inside the extension toolbar", () => {
+  const toolbar = {};
+  const ownButton = {
+    parentElement: toolbar,
+    closest() {
+      return toolbar;
+    },
+  };
+  const actionRow = {};
+  const nativeButton = {
+    parentElement: actionRow,
+    closest() {
+      return null;
+    },
+  };
+  const obstacle = {
+    querySelectorAll(selector) {
+      return selector === "button" ? [ownButton, nativeButton] : [];
+    },
+  };
+  const surface = {
+    querySelectorAll(selector) {
+      if (selector === 'button[aria-haspopup="menu"]') return [ownButton];
+      return selector === '[data-app-shell-header-obstacle="true"]'
+        ? [obstacle]
+        : [];
+    },
+  };
+  const document = {
+    getElementById() {
+      return null;
+    },
+    querySelector() {
+      return surface;
+    },
+  };
+
+  const CGO = loadUi(document);
+  assert.equal(CGO.findConversationHeaderActions(), actionRow);
+});
+
+test("existing toolbar is not prepended into itself or its descendants", () => {
+  for (const target of ["self", "descendant"]) {
+    const toolbar = {
+      parentElement: { id: "old-parent" },
+      hidden: true,
+      contains(element) {
+        return element === toolbar || element === descendant;
+      },
+    };
+    const descendant = {
+      prepend() {
+        throw new Error("cannot prepend toolbar into its descendant");
+      },
+    };
+    const headerActions = target === "self" ? toolbar : descendant;
+    const document = {
+      getElementById(id) {
+        if (id === "conversation-header-actions") return headerActions;
+        if (id === "cgo-settings-panel") return {};
+        return null;
+      },
+      querySelector(selector) {
+        return selector === "div.cgo-toolbar" ? toolbar : null;
+      },
+    };
+    const CGO = loadUi(document);
+    CGO.STATE = { exportToolbarVisible: true };
+    CGO.getConversationIdFromLocation = () => "conversation-id";
+    CGO.updateProjectGuideAlertVisibility = () => {};
+
+    assert.doesNotThrow(() => CGO.injectExportButtonIntoHeader());
+    assert.equal(CGO.toolbarBase, toolbar);
+    assert.equal(toolbar.hidden, false);
+  }
+});
+
+test("existing toolbar still moves to a different header action row", () => {
+  const toolbar = {
+    parentElement: { id: "old-parent" },
+    hidden: true,
+    contains() {
+      return false;
+    },
+  };
+  let prependCount = 0;
+  const headerActions = {
+    prepend(element) {
+      assert.equal(element, toolbar);
+      toolbar.parentElement = this;
+      prependCount += 1;
+    },
+  };
+  const document = {
+    getElementById(id) {
+      if (id === "conversation-header-actions") return headerActions;
+      if (id === "cgo-settings-panel") return {};
+      return null;
+    },
+    querySelector(selector) {
+      return selector === "div.cgo-toolbar" ? toolbar : null;
+    },
+  };
+  const CGO = loadUi(document);
+  CGO.STATE = { exportToolbarVisible: true };
+  CGO.getConversationIdFromLocation = () => "conversation-id";
+  CGO.updateProjectGuideAlertVisibility = () => {};
+
+  CGO.injectExportButtonIntoHeader();
+  CGO.injectExportButtonIntoHeader();
+
+  assert.equal(prependCount, 1);
+  assert.equal(toolbar.parentElement, headerActions);
+  assert.equal(toolbar.hidden, false);
 });
 
 test("project guide aligns with the current conversation content column", () => {
