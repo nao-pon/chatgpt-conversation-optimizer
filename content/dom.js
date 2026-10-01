@@ -537,8 +537,12 @@
 
     if (changed) {
       const panel = document.getElementById("cgo-settings-panel");
-      if (panel && typeof panel.__cgoSyncFromSettings === "function") {
-        void panel.__cgoSyncFromSettings();
+      if (panel) {
+        if (panel.hidden) {
+          void panel.__cgoSyncFromSettings?.();
+        } else {
+          panel.__cgoSyncHistoryMode?.();
+        }
       }
     }
 
@@ -1181,8 +1185,12 @@
       void CGO.updateProjectGuideVisibility?.();
       void CGO.updateProjectGuideAlertVisibility?.();
       const panel = document.getElementById("cgo-settings-panel");
-      if (panel && typeof panel.__cgoSyncFromSettings === "function") {
-        void panel.__cgoSyncFromSettings();
+      if (panel) {
+        if (panel.hidden) {
+          void panel.__cgoSyncFromSettings?.();
+        } else {
+          panel.__cgoSyncHistoryMode?.();
+        }
       }
 
       if (shouldTryUnlockForConversation(conversationId)) {

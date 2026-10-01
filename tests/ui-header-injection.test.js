@@ -10,6 +10,7 @@ function loadUi(document, windowOverrides = {}) {
     window,
     globalThis: window,
     document,
+    location: { pathname: "/c/conversation-1" },
     console,
     setTimeout,
     clearTimeout,
@@ -261,4 +262,92 @@ test("project guide aligns with the current conversation content column", () => 
   assert.equal(guide.style.right, "auto");
   assert.equal(guide.style.width, "760px");
   assert.equal(guide.style.transform, "none");
+});
+
+test("project guide ZIP button shows progress, completion, and retry state", async () => {
+  let clickZip;
+  let mountedGuide = null;
+  const zipButton = {
+    dataset: {},
+    textContent: "",
+    title: "",
+    disabled: false,
+    classList: { add() {}, remove() {} },
+    setAttribute() {},
+    querySelector() { return null; },
+    addEventListener(type, listener) {
+      if (type === "click") clickZip = listener;
+    },
+  };
+  const hideButton = { textContent: "", addEventListener() {} };
+  const title = { textContent: "" };
+  const body = { textContent: "" };
+  const headerActions = {
+    after(guide) { mountedGuide = guide; },
+  };
+  const guide = {
+    dataset: {},
+    hidden: true,
+    querySelector(selector) {
+      return {
+        ".cgo-project-guide-zip": zipButton,
+        ".cgo-project-guide-hide": hideButton,
+        ".cgo-project-guide-title": title,
+        ".cgo-project-guide-body": body,
+      }[selector] || null;
+    },
+  };
+  const document = {
+    getElementById(id) {
+      if (id === "conversation-header-actions") return headerActions;
+      if (id === "cgo-project-guide") return mountedGuide;
+      return null;
+    },
+    createElement() { return guide; },
+  };
+  const CGO = loadUi(document);
+  CGO.STATE = {
+    projectGuide: {
+      conversationId: "conversation-1",
+      projectName: "Project",
+      stats: { conversationalLength: 800 },
+      level: 2,
+    },
+  };
+  CGO.getConversationIdFromLocation = () => "conversation-1";
+  CGO.isProjectGuideDismissed = async () => false;
+  CGO.t = (key) => ({
+    zip_download_button: "Save as ZIP",
+    hide_button: "Hide",
+    exporting: "Exporting...",
+    export_retry: "Retry",
+  })[key] || key;
+  CGO.log = () => {};
+
+  await CGO.updateProjectGuideVisibility();
+  assert.equal(guide.hidden, false);
+
+  let finishExport;
+  let receivedButton;
+  CGO.exportCurrentConversationAsZip = (button) => {
+    receivedButton = button;
+    CGO.setToolbarButtonText(button, "Loading history...");
+    return new Promise((resolve) => { finishExport = resolve; });
+  };
+  const pending = clickZip();
+  assert.equal(receivedButton, zipButton);
+  assert.equal(zipButton.disabled, true);
+  assert.equal(zipButton.textContent, "Loading history...");
+  finishExport();
+  await pending;
+  assert.equal(zipButton.disabled, false);
+  assert.equal(zipButton.textContent, "Save as ZIP");
+
+  CGO.exportCurrentConversationAsZip = async () => {
+    throw new Error("ZIP download failed");
+  };
+  await clickZip();
+  assert.equal(zipButton.disabled, false);
+  assert.equal(zipButton.textContent, "Retry");
+  assert.equal(zipButton.title, "ZIP download failed");
 });

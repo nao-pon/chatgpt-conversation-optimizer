@@ -779,8 +779,12 @@
       if (ok) {
         await CGO.postSettingsToPageHook?.();
         const panel = document.getElementById("cgo-settings-panel");
-        if (panel && typeof panel.__cgoSyncFromSettings === "function") {
-          await panel.__cgoSyncFromSettings();
+        if (panel) {
+          if (panel.hidden) {
+            await panel.__cgoSyncFromSettings?.();
+          } else {
+            panel.__cgoSyncHistoryMode?.();
+          }
         }
       }
 

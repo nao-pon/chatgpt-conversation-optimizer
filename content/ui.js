@@ -199,15 +199,18 @@
   }
 
   /**
-   * Swap a toolbar button between icon-only and progress-label display.
+   * Swap an export button between its normal and progress text.
    *
-   * @param {HTMLButtonElement} button - Toolbar button to update.
-   * @param {string} [text=""] - Label text; empty string restores icon-only mode.
+   * @param {HTMLButtonElement} button - Export button to update.
+   * @param {string} [text=""] - Label text; empty string restores the normal display.
    */
   function setToolbarButtonText(button, text = "") {
     const icon = button.querySelector(".cgo-btn-icon");
     const label = button.querySelector(".cgo-btn-label");
-    if (!icon || !label) return;
+    if (!icon || !label) {
+      button.textContent = text || button.dataset.baseTitle || button.title || "";
+      return;
+    }
 
     if (text) {
       //icon.hidden = true;
@@ -666,6 +669,8 @@
     });
     panel.__cgoSaveSettings = savePanelSettings;
     panel.__cgoSyncFromSettings = syncFromSettings;
+    // History updates can arrive while the user is editing the open panel.
+    panel.__cgoSyncHistoryMode = syncDomOptimizationVisibility;
 
     syncFromSettings();
     return panel;
@@ -742,16 +747,20 @@
     const hideBtn = guide.querySelector(".cgo-project-guide-hide");
 
     zipBtn.textContent = CGO.t("zip_download_button") || "Save as ZIP";
+    zipBtn.dataset.baseTitle = zipBtn.textContent;
+    zipBtn.title = zipBtn.textContent;
     hideBtn.textContent = CGO.t("hide_button") || "Hide";
 
     zipBtn.addEventListener("click", async () => {
       try {
-        zipBtn.disabled = true;
-        await CGO.exportCurrentConversationAsZip();
+        zipBtn.title = zipBtn.dataset.baseTitle;
+        setExportButtonState(zipBtn, "loading");
+        await CGO.exportCurrentConversationAsZip(zipBtn);
+        setExportButtonState(zipBtn, "idle");
       } catch (error) {
         CGO.log("[error] project guide zip export failed", String(error));
-      } finally {
-        zipBtn.disabled = false;
+        setExportButtonState(zipBtn, "export_retry");
+        zipBtn.title = String(error?.message || error);
       }
     });
 
@@ -1071,8 +1080,26 @@
     justify-content: flex-start;
   }
 
-  .cgo-settings-check input[type="checkbox"] {
-    margin-right: 8px;
+  /* Restore native checkboxes after ChatGPT's page-level input resets. */
+  .cgo-settings-panel .cgo-settings-check > input[type="checkbox"] {
+    all: revert;
+    -webkit-appearance: checkbox !important;
+    appearance: auto !important;
+    display: inline-block !important;
+    position: static !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    width: 16px !important;
+    height: 16px !important;
+    min-width: 16px;
+    min-height: 16px;
+    flex: 0 0 16px;
+    margin: 0 8px 0 0;
+    padding: 0;
+    color-scheme: dark;
+    accent-color: #78aaff;
+    cursor: pointer;
+    pointer-events: auto;
   }
 
   .cgo-settings-actions {
@@ -1182,6 +1209,11 @@
 
   .cgo-project-guide-actions button:hover {
     background: rgba(255,255,255,0.12);
+  }
+
+  .cgo-project-guide-actions button:disabled {
+    opacity: 0.65;
+    cursor: wait;
   }
 
   .cgo-project-guide-alert {
