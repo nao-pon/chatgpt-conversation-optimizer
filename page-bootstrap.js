@@ -101,6 +101,7 @@
     }
 
     const url = getRequestUrl(args[0]);
+    window.__CGO_MAIN_HOOK_API__?.notePaginatedConversationRequest?.(url);
     const orgResponse = await bootstrapOriginalFetch.apply(this, args);
 
     const api = window.__CGO_MAIN_HOOK_API__;

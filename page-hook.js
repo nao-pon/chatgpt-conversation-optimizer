@@ -774,6 +774,23 @@
   }
 
   /**
+   * Mark a conversation as paginated as soon as ChatGPT requests the new API.
+   * A legacy response already in flight must not prune that same conversation.
+   */
+  function notePaginatedConversationRequest(url) {
+    const request = parsePaginatedConversationRequest(url);
+    if (!request || PAGINATED_HISTORY_STATE.has(request.conversationId)) return;
+
+    ensurePaginatedHistoryState(request.conversationId);
+    window.postMessage({
+      source: "cgo-prune-runtime",
+      type: "historyMode",
+      conversationId: request.conversationId,
+      historyMode: "paginated",
+    }, "*");
+  }
+
+  /**
    * Return the mutable pagination state for a conversation, creating it when needed.
    *
    * @param {string} conversationId - Conversation identifier.
@@ -1827,6 +1844,7 @@
    * @returns {boolean} `true` when trim metadata was posted.
    */
   function restoreInitialPruneMetaFromCache(conversationId) {
+    if (PAGINATED_HISTORY_STATE.has(conversationId)) return false;
     const cached = getCachedConversationForBridge(conversationId);
     if (!cached) return false;
     if (cached.__cgo_paginated_history === true) {
@@ -6321,6 +6339,14 @@
       return orgResponse;
     }
 
+    // A late legacy response must not replace paginated export history or
+    // re-enable response pruning and its omission notice.
+    if (PAGINATED_HISTORY_STATE.has(
+      data.conversation_id || getConversationIdFromLocation()
+    )) {
+      return orgResponse;
+    }
+
     saveFullConversationToCache(data);
 
     if (
@@ -6533,6 +6559,7 @@
 
   window.__CGO_MAIN_HOOK_API__ = {
     handleFetchResponse,
+    notePaginatedConversationRequest,
   };
 
   patchGetUserMedia();

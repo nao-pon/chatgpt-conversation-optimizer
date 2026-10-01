@@ -27,6 +27,7 @@ function createPageHookHarness(fetchImpl) {
 
   const window = {
     __CGO_ORIGINAL_FETCH__: fetchImpl,
+    fetch: fetchImpl,
     addEventListener(type, listener) {
       const current = listeners.get(type) || [];
       current.push(listener);
@@ -346,6 +347,95 @@ test("paginated ChatGPT history is accumulated for export without rewriting resp
   assert.equal(refreshed.current_node, "assistant-added");
   assert.equal(Object.keys(refreshed.mapping).length, 9);
   assert.equal(fetchUrls.length, 2, "known older pages should not be fetched again");
+});
+
+test("a legacy response cannot prune or replace a conversation using the paginated API", async () => {
+  let resolvePaginatedFetch;
+  const harness = createPageHookHarness(() => new Promise((resolve) => {
+    resolvePaginatedFetch = resolve;
+  }));
+  const paginatedUrl = "/backend-api/conversations/conversation-1?num_turns=10";
+  const legacyUrl = "/backend-api/conversation/conversation-1";
+  const legacyPayload = {
+    conversation_id: "conversation-1",
+    current_node: "legacy-user",
+    mapping: {
+      "legacy-user": {
+        id: "legacy-user",
+        parent: null,
+        children: [],
+        message: makeMessage("legacy-user", "user", "Legacy question"),
+      },
+    },
+  };
+  const api = harness.window.__CGO_MAIN_HOOK_API__;
+  const bootstrapPath = path.join(__dirname, "..", "page-bootstrap.js");
+  vm.runInContext(fs.readFileSync(bootstrapPath, "utf8"), harness.context, {
+    filename: bootstrapPath,
+  });
+
+  const pendingPaginatedResponse = harness.window.fetch(paginatedUrl);
+  assert.ok(harness.postedMessages.some((message) =>
+    message.type === "historyMode" && message.historyMode === "paginated"
+  ));
+
+  const pendingLegacy = await api.handleFetchResponse({
+    args: [legacyUrl],
+    response: jsonResponse(legacyPayload),
+    url: legacyUrl,
+  });
+  assert.deepEqual(await pendingLegacy.json(), legacyPayload);
+  assert.equal(
+    harness.postedMessages.filter((message) => message.type === "analysis").length,
+    0,
+    "the older response must not publish legacy pruning mode"
+  );
+
+  const paginatedPayload = {
+    conversation_id: "conversation-1",
+    current_node: "paginated-user",
+    messages: [makeMessage("paginated-user", "user", "Current question")],
+    page_info: {
+      start_cursor: "paginated-user",
+      end_cursor: "paginated-user",
+      has_previous_page: false,
+      has_next_page: false,
+    },
+  };
+  resolvePaginatedFetch(jsonResponse(paginatedPayload));
+  assert.deepEqual(await (await pendingPaginatedResponse).json(), paginatedPayload);
+  const analysisCount = harness.postedMessages.filter(
+    (message) => message.type === "analysis"
+  ).length;
+
+  const lateLegacy = await api.handleFetchResponse({
+    args: [legacyUrl],
+    response: jsonResponse(legacyPayload),
+    url: legacyUrl,
+  });
+  assert.deepEqual(await lateLegacy.json(), legacyPayload);
+  assert.equal(
+    harness.postedMessages.filter((message) => message.type === "analysis").length,
+    analysisCount
+  );
+
+  const cached = await harness.requestCache();
+  assert.equal(cached.__cgo_paginated_history, true);
+  assert.ok(cached.mapping["paginated-user"]);
+  assert.equal(cached.mapping["legacy-user"], undefined);
+
+  harness.window.postMessage({
+    type: "CGO_TRIM_META_REQUEST",
+    conversationId: "conversation-1",
+    secret: harness.window.__CGO_BRIDGE_SECRET__,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(
+    harness.postedMessages.some((message) =>
+      message.type === "initialPruneMeta" || message.type === "conversationHeadMeta"
+    ),
+    false
+  );
 });
 
 test("an interior browser page does not move an incomplete history frontier backward", async () => {

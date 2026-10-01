@@ -6,6 +6,7 @@ const vm = require("node:vm");
 
 test("DOM pruning is disabled for paginated history and retained for legacy history", async () => {
   let removedCount = 0;
+  let activeConversationId = "conversation-1";
   const turnNodes = Array.from({ length: 3 }, (_, index) => ({
     isConnected: true,
     getAttribute(name) {
@@ -40,8 +41,11 @@ test("DOM pruning is disabled for paginated history and retained for legacy hist
       return selector === "main" ? conversationRoot : null;
     },
   };
+  let messageListener = null;
   const window = {
-    addEventListener() {},
+    addEventListener(type, listener) {
+      if (type === "message") messageListener = listener;
+    },
     removeEventListener() {},
     postMessage() {},
   };
@@ -71,7 +75,7 @@ test("DOM pruning is disabled for paginated history and retained for legacy hist
       return 1;
     },
     getConversationIdFromLocation() {
-      return "conversation-1";
+      return activeConversationId;
     },
     log() {},
     t(key) {
@@ -97,18 +101,47 @@ test("DOM pruning is disabled for paginated history and retained for legacy hist
   vm.runInContext(fs.readFileSync(domPath, "utf8"), context, {
     filename: domPath,
   });
+  window.__CGO.observeWindowMessages();
+  function postRuntimeMessage(data) {
+    messageListener({
+      source: window,
+      data: { source: "cgo-prune-runtime", ...data },
+    });
+  }
 
   window.__CGO.scheduleDomTrim(0);
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(removedCount, 0, "unknown history mode must be non-destructive");
 
-  window.__CGO.setActiveConversationHistoryMode("paginated", "conversation-1");
+  postRuntimeMessage({
+    type: "historyMode",
+    conversationId: "conversation-1",
+    historyMode: "paginated",
+  });
   window.__CGO.scheduleDomTrim(0);
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(removedCount, 0);
   assert.equal(window.__CGO.isPaginatedHistoryActive(), true);
 
+  postRuntimeMessage({
+    type: "analysis",
+    summary: { conversationId: "conversation-1", historyMode: "legacy" },
+  });
+  postRuntimeMessage({
+    type: "initialPruneMeta",
+    conversationId: "conversation-1",
+    meta: { omittedCount: 20, firstKeptId: "message-1" },
+  });
   window.__CGO.setActiveConversationHistoryMode("legacy", "conversation-1");
+  window.__CGO.setActiveConversationHistoryMode("unknown", "conversation-1");
+  window.__CGO.scheduleDomTrim(0);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(removedCount, 0);
+  assert.equal(window.__CGO.STATE.domTrimState.omittedCount, 0);
+  assert.equal(window.__CGO.isPaginatedHistoryActive(), true);
+
+  activeConversationId = "conversation-2";
+  window.__CGO.setActiveConversationHistoryMode("legacy", "conversation-2");
   window.__CGO.scheduleDomTrim(0);
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(removedCount, 2);

@@ -9,6 +9,7 @@
   const FIXED_TRIM_SUMMARY_INITIAL_SUPPRESS_MS = 1500;
   const ENABLE_VOICE_EXPORT_GUARD = false;
   const VOICE_SYNC_RETRY_DELAYS_MS = [500, 1000, 2000, 4000];
+  const paginatedConversationIds = new Set();
 
   /**
    * Return the root element that contains the visible conversation turns.
@@ -194,7 +195,8 @@
       return;
     }
 
-    const hasTrim = Number(CGO.STATE.domTrimState?.omittedCount || 0) > 0;
+    const hasTrim = isDomPruningEnabled() &&
+      Number(CGO.STATE.domTrimState?.omittedCount || 0) > 0;
     const onConversationRoute = !!CGO.getConversationIdFromLocation?.();
     const nearTop =
       Number(CGO.STATE.fixedTrimSummaryScrollY || 0) <=
@@ -487,7 +489,10 @@
    * @returns {boolean} `true` only for the legacy full-conversation API.
    */
   function isDomPruningEnabled() {
-    return CGO.STATE.activeConversationHistoryMode === "legacy";
+    const conversationId = CGO.getConversationIdFromLocation?.() || "";
+    return !!conversationId &&
+      CGO.STATE.activeConversationHistoryMode === "legacy" &&
+      CGO.STATE.activeConversationHistoryModeConversationId === conversationId;
   }
 
   /**
@@ -498,7 +503,7 @@
    * @returns {boolean} Whether the mode was accepted for the current route.
    */
   function setActiveConversationHistoryMode(mode, conversationId = "") {
-    const normalizedMode =
+    let normalizedMode =
       mode === "paginated" || mode === "legacy" ? mode : "unknown";
     const currentConversationId = CGO.getConversationIdFromLocation?.() || "";
     if (
@@ -509,12 +514,19 @@
       return false;
     }
 
+    const targetConversationId = conversationId || currentConversationId;
+    if (normalizedMode === "paginated" && targetConversationId) {
+      paginatedConversationIds.add(targetConversationId);
+    } else if (paginatedConversationIds.has(targetConversationId)) {
+      normalizedMode = "paginated";
+    }
+
     const changed =
       CGO.STATE.activeConversationHistoryMode !== normalizedMode ||
-      CGO.STATE.activeConversationHistoryModeConversationId !== conversationId;
+      CGO.STATE.activeConversationHistoryModeConversationId !== targetConversationId;
     CGO.STATE.activeConversationHistoryMode = normalizedMode;
     CGO.STATE.activeConversationHistoryModeConversationId =
-      conversationId || currentConversationId || "";
+      targetConversationId;
 
     if (normalizedMode !== "legacy") {
       cancelPendingDomTrim();
@@ -687,6 +699,7 @@
    * @returns {"done"|"retry"} `retry` when the DOM is not ready yet.
    */
   function ensureInitialPruneNotice() {
+    if (!isDomPruningEnabled()) return "done";
     const head = CGO.STATE.conversationHeadMeta;
     const trim = CGO.STATE.domTrimState;
 
@@ -746,6 +759,10 @@
    * @param {number} [delayMs=INITIAL_PRUNE_NOTICE_DEBOUNCE_MS] - Delay before the next attempt.
    */
   function scheduleInitialPruneNotice(delayMs = INITIAL_PRUNE_NOTICE_DEBOUNCE_MS) {
+    if (!isDomPruningEnabled()) {
+      resetInitialPruneNoticeState();
+      return;
+    }
     const trim = CGO.STATE.domTrimState;
 
     if (!trim || Number(trim.omittedCount || 0) <= 0) {
@@ -1093,6 +1110,11 @@
    * @param {Object} data - Runtime payload posted on `window`.
    */
   function handleRuntimeMessage(data) {
+    if (data.type === "historyMode") {
+      setActiveConversationHistoryMode(data.historyMode, data.conversationId || "");
+      return;
+    }
+
     if (data.type === "voiceSessionState") {
       if (!ENABLE_VOICE_EXPORT_GUARD) {
         setVoiceExportGuardState("normal", "", "");
@@ -1133,7 +1155,7 @@
       const effective = Number(data.effectiveKeepDomMessages || 0);
       const historyMode = data.historyMode === "paginated" ? "paginated" : "legacy";
 
-      setActiveConversationHistoryMode(historyMode, conversationId);
+      if (!setActiveConversationHistoryMode(historyMode, conversationId)) return;
       const domPruningEnabled = isDomPruningEnabled();
 
       CGO.log("[autoAdjustResult]", data);
@@ -1171,7 +1193,9 @@
     }
 
     if (data.type === "conversationHeadMeta") {
-      if (isPaginatedHistoryActive()) return;
+      if (!isDomPruningEnabled()) return;
+      if (data.conversationId &&
+        data.conversationId !== CGO.getConversationIdFromLocation?.()) return;
 
       CGO.STATE.conversationHeadMeta = {
         conversationId: data.conversationId || "",
@@ -1185,7 +1209,9 @@
     }
 
     if (data.type === "initialPruneMeta") {
-      if (isPaginatedHistoryActive()) return;
+      if (!isDomPruningEnabled()) return;
+      if (data.conversationId &&
+        data.conversationId !== CGO.getConversationIdFromLocation?.()) return;
 
       resetInitialPruneNoticeState();
       CGO.STATE.domTrimState = {
@@ -1205,7 +1231,7 @@
       const historyMode = data.summary?.historyMode === "paginated"
         ? "paginated"
         : "legacy";
-      setActiveConversationHistoryMode(historyMode, conversationId);
+      if (!setActiveConversationHistoryMode(historyMode, conversationId)) return;
 
       CGO.updateExportButtonVisibility?.(true);
       if (CGO.CONFIG.debug) {
