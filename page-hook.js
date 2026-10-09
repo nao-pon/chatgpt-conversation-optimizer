@@ -2964,10 +2964,23 @@
       try {
         const originalSend = ws.send;
         ws.send = function send(data) {
+          const readyState = this.readyState;
+          if (
+            readyState === NativeWebSocket.CLOSING ||
+            readyState === NativeWebSocket.CLOSED
+          ) {
+            // No frame can be transmitted after closing starts. Avoid forwarding
+            // the no-op call because Chromium attributes its diagnostic here.
+            return;
+          }
+
+          const result = originalSend.call(this, data);
+          if (readyState !== NativeWebSocket.OPEN) return result;
+
           handleWebSocketFrame(data, "ws-send").catch((error) => {
             log.basic("ws send parse failed", String(error));
           });
-          return originalSend.call(this, data);
+          return result;
         };
 
         ws.addEventListener("message", (event) => {
