@@ -8,6 +8,20 @@
     'header[data-app-shell-titlebar="true"]';
   const MODERN_CONVERSATION_CONTENT_SELECTOR =
     '[data-thread-user-message-navigation-content="true"]';
+  const CHAT_COMPOSER_SELECTORS = [
+    "#prompt-textarea",
+    "#mobile-composer-prompt",
+    "textarea[data-mobile-composer-prompt]",
+    'textarea[name="prompt"]',
+    'textarea[data-testid="prompt-textarea"]',
+    '[data-composer-input] [contenteditable="true"][role="textbox"]',
+    'div.ProseMirror[contenteditable="true"][role="textbox"][data-composer-markdown]',
+    '[contenteditable="true"][role="textbox"][data-virtualkeyboard="true"]',
+    'form textarea[name="prompt-textarea"]',
+    'form [contenteditable="true"][data-lexical-editor="true"]',
+    'form div[contenteditable="true"].ProseMirror',
+    'form [contenteditable="true"]',
+  ];
 
   /**
    * Resolve the current ChatGPT conversation-header surface.
@@ -716,6 +730,185 @@
   }
 
   /**
+   * Find ChatGPT's current prompt editor across its textarea and rich-editor layouts.
+   *
+   * @returns {?HTMLElement} Active prompt editor, when available.
+   */
+  function findChatComposer() {
+    const seen = new Set();
+
+    for (const selector of CHAT_COMPOSER_SELECTORS) {
+      const composers = typeof document.querySelectorAll === "function"
+        ? Array.from(document.querySelectorAll(selector))
+        : [document.querySelector(selector)].filter(Boolean);
+
+      for (const composer of composers) {
+        if (!composer || seen.has(composer) || composer.isConnected === false) continue;
+        seen.add(composer);
+        if (composer.disabled) continue;
+        if (composer.getAttribute?.("aria-disabled") === "true") continue;
+        if (composer.getAttribute?.("contenteditable") === "false") continue;
+
+        let isVisible = true;
+        if (typeof composer.getClientRects === "function") {
+          try {
+            isVisible = composer.getClientRects().length > 0;
+          } catch {
+            isVisible = true;
+          }
+        }
+
+        if (isVisible) return composer;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Dispatch the input event ChatGPT uses to synchronize its editor state.
+   *
+   * @param {HTMLElement} composer - Prompt editor receiving the event.
+   * @param {string} text - Text inserted into the editor.
+   */
+  function dispatchComposerInput(composer, text) {
+    let event;
+    if (typeof window.InputEvent === "function") {
+      event = new window.InputEvent("input", {
+        bubbles: true,
+        composed: true,
+        inputType: "insertText",
+        data: text,
+      });
+    } else if (typeof window.Event === "function") {
+      event = new window.Event("input", { bubbles: true, composed: true });
+    } else {
+      event = { type: "input" };
+    }
+    composer.dispatchEvent?.(event);
+  }
+
+  /**
+   * Return the paragraph blocks owned by ChatGPT's ProseMirror composer.
+   *
+   * Keeping the browser selection inside these blocks preserves the editor's
+   * required document structure when replacing an existing draft.
+   *
+   * @param {HTMLElement} composer - Contenteditable prompt editor.
+   * @returns {HTMLElement[]} Paragraph blocks in document order.
+   */
+  function getComposerTextBlocks(composer) {
+    if (typeof composer.querySelectorAll !== "function") return [];
+    return Array.from(composer.querySelectorAll("p"));
+  }
+
+  /**
+   * Move the browser selection to the end of a rich-text prompt editor.
+   *
+   * @param {HTMLElement} composer - Contenteditable prompt editor.
+   * @param {boolean} [selectAll=false] - Select all existing content before insertion.
+   */
+  function selectComposerContents(composer, selectAll = false) {
+    const selection = window.getSelection?.();
+    const range = document.createRange?.();
+    if (!selection || !range) return;
+
+    const blocks = getComposerTextBlocks(composer);
+    if (blocks.length && selectAll) {
+      const firstBlock = blocks[0];
+      const lastBlock = blocks[blocks.length - 1];
+      range.setStart(firstBlock, 0);
+      range.setEnd(lastBlock, lastBlock.childNodes?.length || 0);
+    } else if (blocks.length) {
+      range.selectNodeContents(blocks[blocks.length - 1]);
+      range.collapse(false);
+    } else {
+      range.selectNodeContents(composer);
+      if (!selectAll) range.collapse(false);
+    }
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  /**
+   * Apply a last-resort rich-editor DOM update while retaining one valid paragraph.
+   *
+   * The normal path uses `execCommand("insertText")`, which lets ProseMirror see a
+   * native editing operation. This fallback is only used when that command does
+   * not update the visible editor synchronously.
+   *
+   * @param {HTMLElement} composer - Contenteditable prompt editor.
+   * @param {string} value - Replacement draft.
+   */
+  function setRichComposerDomValue(composer, value) {
+    const blocks = getComposerTextBlocks(composer);
+    if (!blocks.length) {
+      composer.textContent = value;
+      return;
+    }
+
+    const firstBlock = blocks[0];
+    firstBlock.textContent = value;
+    if (typeof composer.replaceChildren === "function") {
+      composer.replaceChildren(firstBlock);
+      return;
+    }
+
+    for (const block of blocks.slice(1)) {
+      block.remove?.();
+    }
+  }
+
+  /**
+   * Put text into ChatGPT's prompt editor without submitting it.
+   *
+   * @param {string} text - Prompt text to place in the editor.
+   * @returns {boolean} `true` when an editor was found and updated.
+   */
+  function fillChatComposer(text) {
+    const composer = findChatComposer();
+    const value = String(text || "");
+    if (!composer || !value) return false;
+
+    composer.focus?.();
+    const tagName = String(composer.tagName || "").toUpperCase();
+    const isTextControl = tagName === "TEXTAREA" || tagName === "INPUT";
+
+    if (isTextControl) {
+      const prototype = tagName === "TEXTAREA"
+        ? window.HTMLTextAreaElement?.prototype
+        : window.HTMLInputElement?.prototype;
+      const setter = prototype
+        ? Object.getOwnPropertyDescriptor(prototype, "value")?.set
+        : null;
+
+      if (setter) {
+        setter.call(composer, value);
+      } else {
+        composer.value = value;
+      }
+      composer.setSelectionRange?.(value.length, value.length);
+      dispatchComposerInput(composer, value);
+      return true;
+    }
+
+    selectComposerContents(composer, true);
+    if (typeof document.execCommand === "function") {
+      try {
+        document.execCommand("insertText", false, value);
+      } catch {
+        // Fall through to the structure-preserving DOM fallback below.
+      }
+    }
+
+    if (composer.textContent !== value) {
+      setRichComposerDomValue(composer, value);
+      dispatchComposerInput(composer, value);
+    }
+    selectComposerContents(composer, false);
+    return true;
+  }
+
+  /**
    * Ensure the project guide callout exists below the conversation header.
    *
    * @returns {?HTMLDivElement} Existing or newly created guide element.
@@ -736,20 +929,51 @@
         <div class="cgo-project-guide-main">
           <div class="cgo-project-guide-title"></div>
           <div class="cgo-project-guide-body"></div>
-        </div>
-        <div class="cgo-project-guide-actions">
-          <button type="button" class="cgo-project-guide-zip"></button>
-          <button type="button" class="cgo-project-guide-hide"></button>
-        </div>
+         </div>
+         <div class="cgo-project-guide-actions">
+           <button type="button" class="cgo-project-guide-migrate"></button>
+           <button type="button" class="cgo-project-guide-zip"></button>
+           <button type="button" class="cgo-project-guide-hide"></button>
+         </div>
       `;
 
+    const migrateBtn = guide.querySelector(".cgo-project-guide-migrate");
     const zipBtn = guide.querySelector(".cgo-project-guide-zip");
     const hideBtn = guide.querySelector(".cgo-project-guide-hide");
 
+    migrateBtn.textContent = CGO.t("migration_prompt_button") || "Yes";
     zipBtn.textContent = CGO.t("zip_download_button") || "Save as ZIP";
     zipBtn.dataset.baseTitle = zipBtn.textContent;
     zipBtn.title = zipBtn.textContent;
     hideBtn.textContent = CGO.t("hide_button") || "Hide";
+
+    migrateBtn.addEventListener("click", async () => {
+      const prompt =
+        CGO.t("migration_prompt_text") ||
+        "This conversation may be nearing ChatGPT's limit. I will start a new conversation, so please provide a migration prompt.";
+
+      if (!fillChatComposer(prompt)) {
+        const errorText =
+          CGO.t("migration_prompt_input_failed") ||
+          "Prompt box not found";
+        migrateBtn.title = errorText;
+        migrateBtn.setAttribute("aria-label", errorText);
+        return;
+      }
+
+      guide.hidden = true;
+      try {
+        const conversationId =
+          CGO.STATE.projectGuide?.conversationId ||
+          CGO.getConversationIdFromLocation?.() ||
+          "";
+        const level = Number(CGO.STATE.projectGuide?.level || 0);
+        await CGO.dismissProjectGuide(conversationId, level);
+        await CGO.updateProjectGuideAlertVisibility?.();
+      } catch (error) {
+        CGO.log("[warn] migration prompt guide dismissal failed", String(error));
+      }
+    });
 
     zipBtn.addEventListener("click", async () => {
       try {
@@ -793,24 +1017,15 @@
    * @returns {{title: string, body: string}} Title/body pair for the guide UI.
    */
   function getProjectGuideTexts({ level = 0, projectName = "" } = {}) {
-    const inProject = !!String(projectName || "").trim();
+    void projectName;
 
     if (level <= 0) {
       return { title: "", body: "" };
     }
 
-    const lvl = level >= 3 ? 3 : level === 2 ? 2 : 1;
-
-    if (inProject) {
-      return {
-        title: CGO.t(`project_guide_title_project_level${lvl}`),
-        body: CGO.t(`project_guide_body_project_level${lvl}`, projectName),
-      };
-    }
-
     return {
-      title: CGO.t(`project_guide_title_level${lvl}`),
-      body: CGO.t(`project_guide_body_level${lvl}`),
+      title: CGO.t("conversation_limit_warning_title"),
+      body: CGO.t("conversation_limit_warning_body"),
     };
   }
 
@@ -820,26 +1035,51 @@
    * @returns {Promise<void>} Resolves after the guide state is refreshed.
    */
   async function updateProjectGuideVisibility() {
+    const renderTicket = Number(CGO.projectGuideRenderTicket || 0) + 1;
+    CGO.projectGuideRenderTicket = renderTicket;
     const guide = ensureProjectGuide();
     if (!guide) return;
 
     const pathname = location.pathname || "";
-    if (!/^(\/g\/[^/]+)?\/c\/([^/?#]+)/i.test(pathname)) {
+    const routeConversationId = CGO.getConversationIdFromLocation?.() || "";
+    if (
+      !routeConversationId ||
+      !/^(\/g\/[^/]+)?\/c\/([^/?#]+)/i.test(pathname)
+    ) {
       guide.hidden = true;
       return;
     }
 
-    const conversationId = CGO.STATE.projectGuide?.conversationId || CGO.getConversationIdFromLocation?.() || "";
+    const conversationId = CGO.STATE.projectGuide?.conversationId || "";
     const projectName = CGO.STATE.projectGuide?.projectName || "";
     const stats = CGO.STATE.projectGuide?.stats || null;
     const level = Number(CGO.STATE.projectGuide?.level || 0);
 
-    if (!conversationId || !stats || level <= 0) {
+    if (
+      !conversationId ||
+      conversationId !== routeConversationId ||
+      !stats ||
+      level <= 0
+    ) {
       guide.hidden = true;
       return;
     }
 
     const dismissed = await CGO.isProjectGuideDismissed(conversationId, level);
+    if (renderTicket !== CGO.projectGuideRenderTicket) return;
+
+    const currentRouteConversationId =
+      CGO.getConversationIdFromLocation?.() || "";
+    const currentGuideState = CGO.STATE.projectGuide || {};
+    if (
+      currentRouteConversationId !== conversationId ||
+      currentGuideState.conversationId !== conversationId ||
+      Number(currentGuideState.level || 0) !== level
+    ) {
+      guide.hidden = true;
+      return;
+    }
+
     if (dismissed) {
       guide.hidden = true;
       return;
@@ -864,30 +1104,47 @@
    * @returns {Promise<void>} Resolves after the alert button state is refreshed.
    */
   async function updateProjectGuideAlertVisibility() {
+    const renderTicket = Number(CGO.projectGuideAlertRenderTicket || 0) + 1;
+    CGO.projectGuideAlertRenderTicket = renderTicket;
     const button = document.getElementById("cgo-project-guide-alert");
     if (!button) return;
 
     const pathname = location.pathname || "";
-    if (!/^(\/g\/[^/]+)?\/c\/([^/?#]+)/i.test(pathname)) {
+    const routeConversationId = CGO.getConversationIdFromLocation?.() || "";
+    if (
+      !routeConversationId ||
+      !/^(\/g\/[^/]+)?\/c\/([^/?#]+)/i.test(pathname)
+    ) {
       button.hidden = true;
       button.classList.remove("cgo-pulse-once");
       return;
     }
 
-    const conversationId =
-      CGO.STATE.projectGuide?.conversationId ||
-      CGO.getConversationIdFromLocation?.() ||
-      "";
+    const conversationId = CGO.STATE.projectGuide?.conversationId || "";
 
     const level = Number(CGO.STATE.projectGuide?.level || 0);
 
-    if (!conversationId || level < 3) {
+    if (!conversationId || conversationId !== routeConversationId || level < 3) {
       button.hidden = true;
       button.classList.remove("cgo-pulse-once");
       return;
     }
 
     const dismissed = await CGO.isProjectGuideDismissed(conversationId, 3);
+    if (renderTicket !== CGO.projectGuideAlertRenderTicket) return;
+
+    const currentRouteConversationId =
+      CGO.getConversationIdFromLocation?.() || "";
+    const currentGuideState = CGO.STATE.projectGuide || {};
+    if (
+      currentRouteConversationId !== conversationId ||
+      currentGuideState.conversationId !== conversationId ||
+      Number(currentGuideState.level || 0) < 3
+    ) {
+      button.hidden = true;
+      button.classList.remove("cgo-pulse-once");
+      return;
+    }
 
     button.title =
       CGO.t("project_guide_alert_tooltip") ||
@@ -1209,6 +1466,17 @@
 
   .cgo-project-guide-actions button:hover {
     background: rgba(255,255,255,0.12);
+  }
+
+  .cgo-project-guide-actions .cgo-project-guide-migrate {
+    background: #f5f5f5;
+    border-color: #f5f5f5;
+    color: #171717;
+    font-weight: 700;
+  }
+
+  .cgo-project-guide-actions .cgo-project-guide-migrate:hover {
+    background: #ffffff;
   }
 
   .cgo-project-guide-actions button:disabled {
@@ -1571,6 +1839,7 @@
   CGO.closeSettingsPanel = closeSettingsPanel;
   CGO.findConversationHeaderActions = findConversationHeaderActions;
   CGO.findConversationHeaderSurface = findConversationHeaderSurface;
+  CGO.fillChatComposer = fillChatComposer;
   CGO.findProjectGuideAnchor = findProjectGuideAnchor;
   CGO.injectExportButtonIntoHeader = injectExportButtonIntoHeader;
   CGO.injectExportButtonStyle = injectExportButtonStyle;

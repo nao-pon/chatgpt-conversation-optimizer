@@ -230,6 +230,21 @@
   "hide_button": {
     "message": "無視する"
   },
+  "conversation_limit_warning_title": {
+    "message": "もうすぐ、ChatGPTの会話数制限に達しそうです"
+  },
+  "conversation_limit_warning_body": {
+    "message": "移行プロンプトを依頼しますか？"
+  },
+  "migration_prompt_button": {
+    "message": "はい"
+  },
+  "migration_prompt_text": {
+    "message": "この会話がChatGPTの制限に達しそうです。新しい会話を始めますので移行プロンプトをお願いします。"
+  },
+  "migration_prompt_input_failed": {
+    "message": "ChatGPTの入力欄が見つかりませんでした"
+  },
   "project_guide_title_level1": {
     "message": "会話が少し長くなってきました"
   },

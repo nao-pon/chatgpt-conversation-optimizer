@@ -6,11 +6,13 @@ const vm = require("node:vm");
 
 function loadUi(document, windowOverrides = {}) {
   const window = { __CGO: {}, ...windowOverrides };
+  const location = windowOverrides.location || { pathname: "/c/conversation-1" };
+  window.location = location;
   const context = vm.createContext({
     window,
     globalThis: window,
     document,
-    location: { pathname: "/c/conversation-1" },
+    location,
     console,
     setTimeout,
     clearTimeout,
@@ -264,6 +266,235 @@ test("project guide aligns with the current conversation content column", () => 
   assert.equal(guide.style.transform, "none");
 });
 
+test("project guide hides when its analysis belongs to another conversation", async () => {
+  const guide = {
+    hidden: false,
+    dataset: {},
+    querySelector() { return null; },
+  };
+  const document = {
+    getElementById(id) {
+      return id === "cgo-project-guide" ? guide : null;
+    },
+  };
+  const CGO = loadUi(document, {
+    location: { pathname: "/c/conversation-2" },
+  });
+  CGO.STATE = {
+    projectGuide: {
+      conversationId: "conversation-1",
+      stats: { conversationalLength: 800 },
+      level: 2,
+    },
+  };
+  CGO.getConversationIdFromLocation = () => "conversation-2";
+  CGO.isProjectGuideDismissed = async () => {
+    throw new Error("mismatched guide must not read dismissal state");
+  };
+
+  await CGO.updateProjectGuideVisibility();
+
+  assert.equal(guide.hidden, true);
+});
+
+test("an older guide refresh cannot reappear after route state is cleared", async () => {
+  let resolveDismissed;
+  let currentConversationId = "conversation-1";
+  const dismissed = new Promise((resolve) => { resolveDismissed = resolve; });
+  const title = { textContent: "" };
+  const body = { textContent: "" };
+  const guide = {
+    hidden: true,
+    dataset: {},
+    querySelector(selector) {
+      return {
+        ".cgo-project-guide-title": title,
+        ".cgo-project-guide-body": body,
+      }[selector] || null;
+    },
+  };
+  const document = {
+    getElementById(id) {
+      return id === "cgo-project-guide" ? guide : null;
+    },
+  };
+  const CGO = loadUi(document);
+  CGO.STATE = {
+    projectGuide: {
+      conversationId: "conversation-1",
+      projectName: "Project",
+      stats: { conversationalLength: 800 },
+      level: 2,
+    },
+  };
+  CGO.getConversationIdFromLocation = () => currentConversationId;
+  CGO.isProjectGuideDismissed = () => dismissed;
+  CGO.t = (key) => key;
+
+  const oldRefresh = CGO.updateProjectGuideVisibility();
+  currentConversationId = "conversation-2";
+  CGO.STATE.projectGuide = {
+    conversationId: "",
+    projectName: "",
+    stats: null,
+    level: 0,
+  };
+  await CGO.updateProjectGuideVisibility();
+  resolveDismissed(false);
+  await oldRefresh;
+
+  assert.equal(guide.hidden, true);
+});
+
+test("migration prompt fills ChatGPT's current mobile composer textarea without submitting", () => {
+  const events = [];
+  const textarea = {
+    tagName: "TEXTAREA",
+    value: "existing draft",
+    disabled: false,
+    focused: false,
+    selection: null,
+    getAttribute() { return null; },
+    focus() { this.focused = true; },
+    setSelectionRange(start, end) { this.selection = [start, end]; },
+    dispatchEvent(event) { events.push(event); },
+  };
+  const document = {
+    querySelector(selector) {
+      return selector === "#mobile-composer-prompt" ? textarea : null;
+    },
+  };
+  class FakeEvent {
+    constructor(type) { this.type = type; }
+  }
+
+  const CGO = loadUi(document, { Event: FakeEvent });
+  const prompt = "Migration prompt, please.";
+
+  assert.equal(CGO.fillChatComposer(prompt), true);
+  assert.equal(textarea.value, prompt);
+  assert.equal(textarea.focused, true);
+  assert.deepEqual(textarea.selection, [prompt.length, prompt.length]);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, "input");
+});
+
+test("migration prompt prefers the visible data-composer-input ProseMirror editor", () => {
+  const events = [];
+  const paragraph = {
+    childNodes: [{ nodeType: 3 }],
+    textContent: "existing draft",
+  };
+  const hiddenLegacyComposer = {
+    tagName: "DIV",
+    textContent: "",
+    disabled: false,
+    getAttribute() { return null; },
+    getClientRects() { return []; },
+  };
+  const composer = {
+    tagName: "DIV",
+    textContent: "existing draft",
+    disabled: false,
+    focused: false,
+    getAttribute() { return null; },
+    getClientRects() { return [{}]; },
+    querySelectorAll(selector) { return selector === "p" ? [paragraph] : []; },
+    focus() { this.focused = true; },
+    dispatchEvent(event) { events.push(event); },
+  };
+  const rangeCalls = [];
+  const document = {
+    querySelectorAll(selector) {
+      if (selector === "#prompt-textarea") return [hiddenLegacyComposer];
+      return selector ===
+        '[data-composer-input] [contenteditable="true"][role="textbox"]'
+        ? [composer]
+        : [];
+    },
+    execCommand(command, _showUi, value) {
+      assert.equal(command, "insertText");
+      composer.textContent = value;
+      return true;
+    },
+    createRange() {
+      return {
+        setStart(node, offset) { rangeCalls.push(["start", node, offset]); },
+        setEnd(node, offset) { rangeCalls.push(["end", node, offset]); },
+        selectNodeContents(node) { rangeCalls.push(["contents", node]); },
+        collapse(value) { rangeCalls.push(["collapse", value]); },
+      };
+    },
+  };
+  class FakeInputEvent {
+    constructor(type, options) {
+      this.type = type;
+      this.data = options.data;
+    }
+  }
+
+  const selection = {
+    removeAllRanges() {},
+    addRange() {},
+  };
+  const CGO = loadUi(document, {
+    InputEvent: FakeInputEvent,
+    getSelection: () => selection,
+  });
+  const prompt = "Migration prompt, please.";
+
+  assert.equal(CGO.fillChatComposer(prompt), true);
+  assert.equal(composer.textContent, prompt);
+  assert.equal(composer.focused, true);
+  assert.deepEqual(rangeCalls[0], ["start", paragraph, 0]);
+  assert.deepEqual(rangeCalls[1], ["end", paragraph, 1]);
+  assert.equal(events.length, 0, "native edit path must not dispatch a duplicate input event");
+});
+
+test("migration prompt fallback preserves a ProseMirror paragraph", () => {
+  const events = [];
+  const paragraph = {
+    childNodes: [{ nodeType: 3 }],
+    textContent: "existing draft",
+  };
+  const composer = {
+    tagName: "DIV",
+    disabled: false,
+    get textContent() { return paragraph.textContent; },
+    set textContent(value) { paragraph.textContent = value; },
+    getAttribute() { return null; },
+    getClientRects() { return [{}]; },
+    querySelectorAll(selector) { return selector === "p" ? [paragraph] : []; },
+    replaceChildren(node) { assert.equal(node, paragraph); },
+    focus() {},
+    dispatchEvent(event) { events.push(event); },
+  };
+  const document = {
+    querySelectorAll(selector) {
+      return selector ===
+        '[data-composer-input] [contenteditable="true"][role="textbox"]'
+        ? [composer]
+        : [];
+    },
+    execCommand() { return false; },
+  };
+  class FakeInputEvent {
+    constructor(type, options) {
+      this.type = type;
+      this.data = options.data;
+    }
+  }
+
+  const CGO = loadUi(document, { InputEvent: FakeInputEvent });
+  const prompt = "Migration prompt, please.";
+
+  assert.equal(CGO.fillChatComposer(prompt), true);
+  assert.equal(paragraph.textContent, prompt);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, "input");
+  assert.equal(events[0].data, prompt);
+});
+
 test("project guide ZIP button shows progress, completion, and retry state", async () => {
   let clickZip;
   let mountedGuide = null;
@@ -279,6 +510,7 @@ test("project guide ZIP button shows progress, completion, and retry state", asy
       if (type === "click") clickZip = listener;
     },
   };
+  const migrateButton = { textContent: "", addEventListener() {} };
   const hideButton = { textContent: "", addEventListener() {} };
   const title = { textContent: "" };
   const body = { textContent: "" };
@@ -290,6 +522,7 @@ test("project guide ZIP button shows progress, completion, and retry state", asy
     hidden: true,
     querySelector(selector) {
       return {
+        ".cgo-project-guide-migrate": migrateButton,
         ".cgo-project-guide-zip": zipButton,
         ".cgo-project-guide-hide": hideButton,
         ".cgo-project-guide-title": title,

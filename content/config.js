@@ -768,6 +768,8 @@
         stats: null,
         level: 0,
       };
+      await CGO.updateProjectGuideVisibility?.();
+      await CGO.updateProjectGuideAlertVisibility?.();
       CGO.resetInitialPruneNoticeState?.(true);
       CGO.handleConversationRouteChanged?.(conversationId);
 

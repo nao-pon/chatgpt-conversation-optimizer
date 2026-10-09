@@ -230,6 +230,21 @@
   "hide_button": {
     "message": "Ignore"
   },
+  "conversation_limit_warning_title": {
+    "message": "This conversation may be nearing ChatGPT's conversation limit"
+  },
+  "conversation_limit_warning_body": {
+    "message": "Would you like to request a migration prompt?"
+  },
+  "migration_prompt_button": {
+    "message": "Yes"
+  },
+  "migration_prompt_text": {
+    "message": "This conversation may be nearing ChatGPT's limit. I will start a new conversation, so please provide a migration prompt."
+  },
+  "migration_prompt_input_failed": {
+    "message": "Could not find the ChatGPT prompt box"
+  },
   "project_guide_title_level1": {
     "message": "This conversation is growing"
   },
