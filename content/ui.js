@@ -24,28 +24,41 @@
   ];
 
   /**
-   * Resolve the current ChatGPT conversation-header surface.
+   * Return whether a ChatGPT conversation-header surface is currently rendered.
    *
-   * @returns {?HTMLElement} The modern app-shell header surface, when present.
+   * During SPA navigation ChatGPT can leave the previous, hidden header in the
+   * DOM while mounting the next one. Layout metrics let us prefer the live
+   * surface without depending on transient class names.
+   *
+   * @param {HTMLElement} surface - Candidate app-shell header surface.
+   * @returns {boolean} Whether the surface appears to be visible.
    */
-  function findConversationHeaderSurface() {
-    return document.querySelector(MODERN_HEADER_SURFACE_SELECTOR);
+  function isConversationHeaderSurfaceVisible(surface) {
+    if (!surface || surface.hidden || surface.getAttribute?.("aria-hidden") === "true") {
+      return false;
+    }
+
+    if (typeof surface.getClientRects === "function") {
+      return surface.getClientRects().length > 0;
+    }
+
+    if (
+      typeof surface.offsetWidth === "number" ||
+      typeof surface.offsetHeight === "number"
+    ) {
+      return surface.offsetWidth > 0 || surface.offsetHeight > 0;
+    }
+
+    return true;
   }
 
   /**
-   * Resolve the row that owns ChatGPT's native conversation actions.
+   * Resolve the row that owns ChatGPT's native actions inside one header surface.
    *
-   * Supports both the legacy `#conversation-header-actions` container and the
-   * current app-shell header, where the action row is a sibling of the main
-   * toolbar rather than one of its descendants.
-   *
+   * @param {HTMLElement} surface - App-shell header surface to inspect.
    * @returns {?HTMLElement} Container suitable for prepending CGO toolbar actions.
    */
-  function findConversationHeaderActions() {
-    const legacyActions = document.getElementById("conversation-header-actions");
-    if (legacyActions) return legacyActions;
-
-    const surface = findConversationHeaderSurface();
+  function findConversationHeaderActionsInSurface(surface) {
     if (!surface) return null;
 
     for (const button of surface.querySelectorAll('button[aria-haspopup="menu"]')) {
@@ -66,6 +79,54 @@
     }
 
     return null;
+  }
+
+  /**
+   * Resolve the current ChatGPT conversation-header surface.
+   *
+   * @returns {?HTMLElement} The modern app-shell header surface, when present.
+   */
+  function findConversationHeaderSurface() {
+    const surfaces = typeof document.querySelectorAll === "function"
+      ? Array.from(document.querySelectorAll(MODERN_HEADER_SURFACE_SELECTOR))
+      : [];
+    if (surfaces.length === 0) {
+      const surface = document.querySelector?.(MODERN_HEADER_SURFACE_SELECTOR);
+      if (surface) surfaces.push(surface);
+    }
+
+    const visibleSurfaces = surfaces.filter(isConversationHeaderSurfaceVisible);
+    for (let index = visibleSurfaces.length - 1; index >= 0; index -= 1) {
+      if (findConversationHeaderActionsInSurface(visibleSurfaces[index])) {
+        return visibleSurfaces[index];
+      }
+    }
+
+    for (let index = surfaces.length - 1; index >= 0; index -= 1) {
+      if (findConversationHeaderActionsInSurface(surfaces[index])) {
+        return surfaces[index];
+      }
+    }
+
+    return visibleSurfaces.at(-1) || surfaces.at(-1) || null;
+  }
+
+  /**
+   * Resolve the row that owns ChatGPT's native conversation actions.
+   *
+   * Supports both the legacy `#conversation-header-actions` container and the
+   * current app-shell header, where the action row is a sibling of the main
+   * toolbar rather than one of its descendants.
+   *
+   * @returns {?HTMLElement} Container suitable for prepending CGO toolbar actions.
+   */
+  function findConversationHeaderActions() {
+    const legacyActions = document.getElementById("conversation-header-actions");
+    if (legacyActions) return legacyActions;
+
+    const surface = findConversationHeaderSurface();
+    if (!surface) return null;
+    return findConversationHeaderActionsInSurface(surface);
   }
 
   /**
