@@ -438,6 +438,34 @@ test("a legacy response cannot prune or replace a conversation using the paginat
   );
 });
 
+test("a legacy full conversation is marked as history-complete", async () => {
+  const harness = createPageHookHarness(async () => {
+    throw new Error("the test should not issue its own history request");
+  });
+  const legacyUrl = "/backend-api/conversation/conversation-1";
+  const legacyPayload = {
+    conversation_id: "conversation-1",
+    current_node: "legacy-user",
+    mapping: {
+      "legacy-user": {
+        id: "legacy-user",
+        parent: null,
+        children: [],
+        message: makeMessage("legacy-user", "user", "Legacy question"),
+      },
+    },
+  };
+
+  await harness.window.__CGO_MAIN_HOOK_API__.handleFetchResponse({
+    args: [legacyUrl],
+    response: jsonResponse(legacyPayload),
+    url: legacyUrl,
+  });
+
+  const cached = await harness.requestCache();
+  assert.equal(cached.__cgo_history_complete, true);
+});
+
 test("an interior browser page does not move an incomplete history frontier backward", async () => {
   const harness = createPageHookHarness(async () => {
     throw new Error("the test should not issue its own history request");

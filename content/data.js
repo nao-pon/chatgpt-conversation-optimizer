@@ -282,7 +282,10 @@
       cached = null;
     }
 
-    if (!cached || cached.__cgo_history_complete === false) {
+    // A cache assembled only from the live stream has no history marker. Treat
+    // that unknown state as incomplete too, otherwise a missed initial page
+    // response can make export silently contain only the latest messages.
+    if (!cached || cached.__cgo_history_complete !== true) {
       try {
         CGO.log("[export] completing paginated conversation history", {
           conversationId,
@@ -352,7 +355,6 @@
 
     if (
       paginatedCompletionError &&
-      cached?.__cgo_paginated_history === true &&
       cached?.__cgo_history_complete !== true
     ) {
       throw paginatedCompletionError;
@@ -385,6 +387,7 @@
     ) {
       return "history-incomplete";
     }
+    if (cached.__cgo_history_complete !== true) return "history-unknown";
 
     const mapping = cached.mapping || {};
     const currentNode = cached.current_node || "";

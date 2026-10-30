@@ -3119,6 +3119,12 @@
     const conversationId = data?.conversation_id;
     if (!conversationId) return;
 
+    // Legacy conversation responses contain the complete mapping. Paginated
+    // payloads already carry an explicit true/false marker and must retain it.
+    if (typeof data.__cgo_history_complete !== "boolean") {
+      data.__cgo_history_complete = true;
+    }
+
     annotateConversationForCgo(data);
     applyProjectNameToConversation(data);
 
