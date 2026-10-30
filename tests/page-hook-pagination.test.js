@@ -4,12 +4,12 @@ const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
-function makeMessage(id, role, text) {
+function makeMessage(id, role, text, metadata = {}) {
   return {
     id,
     author: { role },
     content: { content_type: "text", parts: [text] },
-    metadata: {},
+    metadata,
   };
 }
 
@@ -572,6 +572,124 @@ test("a legacy full conversation is marked as history-complete", async () => {
 
   const cached = await harness.requestCache();
   assert.equal(cached.__cgo_history_complete, true);
+});
+
+test("token statistics use plausible reported counts only for calibration", async () => {
+  const harness = createPageHookHarness(async () => {
+    throw new Error("the test should not issue its own history request");
+  });
+  const legacyUrl = "/backend-api/conversation/conversation-1";
+  const user = makeMessage(
+    "user-current",
+    "user",
+    "日本語の質問を含む現在の会話です"
+  );
+  const assistant = makeMessage(
+    "assistant-current",
+    "assistant",
+    "Current answer",
+    { token_count: 120, model_slug: "gpt-5-chat-latest" }
+  );
+  const offBranch = makeMessage(
+    "assistant-old-branch",
+    "assistant",
+    "x".repeat(200000),
+    { token_count: 50000 }
+  );
+  const payload = {
+    conversation_id: "conversation-1",
+    current_node: "assistant-current",
+    mapping: {
+      "user-current": {
+        id: "user-current",
+        parent: null,
+        children: ["assistant-current", "assistant-old-branch"],
+        message: user,
+      },
+      "assistant-current": {
+        id: "assistant-current",
+        parent: "user-current",
+        children: [],
+        message: assistant,
+      },
+      "assistant-old-branch": {
+        id: "assistant-old-branch",
+        parent: "user-current",
+        children: [],
+        message: offBranch,
+      },
+    },
+  };
+
+  await harness.window.__CGO_MAIN_HOOK_API__.handleFetchResponse({
+    args: [legacyUrl],
+    response: jsonResponse(payload),
+    url: legacyUrl,
+  });
+
+  const result = harness.postedMessages
+    .filter((message) => message.type === "autoAdjustResult")
+    .at(-1);
+  assert.ok(result);
+  assert.equal(result.stats.activeTokenMessageCount, 2);
+  assert.equal(result.stats.reportedMessageCount, 1);
+  assert.equal(result.stats.reportedTokenCount, 120);
+  assert.equal(result.stats.ignoredReportedMessageCount, 0);
+  assert.ok(result.stats.estimatedTokenCount > 0);
+  assert.ok(result.stats.tokenCount < 1000, "off-branch tokens must be excluded");
+  assert.ok(result.stats.safeTokenCount > result.stats.tokenCount);
+  assert.equal(result.stats.modelSlug, "gpt-5-chat-latest");
+  assert.equal(result.stats.contextLimit, 128000);
+  assert.equal(result.stats.contextLimitSource, "model");
+  assert.equal(result.stats.historyComplete, true);
+  assert.equal(result.stats.tokenConfidence, "medium");
+});
+
+test("token statistics ignore implausible reported counts instead of summing them", async () => {
+  const harness = createPageHookHarness(async () => {
+    throw new Error("the test should not issue its own history request");
+  });
+  const legacyUrl = "/backend-api/conversation/conversation-1";
+  const payload = {
+    conversation_id: "conversation-1",
+    current_node: "assistant-current",
+    mapping: {
+      "user-current": {
+        id: "user-current",
+        parent: null,
+        children: ["assistant-current"],
+        message: makeMessage("user-current", "user", "Short question"),
+      },
+      "assistant-current": {
+        id: "assistant-current",
+        parent: "user-current",
+        children: [],
+        message: makeMessage(
+          "assistant-current",
+          "assistant",
+          "Short answer",
+          { token_count: 250000, model_slug: "unknown-model" }
+        ),
+      },
+    },
+  };
+
+  await harness.window.__CGO_MAIN_HOOK_API__.handleFetchResponse({
+    args: [legacyUrl],
+    response: jsonResponse(payload),
+    url: legacyUrl,
+  });
+
+  const result = harness.postedMessages
+    .filter((message) => message.type === "autoAdjustResult")
+    .at(-1);
+  assert.ok(result);
+  assert.equal(result.stats.reportedMessageCount, 0);
+  assert.equal(result.stats.reportedTokenCount, 0);
+  assert.equal(result.stats.ignoredReportedMessageCount, 1);
+  assert.ok(result.stats.tokenCount < 1000);
+  assert.equal(result.stats.contextLimitSource, "fallback");
+  assert.equal(result.stats.tokenConfidence, "low");
 });
 
 test("an interior browser page does not move an incomplete history frontier backward", async () => {

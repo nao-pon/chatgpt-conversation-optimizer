@@ -24,6 +24,9 @@ test("settings checkboxes keep edits while history mode changes and save them", 
   control("#cgo-setting-keep-dom-messages");
   control("#cgo-setting-auto-adjust-enabled");
   control("#cgo-setting-auto-adjust-label");
+  const contextLimit = control("#cgo-setting-context-token-limit");
+  const customContextLimit = control("#cgo-setting-context-token-limit-custom");
+  const customContextRow = control(".cgo-context-token-limit-custom-row");
   const images = control("#cgo-setting-html-include-images");
   const debug = control("#cgo-setting-debug-enabled");
   const debugLevel = control("#cgo-setting-debug-level");
@@ -77,6 +80,7 @@ test("settings checkboxes keep edits while history mode changes and save them", 
   CGO.SETTINGS = {
     keepDomMessages: 40,
     autoAdjustEnabled: true,
+    contextTokenLimit: 0,
     htmlDownloadIncludeImages: true,
     debugEnabled: false,
     debugLevel: "BASIC",
@@ -115,6 +119,10 @@ test("settings checkboxes keep edits while history mode changes and save them", 
   debug.checked = true;
   debug.listeners.change();
   assert.equal(debugLevel.disabled, false);
+  contextLimit.value = "custom";
+  customContextLimit.value = "200000";
+  contextLimit.listeners.change();
+  assert.equal(customContextRow.hidden, false);
 
   CGO.setActiveConversationHistoryMode("paginated", "conversation-1");
   assert.equal(images.checked, false);
@@ -124,4 +132,5 @@ test("settings checkboxes keep edits while history mode changes and save them", 
   assert.equal(await panel.__cgoSaveSettings(), true);
   assert.equal(savedSettings.htmlDownloadIncludeImages, false);
   assert.equal(savedSettings.debugEnabled, true);
+  assert.equal(savedSettings.contextTokenLimit, "200000");
 });

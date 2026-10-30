@@ -26,6 +26,14 @@ CGO works in the signed-in ChatGPT Web session. It does not require an OpenAI AP
 - Shows the number of collected messages while export-time history loading is in progress
 - Reconstructs the available conversation in chronological order for export
 
+### Warn before older context may be lost
+
+- Estimates the cumulative visible-message size of the active conversation branch locally
+- Uses plausible ChatGPT-reported per-message token counts only to calibrate the local estimate; undocumented outliers are ignored
+- Leaves output headroom and warns in stages before the configured context reference is reached
+- Detects known model aliases where possible, falls back conservatively to 128K, and supports manual 64K, 128K, 256K, 400K, or custom references
+- Marks estimates as less certain and warns earlier when history, internal context, images, or attachments cannot be counted reliably
+
 ### Choose the right export format
 
 | Format | Best for | What it provides |
@@ -129,6 +137,7 @@ CGO runs locally in the browser and is intended for exporting your own conversat
 - No OpenAI developer API key is required
 - Export data is prepared locally and saved or opened only when you request it
 - Requests needed to collect conversation history and files use the active ChatGPT Web session
+- Context-risk estimates are calculated locally and do not send conversation text to a token-counting service
 
 See [PRIVACY.md](PRIVACY.md) for the project privacy policy.
 
@@ -137,6 +146,7 @@ See [PRIVACY.md](PRIVACY.md) for the project privacy policy.
 ## Limitations
 
 - CGO depends on ChatGPT Web's internal response formats and endpoints, which may change without notice
+- Context-risk values measure the stored active branch, not the exact context sent for the current response or an authoritative remaining-token count; ChatGPT-side truncation or compaction, hidden instructions, reasoning, tools, images, files, and account-specific model behavior may differ
 - Export can include only the conversation data and files available to the current ChatGPT session
 - Some images, generated files, or attachments may be unavailable because of expired links, access restrictions, unsupported formats, or ChatGPT-side issues
 - The paginated format exposes an ordered message history rather than the complete legacy branch graph, so alternate branches or versions may not always be reconstructed exactly as before

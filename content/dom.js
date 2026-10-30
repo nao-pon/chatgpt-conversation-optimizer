@@ -1155,7 +1155,12 @@
       const conversationId = data.conversationId || CGO.getConversationIdFromLocation?.() || "";
       const projectName = data.projectName || "";
       const stats = data.stats || null;
-      const level = CGO.getProjectGuideLevel(stats);
+      const computedLevel = CGO.getProjectGuideLevel(stats);
+      const previousLevel =
+        CGO.STATE.projectGuide?.conversationId === conversationId
+          ? Number(CGO.STATE.projectGuide?.level || 0)
+          : 0;
+      const level = Math.max(previousLevel, computedLevel);
       const effective = Number(data.effectiveKeepDomMessages || 0);
       const historyMode = data.historyMode === "paginated" ? "paginated" : "legacy";
 

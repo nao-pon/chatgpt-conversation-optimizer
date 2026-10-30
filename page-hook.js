@@ -4,7 +4,7 @@
   // =========================================================
   // INSTALL GUARD / CONSTANTS / CONFIG / STATE
   // =========================================================
-  const PAGE_HOOK_VERSION = "7";
+  const PAGE_HOOK_VERSION = "8";
   const PAGE_BRIDGE_SECRET = "CGO_BRIDGE_" + Math.random().toString(36).slice(2, 15);
 
   if (window.__CGO_MAIN_HOOK_INSTALLED__) {
@@ -24,6 +24,7 @@
     turnCount: 40,
     baseTurnCount: 40,
     enablePrune: true,
+    contextTokenLimit: 0,
     debug: false,
     debugLevel: "BASIC",
     rootNodeId: "client-created-root",
@@ -41,6 +42,8 @@
   const FILE_DOWNLOAD_CACHE_BY_SANDBOX_PATH = new Map();
   const PROJECT_NAME_BY_GIZMO_ID = new Map();
   const PROJECT_NAME_BY_CONVERSATION_ID = new Map();
+  const MODEL_SLUG_BY_CONVERSATION_ID = new Map();
+  const TOKEN_ESTIMATE_CACHE = new Map();
   const STREAM_TOPIC_TO_CONVERSATION = new Map();
   const STREAM_TURN_EXCHANGE_TO_CONVERSATION = new Map();
   const WS_STREAM_PARSER_STATE = new Map();
@@ -51,6 +54,11 @@
   const HISTORY_IDLE_DELAY_MS = 750;
   const HISTORY_IDLE_TIMEOUT_MS = 5000;
   const HISTORY_EXPORT_TIMEOUT_MS = 120000;
+  const DEFAULT_CONTEXT_TOKEN_LIMIT = 128000;
+  const CONTEXT_TOKEN_LIMIT_BY_MODEL = Object.freeze({
+    "chat-latest": 400000,
+    "gpt-5-chat-latest": 128000,
+  });
 
   let LAST_STREAM_CONVERSATION_ID = null;
   const VOICE_SESSION_STATE = {
@@ -69,6 +77,19 @@
       return key;
     }
     return "BASIC";
+  }
+
+  /**
+   * Normalize the optional user-supplied context-window reference.
+   * Zero means automatic detection with a conservative fallback.
+   *
+   * @param {*} value - Candidate token limit.
+   * @returns {number} Zero or a bounded integer token limit.
+   */
+  function normalizeContextTokenLimit(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) return 0;
+    return Math.max(16000, Math.min(2000000, Math.round(n)));
   }
 
   function getLogLevelValue(value) {
@@ -420,6 +441,9 @@
       }
 
       CONFIG.autoAdjustEnabled = !!settings.autoAdjustEnabled;
+      CONFIG.contextTokenLimit = normalizeContextTokenLimit(
+        settings.contextTokenLimit
+      );
       CONFIG.debug = !!settings.debugEnabled;
       CONFIG.debugLevel = normalizeLogLevelKey(settings.debugLevel);
 
@@ -434,6 +458,7 @@
             turnCount: CONFIG.turnCount,
             baseTurnCount: CONFIG.baseTurnCount,
             autoAdjustEnabled: CONFIG.autoAdjustEnabled,
+            contextTokenLimit: CONFIG.contextTokenLimit,
             debugEnabled: CONFIG.debug,
             debugLevel: CONFIG.debugLevel,
           },
@@ -462,6 +487,12 @@
         CONFIG.autoAdjustEnabled = settings.autoAdjustEnabled;
       }
 
+      if (Object.prototype.hasOwnProperty.call(settings, "contextTokenLimit")) {
+        CONFIG.contextTokenLimit = normalizeContextTokenLimit(
+          settings.contextTokenLimit
+        );
+      }
+
       if (typeof settings.debugEnabled === "boolean") {
         CONFIG.debug = settings.debugEnabled;
       }
@@ -472,9 +503,21 @@
         turnCount: CONFIG.turnCount,
         baseTurnCount: CONFIG.baseTurnCount,
         autoAdjustEnabled: CONFIG.autoAdjustEnabled,
+        contextTokenLimit: CONFIG.contextTokenLimit,
         debugEnabled: CONFIG.debug,
         debugLevel: CONFIG.debugLevel,
       });
+
+      const conversationId = getConversationIdFromLocation();
+      const cached = conversationId
+        ? getCachedConversationForBridge(conversationId)
+        : null;
+      if (cached) {
+        publishConversationMetrics(
+          cached,
+          cached.__cgo_paginated_history === true ? "paginated" : "legacy"
+        );
+      }
     }
   });
 
@@ -532,6 +575,7 @@
       ? message.content.parts.filter((value) => typeof value === "string")
       : [];
 
+    if (parts.length === 1) return parts[0];
     return parts.join("\n");
   }
 
@@ -1758,6 +1802,295 @@
   // =========================================================
   // ANALYZE / PRUNE HELPERS
   /**
+   * Produce a conservative text-token estimate without sending conversation
+   * content outside the browser. CJK characters are counted individually,
+   * Latin word runs are grouped, and punctuation/emoji receive extra weight.
+   *
+   * @param {*} value - Text-like input.
+   * @returns {number} Estimated plain-text token count.
+   */
+  function estimateTextTokenCount(value) {
+    const text = typeof value === "string" ? value : String(value || "");
+    if (!text.trim()) return 0;
+
+    let score = 0;
+    let latinRunLength = 0;
+
+    const flushLatinRun = () => {
+      if (!latinRunLength) return;
+      score += Math.ceil(latinRunLength / 4);
+      latinRunLength = 0;
+    };
+
+    for (const character of text) {
+      const codePoint = character.codePointAt(0) || 0;
+
+      if (
+        (codePoint >= 0x30 && codePoint <= 0x39) ||
+        (codePoint >= 0x41 && codePoint <= 0x5a) ||
+        (codePoint >= 0x61 && codePoint <= 0x7a) ||
+        codePoint === 0x5f
+      ) {
+        latinRunLength += 1;
+        continue;
+      }
+
+      flushLatinRun();
+
+      if (/\s/u.test(character)) continue;
+
+      const isCjk =
+        (codePoint >= 0x3040 && codePoint <= 0x30ff) ||
+        (codePoint >= 0x3400 && codePoint <= 0x9fff) ||
+        (codePoint >= 0xac00 && codePoint <= 0xd7af) ||
+        (codePoint >= 0xf900 && codePoint <= 0xfaff);
+
+      if (isCjk) {
+        score += 1;
+      } else if (codePoint > 0xffff) {
+        score += 2;
+      } else if (codePoint < 0x80) {
+        score += 0.75;
+      } else {
+        score += 1;
+      }
+    }
+
+    flushLatinRun();
+    return Math.max(1, Math.ceil(score));
+  }
+
+  /**
+   * Reuse estimates for immutable history messages so background pagination
+   * does not repeatedly tokenize the same growing prefix.
+   *
+   * @param {Object} message - Conversation message.
+   * @returns {number} Estimated text tokens.
+   */
+  function getEstimatedMessageTextTokens(message) {
+    const text = getMessageTextFallback(message);
+    const messageId = String(message?.id || "");
+    if (!messageId) return estimateTextTokenCount(text);
+
+    const signature = [
+      text.length,
+      message?.update_time || "",
+      message?.status || "",
+    ].join(":");
+    const cached = TOKEN_ESTIMATE_CACHE.get(messageId);
+    if (cached?.signature === signature) {
+      return cached.estimate;
+    }
+
+    const estimate = estimateTextTokenCount(text);
+    TOKEN_ESTIMATE_CACHE.set(messageId, { signature, estimate });
+    if (TOKEN_ESTIMATE_CACHE.size > 20000) {
+      const oldestKey = TOKEN_ESTIMATE_CACHE.keys().next().value;
+      TOKEN_ESTIMATE_CACHE.delete(oldestKey);
+    }
+    return estimate;
+  }
+
+  /**
+   * Resolve the model used for the active branch from response metadata,
+   * request metadata remembered by the fetch hook, or conversation metadata.
+   *
+   * @param {Object} data - Conversation payload.
+   * @param {string[]} chain - Active root-to-current node ids.
+   * @returns {string} Best-effort model slug.
+   */
+  function resolveConversationModelSlug(data, chain) {
+    const mapping = getMapping(data);
+
+    for (let index = chain.length - 1; index >= 0; index -= 1) {
+      const message = mapping[chain[index]]?.message;
+      const candidates = [
+        message?.metadata?.model_slug,
+        message?.metadata?.default_model_slug,
+        message?.metadata?.model,
+      ];
+      const found = candidates.find((value) =>
+        typeof value === "string" && value.trim() && value !== "auto"
+      );
+      if (found) return found.trim();
+    }
+
+    const conversationId = String(data?.conversation_id || "");
+    const candidates = [
+      MODEL_SLUG_BY_CONVERSATION_ID.get(conversationId),
+      data?.model_slug,
+      data?.default_model_slug,
+      data?.model,
+    ];
+    const found = candidates.find((value) =>
+      typeof value === "string" && value.trim() && value !== "auto"
+    );
+    return found ? found.trim() : "";
+  }
+
+  /**
+   * Resolve the reference context window used for warning calculations.
+   * A manual value wins; automatic mode only trusts exact known model aliases
+   * and otherwise falls back to 128K.
+   *
+   * @param {string} modelSlug - Best-effort active model slug.
+   * @returns {{contextLimit:number,contextLimitSource:string}}
+   */
+  function resolveContextTokenLimit(modelSlug) {
+    if (CONFIG.contextTokenLimit > 0) {
+      return {
+        contextLimit: CONFIG.contextTokenLimit,
+        contextLimitSource: "setting",
+      };
+    }
+
+    const knownLimit = CONTEXT_TOKEN_LIMIT_BY_MODEL[modelSlug];
+    if (Number.isFinite(knownLimit) && knownLimit > 0) {
+      return {
+        contextLimit: knownLimit,
+        contextLimitSource: "model",
+      };
+    }
+
+    return {
+      contextLimit: DEFAULT_CONTEXT_TOKEN_LIMIT,
+      contextLimitSource: "fallback",
+    };
+  }
+
+  /**
+   * Estimate the cumulative visible-message size of the active branch.
+   * Assistant token counts are treated only as calibration samples because the
+   * undocumented ChatGPT field may include hidden work or cumulative values.
+   *
+   * @param {Object} data - Conversation payload.
+   * @returns {Object} Token-risk statistics appended to conversation stats.
+   */
+  function buildConversationTokenStats(data) {
+    const mapping = getMapping(data);
+    const chain = buildLinearChain(mapping, getCurrentNode(data));
+    const messages = [];
+    let activeImageCount = 0;
+    let activeAttachmentCount = 0;
+    let hasUncertainInternalContext = false;
+
+    for (const id of chain) {
+      const node = mapping[id];
+      if (!hasMessage(node)) continue;
+
+      const message = node.message;
+      const role = getRole(node);
+      const textEstimate = getEstimatedMessageTextTokens(message);
+      const isVisibleConversationMessage = isMeaningfulConversationNode(node);
+      if (
+        !isVisibleConversationMessage &&
+        (textEstimate > 0 || isHardInternalConversationMessage(message))
+      ) {
+        hasUncertainInternalContext = true;
+      }
+      const reportedValue = Number(message?.metadata?.token_count);
+      const reportedTokenCount =
+        role === "assistant" && Number.isFinite(reportedValue) && reportedValue > 0
+          ? Math.round(reportedValue)
+          : 0;
+
+      if (textEstimate > 0 || role === "user" || role === "assistant") {
+        messages.push({ role, textEstimate, reportedTokenCount });
+      }
+
+      const parts = Array.isArray(message?.content?.parts)
+        ? message.content.parts
+        : [];
+      for (const part of parts) {
+        if (!part || typeof part !== "object") continue;
+        if (part.content_type === "image_asset_pointer") {
+          activeImageCount += 1;
+        } else if (
+          part.content_type === "file_asset_pointer" ||
+          part.content_type === "attachment_asset_pointer"
+        ) {
+          activeAttachmentCount += 1;
+        }
+      }
+
+      const attachments = message?.metadata?.attachments;
+      if (Array.isArray(attachments)) {
+        activeAttachmentCount += attachments.length;
+      }
+    }
+
+    let calibrationEstimated = 0;
+    let calibrationReported = 0;
+    let reportedTokenCount = 0;
+    let reportedMessageCount = 0;
+    let ignoredReportedMessageCount = 0;
+    for (const message of messages) {
+      if (message.reportedTokenCount <= 0 || message.textEstimate <= 0) continue;
+
+      // A per-message count can be larger than the visible text because of
+      // tokenizer differences and hidden reasoning. Very large ratios are not
+      // safe to add or calibrate from: the field may instead be cumulative.
+      const plausibleUpperBound = Math.max(256, message.textEstimate * 4);
+      if (message.reportedTokenCount > plausibleUpperBound) {
+        ignoredReportedMessageCount += 1;
+        continue;
+      }
+
+      calibrationEstimated += message.textEstimate;
+      calibrationReported += message.reportedTokenCount;
+      reportedTokenCount += message.reportedTokenCount;
+      reportedMessageCount += 1;
+    }
+
+    const rawCalibration = calibrationEstimated > 0
+      ? calibrationReported / calibrationEstimated
+      : 1;
+    const calibrationFactor = Math.max(0.75, Math.min(1.5, rawCalibration));
+
+    let estimatedTokenCount = 0;
+    for (const message of messages) {
+      estimatedTokenCount += Math.ceil(
+        message.textEstimate * calibrationFactor
+      );
+    }
+
+    const messageStructureTokens = messages.length * 4;
+    const tokenCount = estimatedTokenCount + messageStructureTokens;
+    const safeTokenCount = Math.ceil(tokenCount * 1.15);
+    const modelSlug = resolveConversationModelSlug(data, chain);
+    const limit = resolveContextTokenLimit(modelSlug);
+    const historyComplete = data?.__cgo_history_complete === true;
+    const hasUncertainMedia =
+      activeImageCount > 0 || activeAttachmentCount > 0;
+    const hasUncertainContext =
+      hasUncertainMedia || hasUncertainInternalContext;
+
+    return {
+      tokenCount,
+      safeTokenCount,
+      reportedTokenCount,
+      estimatedTokenCount,
+      reportedMessageCount,
+      ignoredReportedMessageCount,
+      estimatedMessageCount: messages.length,
+      activeTokenMessageCount: messages.length,
+      tokenCalibrationFactor: Number(calibrationFactor.toFixed(3)),
+      tokenConfidence:
+        historyComplete && !hasUncertainContext && reportedMessageCount > 0
+          ? "medium"
+          : "low",
+      historyComplete,
+      hasUncertainMedia,
+      hasUncertainInternalContext,
+      hasUncertainContext,
+      activeImageCount,
+      activeAttachmentCount,
+      modelSlug,
+      ...limit,
+    };
+  }
+
+  /**
    * Compute basic conversation statistics (turns, total text length, image count, and attachment count) from conversation data.
    * @param {object} data - Conversation payload or object containing a `mapping` of nodes.
    * @returns {{turnCount:number,textLength:number,imageCount:number,attachmentCount:number}} Object with counts: `turnCount` number of user/assistant turns, `textLength` total characters across text parts, `imageCount` number of image asset parts, and `attachmentCount` number of file/attachment assets.
@@ -1806,6 +2139,7 @@
       textLength,
       imageCount,
       attachmentCount,
+      ...buildConversationTokenStats(data),
     };
   }
 
@@ -1917,6 +2251,51 @@
       },
       "*"
     );
+  }
+
+  /**
+   * Recompute and publish conversation statistics without rewriting a response.
+   * Used after streamed turns and context-reference setting changes.
+   *
+   * @param {Object} data - Cached conversation payload.
+   * @param {"legacy"|"paginated"} [historyMode="legacy"] - History transport mode.
+   * @returns {Object} Published statistics.
+   */
+  function publishConversationMetrics(data, historyMode = "legacy") {
+    const stats = buildConversationStats(data);
+    const baseKeepDomMessages = CONFIG.baseTurnCount || CONFIG.turnCount;
+    const autoAdjustScore = getAutoAdjustScore(stats);
+    const autoAdjustLevel = getKeepDomAutoAdjustLevel(autoAdjustScore);
+    const { minimumKeepDomMessages } =
+      getSteppedKeepDomMessages(baseKeepDomMessages, autoAdjustLevel);
+    const effectiveKeepDomMessages =
+      CONFIG.autoAdjustEnabled && baseKeepDomMessages > 10
+        ? getRecommendedKeepDomMessages(baseKeepDomMessages, stats)
+        : baseKeepDomMessages;
+    const summary = analyzeConversation(data, effectiveKeepDomMessages);
+    if (summary?.original) {
+      Object.assign(stats, summary.original);
+    }
+    const projectName =
+      PROJECT_NAME_BY_CONVERSATION_ID.get(data?.conversation_id || "") ||
+      PROJECT_NAME_BY_GIZMO_ID.get(
+        data?.gizmo_id || data?.conversation_template_id || ""
+      ) ||
+      "";
+
+    postAutoAdjustResult(
+      data?.conversation_id || "",
+      projectName,
+      baseKeepDomMessages,
+      effectiveKeepDomMessages,
+      stats,
+      autoAdjustScore,
+      autoAdjustLevel,
+      minimumKeepDomMessages,
+      historyMode
+    );
+
+    return stats;
   }
 
   /**
@@ -3645,6 +4024,25 @@
   }
 
   /**
+   * Read a best-effort model slug from a ChatGPT conversation request body.
+   *
+   * @param {Object} body - Parsed request body.
+   * @returns {string} Model slug or an empty string.
+   */
+  function getModelSlugFromRequestBody(body) {
+    const candidates = [
+      body?.model,
+      body?.model_slug,
+      body?.default_model_slug,
+      body?.conversation_mode?.model,
+    ];
+    const found = candidates.find((value) =>
+      typeof value === "string" && value.trim() && value !== "auto"
+    );
+    return found ? found.trim() : "";
+  }
+
+  /**
    * Cache request-side user messages before the streaming response arrives.
    *
    * @param {Array} args - Original `fetch` argument list.
@@ -3663,6 +4061,11 @@
       "";
 
     if (!conversationId) return;
+
+    const modelSlug = getModelSlugFromRequestBody(body);
+    if (modelSlug) {
+      MODEL_SLUG_BY_CONVERSATION_ID.set(conversationId, modelSlug);
+    }
 
     const rawTopicId =
       body.topic_id ||
@@ -6302,6 +6705,16 @@
         topicId,
         currentNode: cache.current_node || "",
       });
+
+      const cachedConversation = getCachedConversationForBridge(conversationId);
+      if (cachedConversation) {
+        publishConversationMetrics(
+          cachedConversation,
+          cachedConversation.__cgo_paginated_history === true
+            ? "paginated"
+            : "legacy"
+        );
+      }
 
       return;
     }

@@ -550,6 +550,23 @@
           <span id="cgo-setting-auto-adjust-label">${CGO.escapeHtml(CGO.t("auto_adjust_disabled_label"))}</span>
         </label>
 
+        <label class="cgo-settings-row">
+          <span>${CGO.escapeHtml(CGO.t("context_token_limit_label") || "Context reference")}</span>
+          <select id="cgo-setting-context-token-limit">
+            <option value="0">${CGO.escapeHtml(CGO.t("context_token_limit_auto") || "Auto (128K fallback)")}</option>
+            <option value="64000">64K</option>
+            <option value="128000">128K</option>
+            <option value="256000">256K</option>
+            <option value="400000">400K</option>
+            <option value="custom">${CGO.escapeHtml(CGO.t("context_token_limit_custom") || "Custom")}</option>
+          </select>
+        </label>
+
+        <label class="cgo-settings-row cgo-context-token-limit-custom-row" hidden>
+          <span>${CGO.escapeHtml(CGO.t("context_token_limit_custom_label") || "Custom tokens")}</span>
+          <input id="cgo-setting-context-token-limit-custom" type="number" min="16000" max="2000000" step="1000">
+        </label>
+
         <label class="cgo-settings-row cgo-settings-check">
           <input id="cgo-setting-html-include-images" type="checkbox">
           <span>${CGO.escapeHtml(CGO.t("html_include_images_label"))}</span>
@@ -578,6 +595,9 @@
     const keepInput = panel.querySelector("#cgo-setting-keep-dom-messages");
     const autoAdjustInput = panel.querySelector("#cgo-setting-auto-adjust-enabled");
     const autoAdjustLabel = panel.querySelector("#cgo-setting-auto-adjust-label");
+    const contextLimitInput = panel.querySelector("#cgo-setting-context-token-limit");
+    const customContextLimitInput = panel.querySelector("#cgo-setting-context-token-limit-custom");
+    const customContextLimitRow = panel.querySelector(".cgo-context-token-limit-custom-row");
     const htmlImagesInput = panel.querySelector("#cgo-setting-html-include-images");
     const debugEnabledInput = panel.querySelector("#cgo-setting-debug-enabled");
     const debugLevelInput = panel.querySelector("#cgo-setting-debug-level");
@@ -631,6 +651,10 @@
       return {
         keepDomMessages: keepInput.value,
         autoAdjustEnabled: !!autoAdjustInput.checked,
+        contextTokenLimit:
+          contextLimitInput.value === "custom"
+            ? customContextLimitInput.value
+            : contextLimitInput.value,
         htmlDownloadIncludeImages: htmlImagesInput.checked,
         debugEnabled: debugEnabledInput.checked,
         debugLevel: debugLevelInput.value,
@@ -646,6 +670,13 @@
 
     function syncDebugLevelEnabledState() {
       debugLevelInput.disabled = !debugEnabledInput.checked;
+    }
+
+    function syncCustomContextLimitVisibility() {
+      const custom = contextLimitInput.value === "custom";
+      customContextLimitRow.hidden = !custom;
+      customContextLimitRow.style.display = custom ? "" : "none";
+      customContextLimitInput.disabled = !custom;
     }
 
     /**
@@ -668,15 +699,23 @@
     async function syncFromSettings() {
       keepInput.value = String(CGO.SETTINGS.keepDomMessages ?? CGO.CONFIG.keepDomMessages ?? 40);
       autoAdjustInput.checked = !!CGO.SETTINGS.autoAdjustEnabled;
+      const contextTokenLimit = Number(CGO.SETTINGS.contextTokenLimit || 0);
+      const presetLimits = new Set([0, 64000, 128000, 256000, 400000]);
+      contextLimitInput.value = presetLimits.has(contextTokenLimit)
+        ? String(contextTokenLimit)
+        : "custom";
+      customContextLimitInput.value = String(contextTokenLimit > 0 ? contextTokenLimit : 128000);
       htmlImagesInput.checked = CGO.SETTINGS.htmlDownloadIncludeImages !== false;
       debugEnabledInput.checked = !!CGO.SETTINGS.debugEnabled;
       debugLevelInput.value = CGO.SETTINGS.debugLevel ?? CGO.CONFIG.debugLevel ?? "BASIC";
       syncDomOptimizationVisibility();
       syncDebugLevelEnabledState();
+      syncCustomContextLimitVisibility();
       await updateAutoAdjustLabel();
     }
 
     debugEnabledInput.addEventListener("change", syncDebugLevelEnabledState);
+    contextLimitInput.addEventListener("change", syncCustomContextLimitVisibility);
 
     async function savePanelSettings() {
       if (panel.__cgoSavePromise) {
@@ -703,6 +742,16 @@
 
         if (nextEffective < previousEffective) {
           CGO.scheduleDomTrim?.(0);
+        }
+
+        const guide = CGO.STATE.projectGuide;
+        if (guide?.stats) {
+          guide.level = Math.max(
+            Number(guide.level || 0),
+            Number(CGO.getProjectGuideLevel?.(guide.stats) || 0)
+          );
+          await CGO.updateProjectGuideVisibility?.();
+          await CGO.updateProjectGuideAlertVisibility?.();
         }
 
         await syncFromSettings();
@@ -1029,7 +1078,10 @@
           CGO.getConversationIdFromLocation?.() ||
           "";
         const level = Number(CGO.STATE.projectGuide?.level || 0);
-        await CGO.dismissProjectGuide(conversationId, level);
+        const profileKey = CGO.getProjectGuideProfileKey?.(
+          CGO.STATE.projectGuide?.stats
+        ) || "";
+        await CGO.dismissProjectGuide(conversationId, level, profileKey);
         await CGO.updateProjectGuideAlertVisibility?.();
       } catch (error) {
         CGO.log("[warn] migration prompt guide dismissal failed", String(error));
@@ -1053,7 +1105,10 @@
       try {
         const conversationId = CGO.STATE.projectGuide?.conversationId || CGO.getConversationIdFromLocation?.() || "";
         const level = Number(CGO.STATE.projectGuide?.level || 0);
-        await CGO.dismissProjectGuide(conversationId, level);
+        const profileKey = CGO.getProjectGuideProfileKey?.(
+          CGO.STATE.projectGuide?.stats
+        ) || "";
+        await CGO.dismissProjectGuide(conversationId, level, profileKey);
         guide.hidden = true;
         await CGO.updateProjectGuideAlertVisibility?.();
       } catch (error) {
@@ -1074,19 +1129,56 @@
   /**
    * Return localized project-guide copy for the current warning level and project context.
    *
-   * @param {{level?: number, projectName?: string}} [options={}] - Guide display context.
+   * @param {{level?: number, projectName?: string, stats?: Object}} [options={}] - Guide display context.
    * @returns {{title: string, body: string}} Title/body pair for the guide UI.
    */
-  function getProjectGuideTexts({ level = 0, projectName = "" } = {}) {
+  function getProjectGuideTexts({ level = 0, projectName = "", stats = null } = {}) {
     void projectName;
 
     if (level <= 0) {
       return { title: "", body: "" };
     }
 
+    const risk = CGO.getContextRiskDetails?.(stats) || null;
+    if (!risk) {
+      return {
+        title: CGO.t("conversation_limit_warning_title"),
+        body: CGO.t("conversation_limit_warning_body"),
+      };
+    }
+
+    const formatTokens = (value) => {
+      const tokens = Math.max(0, Number(value || 0));
+      if (tokens >= 1000000) {
+        return `${Number((tokens / 1000000).toFixed(1))}M`;
+      }
+      return `${Math.round(tokens / 1000)}K`;
+    };
+    const estimate = `${stats?.historyComplete === true ? "" : "≥"}${formatTokens(risk.safeTokenCount)}`;
+    const referenceSuffix = risk.contextLimitSource === "fallback"
+      ? CGO.t("context_reference_fallback_suffix")
+      : "";
+    const reference = `${formatTokens(risk.contextLimit)}${referenceSuffix}`;
+    const model = risk.modelSlug || CGO.t("context_model_unknown");
+    const confidence = CGO.t(
+      stats?.tokenConfidence === "medium"
+        ? "context_confidence_medium"
+        : "context_confidence_low"
+    );
+    const metrics = CGO.t("context_risk_metrics", [
+      estimate,
+      reference,
+      model,
+      confidence,
+    ]);
+    const uncertainty = risk.uncertain
+      ? ` ${CGO.t("context_risk_uncertain_note")}`
+      : "";
+    const scopeNote = ` ${CGO.t("context_risk_scope_note")}`;
+
     return {
-      title: CGO.t("conversation_limit_warning_title"),
-      body: CGO.t("conversation_limit_warning_body"),
+      title: CGO.t(`context_risk_title_level${level}`),
+      body: `${metrics}${scopeNote} ${CGO.t(`context_risk_body_level${level}`)}${uncertainty}`,
     };
   }
 
@@ -1126,7 +1218,12 @@
       return;
     }
 
-    const dismissed = await CGO.isProjectGuideDismissed(conversationId, level);
+    const profileKey = CGO.getProjectGuideProfileKey?.(stats) || "";
+    const dismissed = await CGO.isProjectGuideDismissed(
+      conversationId,
+      level,
+      profileKey
+    );
     if (renderTicket !== CGO.projectGuideRenderTicket) return;
 
     const currentRouteConversationId =
@@ -1149,7 +1246,7 @@
     const titleEl = guide.querySelector(".cgo-project-guide-title");
     const bodyEl = guide.querySelector(".cgo-project-guide-body");
 
-    const texts = getProjectGuideTexts({ level, projectName });
+    const texts = getProjectGuideTexts({ level, projectName, stats });
     titleEl.textContent = texts.title;
     bodyEl.textContent = texts.body;
 
@@ -1182,6 +1279,7 @@
     }
 
     const conversationId = CGO.STATE.projectGuide?.conversationId || "";
+    const stats = CGO.STATE.projectGuide?.stats || null;
 
     const level = Number(CGO.STATE.projectGuide?.level || 0);
 
@@ -1191,7 +1289,12 @@
       return;
     }
 
-    const dismissed = await CGO.isProjectGuideDismissed(conversationId, 3);
+    const profileKey = CGO.getProjectGuideProfileKey?.(stats) || "";
+    const dismissed = await CGO.isProjectGuideDismissed(
+      conversationId,
+      3,
+      profileKey
+    );
     if (renderTicket !== CGO.projectGuideAlertRenderTicket) return;
 
     const currentRouteConversationId =

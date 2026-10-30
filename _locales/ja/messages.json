@@ -203,6 +203,18 @@
   "auto_adjust_enabled_label": {
     "message": "メッセージ数の自動調整 (自動調整値: $1)"
   },
+  "context_token_limit_label": {
+    "message": "コンテキスト上限の基準値"
+  },
+  "context_token_limit_auto": {
+    "message": "自動（不明時は128K）"
+  },
+  "context_token_limit_custom": {
+    "message": "カスタム"
+  },
+  "context_token_limit_custom_label": {
+    "message": "カスタム上限トークン"
+  },
   "html_include_images_label": {
     "message": "HTMLダウンロードでイメージを埋め込む"
   },
@@ -236,11 +248,50 @@
   "conversation_limit_warning_body": {
     "message": "移行プロンプトを依頼しますか？"
   },
+  "context_risk_title_level1": {
+    "message": "会話のコンテキスト使用量が増えています"
+  },
+  "context_risk_title_level2": {
+    "message": "そろそろ引き継ぎの準備をおすすめします"
+  },
+  "context_risk_title_level3": {
+    "message": "このまま会話を続けると、直前のやり取りが失われる可能性があります"
+  },
+  "context_risk_body_level1": {
+    "message": "重要な決定事項を確認し、保存しておくと安心です。"
+  },
+  "context_risk_body_level2": {
+    "message": "今のうちに移行プロンプトを作成することをおすすめします。"
+  },
+  "context_risk_body_level3": {
+    "message": "会話を保存し、できるだけ早く移行プロンプトを作成してください。"
+  },
+  "context_risk_metrics": {
+    "message": "推定累積会話量: $1 / 警告基準 $2トークン（モデル: $3、信頼度: $4）。"
+  },
+  "context_reference_fallback_suffix": {
+    "message": "（暫定）"
+  },
+  "context_risk_scope_note": {
+    "message": "これは保存済み分岐の指標で、現在の応答へ実際に渡される量とは異なる場合があります。"
+  },
+  "context_risk_uncertain_note": {
+    "message": "履歴、内部コンテキスト、または画像・添付の使用量が不明なため、早めに通知しています。"
+  },
+  "context_confidence_medium": {
+    "message": "中"
+  },
+  "context_confidence_low": {
+    "message": "低"
+  },
+  "context_model_unknown": {
+    "message": "不明"
+  },
   "migration_prompt_button": {
     "message": "はい"
   },
   "migration_prompt_text": {
-    "message": "この会話がChatGPTの制限に達しそうです。新しい会話を始めますので移行プロンプトをお願いします。"
+    "message": "この会話がコンテキスト上限に近づいている可能性があります。新しい会話を始めますので、目的、重要な背景、決定事項、制約、現在の状態、未完了の作業を保持した、簡潔で漏れのない移行プロンプトを作成してください。"
   },
   "migration_prompt_input_failed": {
     "message": "ChatGPTの入力欄が見つかりませんでした"

@@ -203,6 +203,18 @@
   "auto_adjust_enabled_label": {
     "message": "Automatically adjust message count (current value: $1)"
   },
+  "context_token_limit_label": {
+    "message": "Context window reference"
+  },
+  "context_token_limit_auto": {
+    "message": "Auto (128K if unknown)"
+  },
+  "context_token_limit_custom": {
+    "message": "Custom"
+  },
+  "context_token_limit_custom_label": {
+    "message": "Custom token limit"
+  },
   "html_include_images_label": {
     "message": "Embed images in HTML download"
   },
@@ -236,11 +248,50 @@
   "conversation_limit_warning_body": {
     "message": "Would you like to request a migration prompt?"
   },
+  "context_risk_title_level1": {
+    "message": "This conversation's context is growing"
+  },
+  "context_risk_title_level2": {
+    "message": "Consider preparing a handoff soon"
+  },
+  "context_risk_title_level3": {
+    "message": "Continuing this conversation may cause the latest exchange to be lost"
+  },
+  "context_risk_body_level1": {
+    "message": "It may be useful to review and preserve important decisions."
+  },
+  "context_risk_body_level2": {
+    "message": "Creating a migration prompt now is recommended."
+  },
+  "context_risk_body_level3": {
+    "message": "Save the conversation and create a migration prompt as soon as possible."
+  },
+  "context_risk_metrics": {
+    "message": "Estimated cumulative conversation size: $1 / warning reference $2 tokens (model: $3, confidence: $4)."
+  },
+  "context_reference_fallback_suffix": {
+    "message": " (provisional)"
+  },
+  "context_risk_scope_note": {
+    "message": "This measures the stored branch and may differ from what is actually sent with the current response."
+  },
+  "context_risk_uncertain_note": {
+    "message": "The warning is earlier because history, internal context, or media token usage is uncertain."
+  },
+  "context_confidence_medium": {
+    "message": "medium"
+  },
+  "context_confidence_low": {
+    "message": "low"
+  },
+  "context_model_unknown": {
+    "message": "unknown"
+  },
   "migration_prompt_button": {
     "message": "Yes"
   },
   "migration_prompt_text": {
-    "message": "This conversation may be nearing ChatGPT's limit. I will start a new conversation, so please provide a migration prompt."
+    "message": "This conversation may be nearing its context limit. I will start a new conversation, so please create a concise but complete migration prompt that preserves the objective, important background, decisions, constraints, current state, and unfinished work."
   },
   "migration_prompt_input_failed": {
     "message": "Could not find the ChatGPT prompt box"
