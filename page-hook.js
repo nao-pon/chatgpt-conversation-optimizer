@@ -4,7 +4,7 @@
   // =========================================================
   // INSTALL GUARD / CONSTANTS / CONFIG / STATE
   // =========================================================
-  const PAGE_HOOK_VERSION = "6";
+  const PAGE_HOOK_VERSION = "7";
   const PAGE_BRIDGE_SECRET = "CGO_BRIDGE_" + Math.random().toString(36).slice(2, 15);
 
   if (window.__CGO_MAIN_HOOK_INSTALLED__) {
@@ -47,6 +47,7 @@
   const PAGINATED_HISTORY_STATE = new Map();
 
   const HISTORY_PAGE_TURN_COUNT = 10;
+  const HISTORY_EXPORT_PAGE_TURN_COUNTS = Object.freeze([100, 50, 20, 10]);
   const HISTORY_IDLE_DELAY_MS = 750;
   const HISTORY_IDLE_TIMEOUT_MS = 5000;
   const HISTORY_EXPORT_TIMEOUT_MS = 120000;
@@ -814,6 +815,7 @@
       loadedPageKeys: new Set(),
       includeHasVersions: true,
       numTurns: HISTORY_PAGE_TURN_COUNT,
+      exportNumTurns: HISTORY_EXPORT_PAGE_TURN_COUNTS[0],
       inFlight: null,
       idleDelayTimer: null,
       idleHandle: null,
@@ -1013,7 +1015,7 @@
    *
    * @param {Object} rawData - Parsed response body.
    * @param {string} url - Source request URL.
-   * @param {{schedule?:boolean,publish?:boolean}} [options={}] - Ingestion controls.
+   * @param {{schedule?:boolean,publish?:boolean,rememberPageSize?:boolean}} [options={}] - Ingestion controls.
    * @returns {Object|null} Accumulated legacy-compatible conversation.
    */
   function ingestPaginatedConversationResponse(rawData, url, options = {}) {
@@ -1033,7 +1035,9 @@
       state.messagesById.has(String(message?.id || ""))
     );
     state.includeHasVersions = request.includeHasVersions;
-    state.numTurns = request.numTurns;
+    if (options.rememberPageSize !== false) {
+      state.numTurns = request.numTurns;
+    }
     state.backgroundFailed = false;
     state.lastError = "";
 
@@ -1148,16 +1152,20 @@
    * Build an older-message URL using the cursor supplied by the preceding page.
    *
    * @param {Object} state - Pagination state.
+   * @param {number} [numTurns=state.numTurns] - Requested page size.
    * @returns {string} Relative ChatGPT backend URL.
    */
-  function buildPaginatedMessagesUrl(state) {
+  function buildPaginatedMessagesUrl(
+    state,
+    numTurns = state.numTurns || HISTORY_PAGE_TURN_COUNT
+  ) {
     const params = new URLSearchParams();
     params.set("before", state.nextBefore || "");
     params.set(
       "include_has_versions",
       state.includeHasVersions ? "true" : "false"
     );
-    params.set("num_turns", String(state.numTurns || HISTORY_PAGE_TURN_COUNT));
+    params.set("num_turns", String(numTurns));
     return `/backend-api/conversations/${encodeURIComponent(
       state.conversationId
     )}/messages?${params.toString()}`;
@@ -1195,27 +1203,46 @@
       throw error;
     }
 
-    return response.json();
+    try {
+      return await response.json();
+    } catch (error) {
+      const invalidResponseError = new Error(
+        "Conversation history response is invalid"
+      );
+      invalidResponseError.code = "invalid_history_response";
+      invalidResponseError.cause = error;
+      throw invalidResponseError;
+    }
   }
 
   /**
    * Fetch and ingest the initial paginated conversation response.
    *
    * @param {string} conversationId - Conversation identifier.
+   * @param {number} [numTurns=HISTORY_PAGE_TURN_COUNT] - Requested page size.
    * @returns {Promise<Object|null>} Accumulated conversation.
    */
-  async function fetchInitialPaginatedHistory(conversationId) {
+  async function fetchInitialPaginatedHistory(
+    conversationId,
+    numTurns = HISTORY_PAGE_TURN_COUNT
+  ) {
     const params = new URLSearchParams({
       include_has_versions: "true",
-      num_turns: String(HISTORY_PAGE_TURN_COUNT),
+      num_turns: String(numTurns),
     });
     const url = `/backend-api/conversations/${encodeURIComponent(
       conversationId
     )}?${params.toString()}`;
     const rawData = await fetchPaginatedHistoryJson(url);
+    if (!Array.isArray(rawData?.messages)) {
+      const error = new Error("Conversation history response is invalid");
+      error.code = "invalid_history_response";
+      throw error;
+    }
     return ingestPaginatedConversationResponse(rawData, url, {
       schedule: false,
       publish: true,
+      rememberPageSize: false,
     });
   }
 
@@ -1223,9 +1250,10 @@
    * Fetch and ingest exactly one older history page, sharing an in-flight request per conversation.
    *
    * @param {Object} state - Pagination state.
+   * @param {{numTurns?:number}} [options={}] - Request controls.
    * @returns {Promise<Object|null>} Updated accumulated conversation.
    */
-  async function fetchNextPaginatedHistoryPage(state) {
+  async function fetchNextPaginatedHistoryPage(state, options = {}) {
     if (!state?.hasPreviousPage) {
       return state ? buildConversationFromPaginatedHistory(state) : null;
     }
@@ -1236,13 +1264,29 @@
 
     const requestBefore = state.nextBefore;
     const previousCount = state.orderedMessageIds.length;
-    const url = buildPaginatedMessagesUrl(state);
+    const requestedTurns = Number(options.numTurns);
+    const numTurns = Number.isFinite(requestedTurns) && requestedTurns > 0
+      ? Math.max(1, Math.min(100, Math.round(requestedTurns)))
+      : state.numTurns || HISTORY_PAGE_TURN_COUNT;
+    const url = buildPaginatedMessagesUrl(state, numTurns);
 
     state.inFlight = (async () => {
       const rawData = await fetchPaginatedHistoryJson(url);
+      if (
+        !Array.isArray(rawData?.messages) ||
+        (
+          rawData.messages.length === 0 &&
+          rawData?.page_info?.has_previous_page === true
+        )
+      ) {
+        const error = new Error("Conversation history response is invalid");
+        error.code = "invalid_history_response";
+        throw error;
+      }
       const data = ingestPaginatedConversationResponse(rawData, url, {
         schedule: false,
         publish: true,
+        rememberPageSize: false,
       });
 
       if (
@@ -1250,7 +1294,9 @@
         state.nextBefore === requestBefore &&
         state.orderedMessageIds.length === previousCount
       ) {
-        throw new Error("Conversation history pagination made no progress");
+        const error = new Error("Conversation history pagination made no progress");
+        error.code = "history_no_progress";
+        throw error;
       }
 
       return data;
@@ -1268,6 +1314,111 @@
     } finally {
       state.inFlight = null;
     }
+  }
+
+  /**
+   * Return export page-size candidates starting at the last successful size.
+   *
+   * @param {Object} state - Pagination state.
+   * @returns {number[]} Descending page sizes.
+   */
+  function getExportHistoryTurnCandidates(state) {
+    const preferred = Number(state?.exportNumTurns) ||
+      HISTORY_EXPORT_PAGE_TURN_COUNTS[0];
+    const startIndex = HISTORY_EXPORT_PAGE_TURN_COUNTS.findIndex(
+      (value) => value <= preferred
+    );
+    return HISTORY_EXPORT_PAGE_TURN_COUNTS.slice(
+      startIndex >= 0 ? startIndex : HISTORY_EXPORT_PAGE_TURN_COUNTS.length - 1
+    );
+  }
+
+  /**
+   * Return whether an export history request should be retried once unchanged.
+   *
+   * @param {Error} error - History request failure.
+   * @returns {boolean} True for network and transient server failures.
+   */
+  function shouldRetryHistoryRequestAtSameSize(error) {
+    const status = Number(error?.status || 0);
+    return status === 408 ||
+      (status >= 500 && status <= 599) ||
+      (!status && String(error?.name || "") === "TypeError");
+  }
+
+  /**
+   * Return whether a smaller export history page may recover from a failure.
+   *
+   * Authentication and rate-limit failures must not trigger a burst of smaller requests.
+   *
+   * @param {Error} error - History request failure.
+   * @returns {boolean} True when the next smaller page size should be tried.
+   */
+  function shouldReduceHistoryRequestSize(error) {
+    const status = Number(error?.status || 0);
+    if (status === 401 || status === 403 || status === 429) return false;
+    if ([400, 408, 413, 422].includes(status)) return true;
+    if (status >= 500 && status <= 599) return true;
+    if (String(error?.name || "") === "TypeError") return true;
+    return error?.code === "invalid_history_response" ||
+      error?.code === "history_no_progress";
+  }
+
+  /**
+   * Fetch one export history page with adaptive page-size fallback.
+   *
+   * @param {Object} state - Pagination state.
+   * @param {(numTurns:number)=>Promise<Object|null>} fetchPage - Page request.
+   * @returns {Promise<Object|null>} Successful page result.
+   */
+  async function fetchAdaptiveExportHistoryPage(state, fetchPage) {
+    const candidates = getExportHistoryTurnCandidates(state);
+
+    for (let index = 0; index < candidates.length; index += 1) {
+      const numTurns = candidates[index];
+      let retriedAtSameSize = false;
+
+      while (true) {
+        try {
+          const data = await fetchPage(numTurns);
+          state.exportNumTurns = numTurns;
+          return data;
+        } catch (error) {
+          if (
+            !retriedAtSameSize &&
+            shouldRetryHistoryRequestAtSameSize(error)
+          ) {
+            retriedAtSameSize = true;
+            log.basic("[history] export page retry", {
+              conversationId: state.conversationId,
+              numTurns,
+              status: Number(error?.status || 0),
+              error: String(error?.message || error),
+            });
+            continue;
+          }
+
+          const nextNumTurns = candidates[index + 1] || 0;
+          if (!nextNumTurns || !shouldReduceHistoryRequestSize(error)) {
+            state.lastError = String(
+              error?.message || error || "History fetch failed"
+            );
+            throw error;
+          }
+
+          log.basic("[history] export page size reduced", {
+            conversationId: state.conversationId,
+            numTurns,
+            nextNumTurns,
+            status: Number(error?.status || 0),
+            error: String(error?.message || error),
+          });
+          break;
+        }
+      }
+    }
+
+    throw new Error("Conversation history page-size fallback exhausted");
   }
 
   /**
@@ -1343,9 +1494,13 @@
    * @returns {Promise<Object>} Complete legacy-compatible conversation.
    */
   async function ensurePaginatedHistoryComplete(conversationId, onProgress) {
-    let state = PAGINATED_HISTORY_STATE.get(conversationId) || null;
+    let state = PAGINATED_HISTORY_STATE.get(conversationId) ||
+      ensurePaginatedHistoryState(conversationId);
     if (!state?.initialSeen) {
-      await fetchInitialPaginatedHistory(conversationId);
+      await fetchAdaptiveExportHistoryPage(
+        state,
+        (numTurns) => fetchInitialPaginatedHistory(conversationId, numTurns)
+      );
       state = PAGINATED_HISTORY_STATE.get(conversationId) || null;
     }
     if (!state) {
@@ -1376,7 +1531,10 @@
       }
 
       requestCount += 1;
-      await fetchNextPaginatedHistoryPage(state);
+      await fetchAdaptiveExportHistoryPage(
+        state,
+        (numTurns) => fetchNextPaginatedHistoryPage(state, { numTurns })
+      );
       reportProgress();
     }
 

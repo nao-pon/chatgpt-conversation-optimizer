@@ -77,3 +77,96 @@ test("route changes clear and hide the previous conversation guide", async () =>
   assert.equal(guideRefreshes, 1);
   assert.equal(alertRefreshes, 1);
 });
+
+test("bootstrap and main hook handshakes use independent versions", async () => {
+  const bootstrapSource = fs.readFileSync(
+    path.join(__dirname, "..", "page-bootstrap.js"),
+    "utf8"
+  );
+  const pageHookSource = fs.readFileSync(
+    path.join(__dirname, "..", "page-hook.js"),
+    "utf8"
+  );
+  const bootstrapVersion = bootstrapSource.match(/const VERSION = "([^"]+)"/)?.[1];
+  const pageHookVersion = pageHookSource.match(
+    /const PAGE_HOOK_VERSION = "([^"]+)"/
+  )?.[1];
+  assert.ok(bootstrapVersion);
+  assert.ok(pageHookVersion);
+
+  const listeners = new Map();
+  const window = {
+    __CGO: {},
+    addEventListener(type, listener) {
+      const current = listeners.get(type) || [];
+      current.push(listener);
+      listeners.set(type, current);
+    },
+    removeEventListener(type, listener) {
+      listeners.set(
+        type,
+        (listeners.get(type) || []).filter((candidate) => candidate !== listener)
+      );
+    },
+    postMessage(data) {
+      queueMicrotask(() => {
+        let response = null;
+        if (data?.source === "CGO_CONTENT" && data.type === "CGO_PING") {
+          response = {
+            source: "CGO_PAGE",
+            type: "CGO_PONG",
+            version: bootstrapVersion,
+            bootstrap: true,
+          };
+        } else if (
+          data?.source === "CGO_CONTENT" &&
+          data.type === "CGO_INIT_SETTINGS"
+        ) {
+          response = {
+            source: "CGO_PAGE",
+            type: "CGO_INIT_SETTINGS_ACK",
+            version: pageHookVersion,
+            mainHook: true,
+            secret: "test-secret",
+          };
+        }
+
+        if (!response) return;
+        for (const listener of listeners.get("message") || []) {
+          listener({ source: window, data: response });
+        }
+      });
+    },
+  };
+  const context = vm.createContext({
+    window,
+    globalThis: window,
+    document: {
+      body: {},
+      documentElement: { lang: "en" },
+      getElementById() { return null; },
+    },
+    location: { pathname: "/c/conversation-1" },
+    navigator: { language: "en" },
+    chrome: {
+      i18n: { getUILanguage: () => "en", getMessage: () => "" },
+      storage: { local: {} },
+    },
+    MutationObserver: class { observe() {} },
+    console,
+    queueMicrotask,
+    setTimeout,
+    clearTimeout,
+    setInterval() { return 1; },
+    URL,
+  });
+  const configPath = path.join(__dirname, "..", "content", "config.js");
+  vm.runInContext(fs.readFileSync(configPath, "utf8"), context, {
+    filename: configPath,
+  });
+
+  assert.equal(window.__CGO.PAGE_BOOTSTRAP_VERSION, bootstrapVersion);
+  assert.equal(window.__CGO.PAGE_HOOK_VERSION, pageHookVersion);
+  assert.equal(await window.__CGO.ensurePageHooksInjected(), true);
+  assert.equal(window.__CGO_BRIDGE_SECRET__, "test-secret");
+});

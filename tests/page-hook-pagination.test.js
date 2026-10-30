@@ -349,6 +349,114 @@ test("paginated ChatGPT history is accumulated for export without rewriting resp
   assert.equal(fetchUrls.length, 2, "known older pages should not be fetched again");
 });
 
+test("export adapts history page size and keeps the last successful size", async () => {
+  const initialUrl =
+    "/backend-api/conversations/conversation-1?include_has_versions=true&num_turns=10";
+  const requestedTurns = [];
+  let hundredAttemptCount = 0;
+  const harness = createPageHookHarness(async (url) => {
+    const parsed = new URL(String(url), "https://chatgpt.com");
+    const before = parsed.searchParams.get("before");
+    const numTurns = Number(parsed.searchParams.get("num_turns"));
+    requestedTurns.push(numTurns);
+
+    if (before === "user-newest") {
+      if (numTurns === 100 && hundredAttemptCount++ === 0) {
+        throw new TypeError("temporary network failure");
+      }
+      if (numTurns === 100) return jsonResponse({ error: "too large" }, 413);
+      if (numTurns === 50) return jsonResponse({ error: "too large" }, 422);
+      if (numTurns === 20) return jsonResponse({ error: "invalid payload" });
+      if (numTurns === 10) {
+        return jsonResponse({
+          messages: [makeMessage("user-middle", "user", "Middle question")],
+          page_info: {
+            start_cursor: "user-middle",
+            end_cursor: "user-middle",
+            has_previous_page: true,
+            has_next_page: true,
+          },
+        });
+      }
+    }
+
+    if (before === "user-middle" && numTurns === 10) {
+      return jsonResponse({
+        messages: [makeMessage("user-oldest", "user", "Oldest question")],
+        page_info: {
+          start_cursor: "user-oldest",
+          end_cursor: "user-oldest",
+          has_previous_page: false,
+          has_next_page: true,
+        },
+      });
+    }
+
+    return jsonResponse({ error: "unexpected request" }, 404);
+  });
+
+  const initialPayload = {
+    conversation_id: "conversation-1",
+    current_node: "user-newest",
+    messages: [makeMessage("user-newest", "user", "Newest question")],
+    page_info: {
+      start_cursor: "user-newest",
+      end_cursor: "user-newest",
+      has_previous_page: true,
+      has_next_page: false,
+    },
+  };
+
+  await harness.window.__CGO_MAIN_HOOK_API__.handleFetchResponse({
+    args: [initialUrl],
+    response: jsonResponse(initialPayload),
+    url: initialUrl,
+  });
+
+  const complete = await harness.requestCache({ complete: true });
+  assert.equal(complete.__cgo_history_complete, true);
+  assert.deepEqual(Object.keys(complete.mapping), [
+    "user-oldest",
+    "user-middle",
+    "user-newest",
+  ]);
+  assert.deepEqual(requestedTurns, [100, 100, 50, 20, 10, 10]);
+});
+
+test("export does not reduce page size after authentication failure", async () => {
+  const initialUrl =
+    "/backend-api/conversations/conversation-1?include_has_versions=true&num_turns=10";
+  const requestedTurns = [];
+  const harness = createPageHookHarness(async (url) => {
+    const parsed = new URL(String(url), "https://chatgpt.com");
+    requestedTurns.push(Number(parsed.searchParams.get("num_turns")));
+    return jsonResponse({ error: "unauthorized" }, 401);
+  });
+  const initialPayload = {
+    conversation_id: "conversation-1",
+    current_node: "user-newest",
+    messages: [makeMessage("user-newest", "user", "Newest question")],
+    page_info: {
+      start_cursor: "user-newest",
+      end_cursor: "user-newest",
+      has_previous_page: true,
+      has_next_page: false,
+    },
+  };
+
+  await harness.window.__CGO_MAIN_HOOK_API__.handleFetchResponse({
+    args: [initialUrl],
+    response: jsonResponse(initialPayload),
+    url: initialUrl,
+  });
+
+  await assert.rejects(
+    () => harness.requestCache({ complete: true }),
+    /Conversation history request failed \(401\)/
+  );
+  assert.deepEqual(requestedTurns, [100]);
+});
+
 test("a legacy response cannot prune or replace a conversation using the paginated API", async () => {
   let resolvePaginatedFetch;
   const harness = createPageHookHarness(() => new Promise((resolve) => {

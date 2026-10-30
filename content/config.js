@@ -3,9 +3,8 @@
   if (globalThis.__CGO_SKIP__) return;
   window.__cgoInstalled = true;
   const CGO = (globalThis.__CGO ||= {});
-
-
-  CGO.PAGE_HOOK_VERSION = "6";
+  CGO.PAGE_BOOTSTRAP_VERSION = "6";
+  CGO.PAGE_HOOK_VERSION = "7";
   CGO.PAGE_MAIN_HOOK_ID = "cgo-page-hook-script";
   // Keep viewer payloads reloadable for 24 hours unless this hardcoded switch is enabled.
   CGO.VIEWER_DELETE_AFTER_RENDER = false;
@@ -501,7 +500,7 @@
    * Wait for the bootstrap script to acknowledge that the page bridge is alive.
    *
    * @param {number} [timeoutMs=1200] - Maximum time to wait for the handshake response.
-   * @returns {Promise<boolean>} `true` when the bootstrap replies with a matching version.
+    * @returns {Promise<boolean>} `true` when the bootstrap replies with a matching version.
    */
   function waitForBootstrapPong(timeoutMs = 1200) {
     return new Promise((resolve) => {
@@ -525,14 +524,14 @@
       /**
        * Announces the content script to the page hook by posting a ping message on window.
        *
-       * Posts a message with the shape `{ source: "CGO_CONTENT", type: "CGO_PING", version: PAGE_HOOK_VERSION }` via `window.postMessage`.
+       * Posts a message with the shape `{ source: "CGO_CONTENT", type: "CGO_PING", version: PAGE_BOOTSTRAP_VERSION }` via `window.postMessage`.
        */
       function sendPing() {
         window.postMessage(
           {
             source: "CGO_CONTENT",
             type: "CGO_PING",
-            version: CGO.PAGE_HOOK_VERSION,
+            version: CGO.PAGE_BOOTSTRAP_VERSION,
           },
           "*"
         );
@@ -544,7 +543,7 @@
        * Ignores messages not originating from window or not marked with `source === "CGO_PAGE"`. For
        * `type === "CGO_READY"` with `bootstrap === true` it sends a follow-up ping. For
        * `type === "CGO_PONG"` with `bootstrap === true` it performs cleanup and resolves the surrounding
-       * handshake promise with `true` if the page hook version matches `PAGE_HOOK_VERSION`, `false` otherwise.
+       * handshake promise with `true` if the bootstrap version matches `PAGE_BOOTSTRAP_VERSION`, `false` otherwise.
        * @param {MessageEvent} event - The message event received on window.
        */
       function onMessage(event) {
@@ -563,7 +562,7 @@
 
         if (data.type === "CGO_PONG" && data.bootstrap === true) {
           cleanup();
-          resolve(data.version === CGO.PAGE_HOOK_VERSION);
+          resolve(data.version === CGO.PAGE_BOOTSTRAP_VERSION);
         }
       }
 
