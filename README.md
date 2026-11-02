@@ -28,11 +28,12 @@ CGO works in the signed-in ChatGPT Web session. It does not require an OpenAI AP
 
 ### Warn before older context may be lost
 
-- Estimates the cumulative visible-message size of the active conversation branch locally
+- Uses observed conversation-node, role-message, and weighted-size ranges to warn in stages as a conversation grows
+- Checks whether the latest assistant response appears in ChatGPT history for long conversations and raises a strong warning when it is not persisted
+- Treats stream errors or incomplete stream reconstruction as direct warning signals
+- Estimates cumulative visible-message tokens locally as secondary reference information rather than the primary warning trigger
 - Uses plausible ChatGPT-reported per-message token counts only to calibrate the local estimate; undocumented outliers are ignored
-- Leaves output headroom and warns in stages before the configured context reference is reached
-- Detects known model aliases where possible, falls back conservatively to 128K, and supports manual 64K, 128K, 256K, 400K, or custom references
-- Marks estimates as less certain and warns earlier when history, internal context, images, or attachments cannot be counted reliably
+- Detects known model aliases where possible, falls back conservatively to a provisional 128K reference, and supports manual 64K, 128K, 256K, 400K, or custom references
 
 ### Choose the right export format
 
@@ -146,7 +147,7 @@ See [PRIVACY.md](PRIVACY.md) for the project privacy policy.
 ## Limitations
 
 - CGO depends on ChatGPT Web's internal response formats and endpoints, which may change without notice
-- Context-risk values measure the stored active branch, not the exact context sent for the current response or an authoritative remaining-token count; ChatGPT-side truncation or compaction, hidden instructions, reasoning, tools, images, files, and account-specific model behavior may differ
+- Conversation-structure warning thresholds are empirical and may change as ChatGPT evolves; token references measure the stored active branch, not the exact context sent for the current response or an authoritative remaining-token count
 - Export can include only the conversation data and files available to the current ChatGPT session
 - Some images, generated files, or attachments may be unavailable because of expired links, access restrictions, unsupported formats, or ChatGPT-side issues
 - The paginated format exposes an ordered message history rather than the complete legacy branch graph, so alternate branches or versions may not always be reconstructed exactly as before

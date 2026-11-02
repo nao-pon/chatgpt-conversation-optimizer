@@ -249,7 +249,7 @@
     "message": "Would you like to request a migration prompt?"
   },
   "context_risk_title_level1": {
-    "message": "This conversation's context is growing"
+    "message": "This conversation is getting long"
   },
   "context_risk_title_level2": {
     "message": "Consider preparing a handoff soon"
@@ -268,6 +268,15 @@
   },
   "context_risk_metrics": {
     "message": "Estimated cumulative conversation size: $1 / warning reference $2 tokens (model: $3, confidence: $4)."
+  },
+  "conversation_structure_metrics": {
+    "message": "Conversation structure estimate: $1% ($2 nodes)."
+  },
+  "context_reference_metrics": {
+    "message": "Estimated cumulative conversation size: $1 / reference $2 tokens (confidence: $3)."
+  },
+  "conversation_persistence_warning": {
+    "message": "The latest response may not be saved in history, or the stream may not have completed normally."
   },
   "context_reference_fallback_suffix": {
     "message": " (provisional)"
@@ -291,7 +300,7 @@
     "message": "Yes"
   },
   "migration_prompt_text": {
-    "message": "This conversation may be nearing its context limit. I will start a new conversation, so please create a concise but complete migration prompt that preserves the objective, important background, decisions, constraints, current state, and unfinished work."
+    "message": "This conversation is long enough that the latest exchange may be lost. I will start a new conversation, so please create a concise but complete migration prompt that preserves the objective, important background, decisions, constraints, current state, and unfinished work."
   },
   "migration_prompt_input_failed": {
     "message": "Could not find the ChatGPT prompt box"

@@ -249,7 +249,7 @@
     "message": "移行プロンプトを依頼しますか？"
   },
   "context_risk_title_level1": {
-    "message": "会話のコンテキスト使用量が増えています"
+    "message": "会話が長くなってきました"
   },
   "context_risk_title_level2": {
     "message": "そろそろ引き継ぎの準備をおすすめします"
@@ -268,6 +268,15 @@
   },
   "context_risk_metrics": {
     "message": "推定累積会話量: $1 / 警告基準 $2トークン（モデル: $3、信頼度: $4）。"
+  },
+  "conversation_structure_metrics": {
+    "message": "会話構造の目安: $1%（$2ノード）。"
+  },
+  "context_reference_metrics": {
+    "message": "推定累積会話量: $1 / 参考基準 $2トークン（信頼度: $3）。"
+  },
+  "conversation_persistence_warning": {
+    "message": "直前の応答が履歴に保存されていないか、通信が正常に完了していない可能性があります。"
   },
   "context_reference_fallback_suffix": {
     "message": "（暫定）"
@@ -291,7 +300,7 @@
     "message": "はい"
   },
   "migration_prompt_text": {
-    "message": "この会話がコンテキスト上限に近づいている可能性があります。新しい会話を始めますので、目的、重要な背景、決定事項、制約、現在の状態、未完了の作業を保持した、簡潔で漏れのない移行プロンプトを作成してください。"
+    "message": "この会話が長くなり、直前のやり取りが失われる可能性があります。新しい会話を始めますので、目的、重要な背景、決定事項、制約、現在の状態、未完了の作業を保持した、簡潔で漏れのない移行プロンプトを作成してください。"
   },
   "migration_prompt_input_failed": {
     "message": "ChatGPTの入力欄が見つかりませんでした"

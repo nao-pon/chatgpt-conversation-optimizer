@@ -4,7 +4,7 @@
   // =========================================================
   // INSTALL GUARD / CONSTANTS / CONFIG / STATE
   // =========================================================
-  const PAGE_HOOK_VERSION = "8";
+  const PAGE_HOOK_VERSION = "9";
   const PAGE_BRIDGE_SECRET = "CGO_BRIDGE_" + Math.random().toString(36).slice(2, 15);
 
   if (window.__CGO_MAIN_HOOK_INSTALLED__) {
@@ -54,6 +54,8 @@
   const HISTORY_IDLE_DELAY_MS = 750;
   const HISTORY_IDLE_TIMEOUT_MS = 5000;
   const HISTORY_EXPORT_TIMEOUT_MS = 120000;
+  const STRUCTURE_WARNING_NODE_FLOOR = 1900;
+  const PERSISTENCE_CHECK_DELAYS_MS = Object.freeze([1000, 2500, 5000]);
   const DEFAULT_CONTEXT_TOKEN_LIMIT = 128000;
   const CONTEXT_TOKEN_LIMIT_BY_MODEL = Object.freeze({
     "chat-latest": 400000,
@@ -1019,6 +1021,7 @@
     const stats = buildConversationStats(data);
     const baseKeepDomMessages = CONFIG.baseTurnCount || CONFIG.turnCount;
     const autoAdjustScore = getAutoAdjustScore(stats);
+    stats.autoAdjustScore = autoAdjustScore;
     const autoAdjustLevel = getKeepDomAutoAdjustLevel(autoAdjustScore);
     const { minimumKeepDomMessages } =
       getSteppedKeepDomMessages(baseKeepDomMessages, autoAdjustLevel);
@@ -2091,6 +2094,64 @@
   }
 
   /**
+   * Return completion and persistence signals for the active conversation tail.
+   * Absent stream markers remain `null`, rather than being treated as failures.
+   *
+   * @param {Object} data - Conversation payload.
+   * @returns {Object} Active-tail completion metadata.
+   */
+  function buildConversationCompletionStats(data) {
+    const mapping = getMapping(data);
+    const currentNode = getCurrentNode(data);
+    const chain = buildLinearChain(mapping, currentNode);
+    const currentMessage = mapping?.[currentNode]?.message || null;
+    let latestAssistantMessage = null;
+
+    for (let index = chain.length - 1; index >= 0; index -= 1) {
+      const message = mapping?.[chain[index]]?.message || null;
+      if (message?.author?.role !== "assistant") continue;
+      if (isHardInternalConversationMessage(message)) continue;
+      latestAssistantMessage = message;
+      break;
+    }
+
+    return {
+      currentNodeId: currentNode || "",
+      currentNodeRole: String(currentMessage?.author?.role || ""),
+      currentMessageStatus: String(currentMessage?.status || ""),
+      currentMessageEndTurn:
+        typeof currentMessage?.end_turn === "boolean"
+          ? currentMessage.end_turn
+          : null,
+      latestAssistantMessageId: String(latestAssistantMessage?.id || ""),
+      latestAssistantStatus: String(latestAssistantMessage?.status || ""),
+      latestAssistantEndTurn:
+        typeof latestAssistantMessage?.end_turn === "boolean"
+          ? latestAssistantMessage.end_turn
+          : null,
+      streamDone:
+        data?.__cgo_stream_done === true
+          ? true
+          : data?.__cgo_stream_done === false
+            ? false
+            : null,
+      streamCompletedNormally:
+        typeof data?.__cgo_stream_completed_normally === "boolean"
+          ? data.__cgo_stream_completed_normally
+          : null,
+      streamIncomplete: data?.__cgo_stream_incomplete === true,
+      streamError: data?.__cgo_stream_error === true,
+      latestAssistantPersisted:
+        typeof data?.__cgo_latest_assistant_persisted === "boolean"
+          ? data.__cgo_latest_assistant_persisted
+          : null,
+      persistenceCheckedMessageId: String(
+        data?.__cgo_persistence_checked_message_id || ""
+      ),
+    };
+  }
+
+  /**
    * Compute basic conversation statistics (turns, total text length, image count, and attachment count) from conversation data.
    * @param {object} data - Conversation payload or object containing a `mapping` of nodes.
    * @returns {{turnCount:number,textLength:number,imageCount:number,attachmentCount:number}} Object with counts: `turnCount` number of user/assistant turns, `textLength` total characters across text parts, `imageCount` number of image asset parts, and `attachmentCount` number of file/attachment assets.
@@ -2140,6 +2201,7 @@
       imageCount,
       attachmentCount,
       ...buildConversationTokenStats(data),
+      ...buildConversationCompletionStats(data),
     };
   }
 
@@ -2265,6 +2327,7 @@
     const stats = buildConversationStats(data);
     const baseKeepDomMessages = CONFIG.baseTurnCount || CONFIG.turnCount;
     const autoAdjustScore = getAutoAdjustScore(stats);
+    stats.autoAdjustScore = autoAdjustScore;
     const autoAdjustLevel = getKeepDomAutoAdjustLevel(autoAdjustScore);
     const { minimumKeepDomMessages } =
       getSteppedKeepDomMessages(baseKeepDomMessages, autoAdjustLevel);
@@ -2372,6 +2435,93 @@
     }
 
     return stream || full || null;
+  }
+
+  /**
+   * Return the latest non-internal assistant message on the active chain.
+   *
+   * @param {Object} data - Conversation payload.
+   * @returns {?Object} Latest assistant message.
+   */
+  function getLatestAssistantMessageOnChain(data) {
+    const mapping = getMapping(data);
+    const chain = buildLinearChain(mapping, getCurrentNode(data));
+    for (let index = chain.length - 1; index >= 0; index -= 1) {
+      const message = mapping?.[chain[index]]?.message || null;
+      if (message?.author?.role !== "assistant") continue;
+      if (isHardInternalConversationMessage(message)) continue;
+      return message;
+    }
+    return null;
+  }
+
+  /**
+   * Check the latest history page for a streamed assistant message. This runs
+   * only for long conversations so normal chats do not gain background traffic.
+   *
+   * @param {string} conversationId - Conversation identifier.
+   * @param {string} messageId - Latest streamed assistant message id.
+   * @returns {Promise<boolean|null>} Persisted state, or null when unverifiable.
+   */
+  async function verifyLatestAssistantPersistence(conversationId, messageId) {
+    if (!conversationId || !messageId) return null;
+
+    const cache = STREAM_CACHE.get(conversationId);
+    if (!cache) return null;
+    if (cache.__cgo_persistence_check_message_id === messageId) return null;
+    cache.__cgo_persistence_check_message_id = messageId;
+
+    const params = new URLSearchParams({
+      include_has_versions: "true",
+      num_turns: "10",
+    });
+    const url = `/backend-api/conversations/${encodeURIComponent(
+      conversationId
+    )}?${params.toString()}`;
+    let completedRequestCount = 0;
+
+    for (const delayMs of PERSISTENCE_CHECK_DELAYS_MS) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+      // A newer turn supersedes this check.
+      if (cache.__cgo_persistence_check_message_id !== messageId) return null;
+
+      try {
+        const rawData = await fetchPaginatedHistoryJson(url);
+        if (!Array.isArray(rawData?.messages)) continue;
+        completedRequestCount += 1;
+        if (rawData.messages.some((message) => String(message?.id || "") === messageId)) {
+          cache.__cgo_latest_assistant_persisted = true;
+          cache.__cgo_persistence_checked_message_id = messageId;
+          const merged = getCachedConversationForBridge(conversationId) || cache;
+          publishConversationMetrics(
+            merged,
+            merged.__cgo_paginated_history === true ? "paginated" : "legacy"
+          );
+          return true;
+        }
+      } catch (error) {
+        log.basic("[persistence-check] history request failed", {
+          conversationId,
+          messageId,
+          error: String(error?.message || error || ""),
+        });
+        return null;
+      }
+    }
+
+    if (completedRequestCount > 0) {
+      cache.__cgo_latest_assistant_persisted = false;
+      cache.__cgo_persistence_checked_message_id = messageId;
+      const merged = getCachedConversationForBridge(conversationId) || cache;
+      publishConversationMetrics(
+        merged,
+        merged.__cgo_paginated_history === true ? "paginated" : "legacy"
+      );
+      return false;
+    }
+
+    return null;
   }
 
   /**
@@ -2767,6 +2917,17 @@
       merged.__cgo_stream_incomplete = true;
     } else {
       delete merged.__cgo_stream_incomplete;
+    }
+    for (const key of [
+      "__cgo_stream_done",
+      "__cgo_stream_completed_normally",
+      "__cgo_stream_error",
+      "__cgo_latest_assistant_persisted",
+      "__cgo_persistence_checked_message_id",
+    ]) {
+      if (Object.prototype.hasOwnProperty.call(stream || {}, key)) {
+        merged[key] = stream[key];
+      }
     }
 
     for (const [id, node] of Object.entries(stream.mapping || {})) {
@@ -4075,6 +4236,16 @@
     const topicId = normalizeStreamTopicId(rawTopicId);
 
     const cache = ensureConversationCache(conversationId);
+    const previousAssistant = getLatestAssistantMessageOnChain(cache);
+    cache.__cgo_previous_latest_assistant_id = String(
+      previousAssistant?.id || ""
+    );
+    cache.__cgo_stream_done = false;
+    delete cache.__cgo_stream_completed_normally;
+    delete cache.__cgo_stream_error;
+    delete cache.__cgo_latest_assistant_persisted;
+    delete cache.__cgo_persistence_checked_message_id;
+    cache.__cgo_persistence_check_message_id = "";
     ensureStreamState(conversationId, topicId);
 
     const userMessages = collectUserMessagesFromRequestBody(body);
@@ -6165,6 +6336,14 @@
     const streamState = ensureStreamState(conversationId, topicId);
     let handledPayload = false;
 
+    if (
+      String(eventName || "").toLowerCase() === "error" ||
+      String(payload?.type || "").toLowerCase() === "error" ||
+      payload?.error
+    ) {
+      cache.__cgo_stream_error = true;
+    }
+
     if (shouldLogRawShape(streamState)) {
       const now = Date.now();
       const payloadShapeSignature = buildPayloadShapeSignature(payload);
@@ -6699,6 +6878,25 @@
         });
       }
 
+      const latestAssistant = getLatestAssistantMessageOnChain(cache);
+      const previousAssistantId = String(
+        cache.__cgo_previous_latest_assistant_id || ""
+      );
+      const hasNewAssistant = !!(
+        latestAssistant?.id &&
+        String(latestAssistant.id) !== previousAssistantId
+      );
+      const latestAssistantStatus = String(latestAssistant?.status || "");
+      const latestAssistantCompleted = !!(
+        hasNewAssistant &&
+        (
+          latestAssistant.end_turn === true ||
+          /complete|finish|success/i.test(latestAssistantStatus)
+        )
+      );
+      cache.__cgo_stream_done = true;
+      cache.__cgo_stream_completed_normally = latestAssistantCompleted;
+
       postStreamNotify({
         type: "done",
         conversationId,
@@ -6708,12 +6906,26 @@
 
       const cachedConversation = getCachedConversationForBridge(conversationId);
       if (cachedConversation) {
-        publishConversationMetrics(
+        const publishedStats = publishConversationMetrics(
           cachedConversation,
           cachedConversation.__cgo_paginated_history === true
             ? "paginated"
             : "legacy"
         );
+
+        const nodeCount = Math.max(
+          Number(publishedStats?.mappingCount || 0),
+          Number(publishedStats?.chainLength || 0)
+        );
+        if (
+          nodeCount >= STRUCTURE_WARNING_NODE_FLOOR &&
+          hasNewAssistant
+        ) {
+          void verifyLatestAssistantPersistence(
+            conversationId,
+            String(latestAssistant.id)
+          );
+        }
       }
 
       return;
@@ -6954,6 +7166,7 @@
     const stats = buildConversationStats(data);
     const baseKeepDomMessages = CONFIG.baseTurnCount || CONFIG.turnCount;
     const autoAdjustScore = getAutoAdjustScore(stats);
+    stats.autoAdjustScore = autoAdjustScore;
     const autoAdjustLevel = getKeepDomAutoAdjustLevel(autoAdjustScore);
     const { minimumKeepDomMessages } =
       getSteppedKeepDomMessages(baseKeepDomMessages, autoAdjustLevel);

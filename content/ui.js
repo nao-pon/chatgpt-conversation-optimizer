@@ -1139,8 +1139,8 @@
       return { title: "", body: "" };
     }
 
-    const risk = CGO.getContextRiskDetails?.(stats) || null;
-    if (!risk) {
+    const structure = CGO.getConversationStructureRiskDetails?.(stats) || null;
+    if (!structure) {
       return {
         title: CGO.t("conversation_limit_warning_title"),
         body: CGO.t("conversation_limit_warning_body"),
@@ -1154,31 +1154,36 @@
       }
       return `${Math.round(tokens / 1000)}K`;
     };
-    const estimate = `${stats?.historyComplete === true ? "" : "≥"}${formatTokens(risk.safeTokenCount)}`;
-    const referenceSuffix = risk.contextLimitSource === "fallback"
-      ? CGO.t("context_reference_fallback_suffix")
-      : "";
-    const reference = `${formatTokens(risk.contextLimit)}${referenceSuffix}`;
-    const model = risk.modelSlug || CGO.t("context_model_unknown");
+    const risk = CGO.getContextRiskDetails?.(stats) || null;
     const confidence = CGO.t(
       stats?.tokenConfidence === "medium"
         ? "context_confidence_medium"
         : "context_confidence_low"
     );
-    const metrics = CGO.t("context_risk_metrics", [
-      estimate,
-      reference,
-      model,
-      confidence,
+    const structureMetrics = CGO.t("conversation_structure_metrics", [
+      String(structure.progressPercent),
+      Math.round(structure.nodeCount).toLocaleString(),
     ]);
-    const uncertainty = risk.uncertain
-      ? ` ${CGO.t("context_risk_uncertain_note")}`
+    const referenceSuffix = risk?.contextLimitSource === "fallback"
+      ? CGO.t("context_reference_fallback_suffix")
       : "";
-    const scopeNote = ` ${CGO.t("context_risk_scope_note")}`;
+    const reference = risk
+      ? `${formatTokens(risk.contextLimit)}${referenceSuffix}`
+      : "";
+    const tokenMetrics = risk
+      ? ` ${CGO.t("context_reference_metrics", [
+        `${stats?.historyComplete === true ? "" : "≥"}${formatTokens(risk.safeTokenCount)}`,
+        reference,
+        confidence,
+      ])}`
+      : "";
+    const directSignalNote = structure.directFailureSignal
+      ? ` ${CGO.t("conversation_persistence_warning")}`
+      : "";
 
     return {
       title: CGO.t(`context_risk_title_level${level}`),
-      body: `${metrics}${scopeNote} ${CGO.t(`context_risk_body_level${level}`)}${uncertainty}`,
+      body: `${structureMetrics}${tokenMetrics} ${CGO.t(`context_risk_body_level${level}`)}${directSignalNote}`,
     };
   }
 

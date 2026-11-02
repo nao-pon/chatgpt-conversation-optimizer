@@ -4,7 +4,7 @@
   window.__cgoInstalled = true;
   const CGO = (globalThis.__CGO ||= {});
   CGO.PAGE_BOOTSTRAP_VERSION = "6";
-  CGO.PAGE_HOOK_VERSION = "8";
+  CGO.PAGE_HOOK_VERSION = "9";
   CGO.PAGE_MAIN_HOOK_ID = "cgo-page-hook-script";
   // Keep viewer payloads reloadable for 24 hours unless this hardcoded switch is enabled.
   CGO.VIEWER_DELETE_AFTER_RENDER = false;
@@ -86,6 +86,16 @@
   };
 
   CGO.SETTING_STORAGE_KEY = "cgo_settings";
+  const CONVERSATION_STRUCTURE_BASELINES = Object.freeze({
+    nodeCount: 2700,
+    turnCount: 1640,
+    autoAdjustScore: 5170,
+  });
+  const CONVERSATION_STRUCTURE_THRESHOLDS = Object.freeze({
+    level1: 0.7,
+    level2: 0.78,
+    level3: 0.9,
+  });
 
   function normalizeDebugLevel(value) {
     const key = String(value || "").toUpperCase();
@@ -259,12 +269,90 @@
   }
 
   /**
+   * Estimate conversation-storage risk from empirically observed structural
+   * limits. The median of node, role-message, and weighted-score progress keeps
+   * one unusual conversation characteristic from dominating the warning.
+   *
+   * @param {?Object} [stats=null] - Conversation statistics from the page hook.
+   * @returns {?Object} Structural risk details, or null without usable inputs.
+   */
+  function getConversationStructureRiskDetails(stats = null) {
+    const nodeCount = Math.max(
+      Number(stats?.mappingCount || 0),
+      Number(stats?.chainLength || 0)
+    );
+    const turnCount = Number(stats?.turnCount || 0);
+    const autoAdjustScore = Number(stats?.autoAdjustScore || 0);
+    const ratios = [
+      nodeCount > 0
+        ? nodeCount / CONVERSATION_STRUCTURE_BASELINES.nodeCount
+        : 0,
+      turnCount > 0
+        ? turnCount / CONVERSATION_STRUCTURE_BASELINES.turnCount
+        : 0,
+      autoAdjustScore > 0
+        ? autoAdjustScore / CONVERSATION_STRUCTURE_BASELINES.autoAdjustScore
+        : 0,
+    ].filter((value) => Number.isFinite(value) && value > 0)
+      .sort((left, right) => left - right);
+
+    if (!ratios.length) return null;
+
+    const middle = Math.floor(ratios.length / 2);
+    const ratio = ratios.length % 2
+      ? ratios[middle]
+      : (ratios[middle - 1] + ratios[middle]) / 2;
+    const abnormalCompletion =
+      stats?.streamDone === true &&
+      stats?.streamCompletedNormally === false &&
+      ratio >= CONVERSATION_STRUCTURE_THRESHOLDS.level2;
+    const longEnoughForFailureSignal =
+      ratio >= CONVERSATION_STRUCTURE_THRESHOLDS.level1;
+    const directFailureSignal =
+      longEnoughForFailureSignal &&
+      (
+        stats?.streamIncomplete === true ||
+        stats?.streamError === true ||
+        stats?.latestAssistantPersisted === false ||
+        abnormalCompletion
+      );
+    let level = 0;
+    if (directFailureSignal || ratio >= CONVERSATION_STRUCTURE_THRESHOLDS.level3) {
+      level = 3;
+    } else if (ratio >= CONVERSATION_STRUCTURE_THRESHOLDS.level2) {
+      level = 2;
+    } else if (ratio >= CONVERSATION_STRUCTURE_THRESHOLDS.level1) {
+      level = 1;
+    }
+
+    return {
+      nodeCount,
+      turnCount,
+      autoAdjustScore,
+      ratio,
+      progressPercent: Math.max(0, Math.round(ratio * 100)),
+      level,
+      directFailureSignal,
+      abnormalCompletion,
+      streamIncomplete: stats?.streamIncomplete === true,
+      streamError: stats?.streamError === true,
+      latestAssistantPersisted:
+        typeof stats?.latestAssistantPersisted === "boolean"
+          ? stats.latestAssistantPersisted
+          : null,
+    };
+  }
+
+  /**
    * Build the dismissal signature for a model/reference combination.
    *
    * @param {?Object} [stats=null] - Conversation statistics.
    * @returns {string} Stable profile key.
    */
   function getProjectGuideProfileKey(stats = null) {
+    const structure = getConversationStructureRiskDetails(stats);
+    if (structure) return "structure-v1:2700:1640:5170";
+
     const risk = getContextRiskDetails(stats);
     if (!risk) return "legacy";
     return [
@@ -283,13 +371,8 @@
   function getProjectGuideLevel(stats = null) {
     if (!stats) return 0;
 
-    const risk = getContextRiskDetails(stats);
-    if (risk) {
-      if (risk.ratio >= risk.level3Threshold) return 3;
-      if (risk.ratio >= risk.level2Threshold) return 2;
-      if (risk.ratio >= risk.level1Threshold) return 1;
-      return 0;
-    }
+    const structure = getConversationStructureRiskDetails(stats);
+    if (structure) return structure.level;
 
     const conversationalLength = Number(stats.conversationalLength || 0);
     const chainLength = Number(stats.chainLength || 0);
@@ -1012,6 +1095,7 @@
   CGO.getProjectGuideLevel = getProjectGuideLevel;
   CGO.getProjectGuideProfileKey = getProjectGuideProfileKey;
   CGO.getContextRiskDetails = getContextRiskDetails;
+  CGO.getConversationStructureRiskDetails = getConversationStructureRiskDetails;
   CGO.getActiveKeepDomMessages = getActiveKeepDomMessages;
   CGO.hash = hash;
   CGO.isProjectGuideDismissed = isProjectGuideDismissed;

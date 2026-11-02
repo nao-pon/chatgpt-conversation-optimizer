@@ -643,6 +643,11 @@ test("token statistics use plausible reported counts only for calibration", asyn
   assert.equal(result.stats.contextLimitSource, "model");
   assert.equal(result.stats.historyComplete, true);
   assert.equal(result.stats.tokenConfidence, "medium");
+  assert.ok(result.stats.autoAdjustScore > 0);
+  assert.equal(result.stats.currentNodeRole, "assistant");
+  assert.equal(result.stats.latestAssistantMessageId, "assistant-current");
+  assert.equal(result.stats.streamDone, null);
+  assert.equal(result.stats.latestAssistantPersisted, null);
 });
 
 test("token statistics ignore implausible reported counts instead of summing them", async () => {
