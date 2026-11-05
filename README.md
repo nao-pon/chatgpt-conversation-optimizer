@@ -48,6 +48,7 @@ CGO works in the signed-in ChatGPT Web session. It does not require an OpenAI AP
 - Navigate between user messages from the conversation navigator
 - Copy individual messages as Markdown
 - Copy, collapse, and expand code blocks
+- Recreate supported ChatGPT rich response cards, badges, selectors, and tables
 - Review thoughts, generated images, and attachments when that data is available
 - Open the original conversation in ChatGPT Web from the exported view
 

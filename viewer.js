@@ -72,6 +72,7 @@
     return String(text || "")
       .replace(/\uE200(?:filecite|cite)\uE202[\s\S]*?\uE201/g, "")
       .replace(/\uE200(?:filenavlist|navlist|schedule|forecast|standing|finance)\uE202[\s\S]*?\uE201/g, "")
+      .replace(/<MemoryCite\b[^<>]*\/?>/gi, "")
       .replace(/[\uE200\uE201\uE202]/g, "")
       .replace(/\n{3,}/g, "\n\n")
       .trim();
@@ -218,31 +219,25 @@
    * @param {string} text - The message content to render; non-string values are treated as empty.
    * @returns {string} An HTML string wrapped in a `<div class="cgo-markdown">` containing the rendered and sanitized content.
    */
-  function renderMessageTextToHtml(text) {
-    const source = typeof text === "string" ? text : "";
-    if (!source.trim()) return "";
+  function renderMarkdownFragmentToSafeHtml(text, inline = false) {
+    const source = typeof text === "string" ? text.trim() : "";
+    if (!source) return "";
 
-    const rawSrc = stripChatgptUiArtifacts(source);
+    const markdownSrc = source.replace(/<([^<>]+)>/g, "&lt;$1&gt;");
 
     if (typeof marked === "undefined" || typeof DOMPurify === "undefined") {
-      const escapedSrc = escapeHtml(rawSrc);
-      return `<div class="cgo-markdown"><p>${escapedSrc.replace(/\n/g, "<br>")}</p></div>`;
+      return escapeHtml(markdownSrc).replace(/\n/g, inline ? " " : "<br>");
     }
 
-    const preEscapedSrc = rawSrc.replace(/<([^<>]+)>/g, "&lt;$1&gt;");
-
-    const rawHtml = marked.parse(preEscapedSrc, {
-      breaks: true,
-      gfm: true,
-      renderer: createMarkedRenderer(),
-    });
-
+    const renderer = createMarkedRenderer();
+    const rawHtml = inline && typeof marked.parseInline === "function"
+      ? marked.parseInline(markdownSrc, { breaks: true, gfm: true, renderer })
+      : marked.parse(markdownSrc, { breaks: true, gfm: true, renderer });
     const safeHtml = DOMPurify.sanitize(rawHtml, {
       USE_PROFILES: { html: true },
       FORBID_TAGS: ["style", "script", "iframe", "object", "embed", "svg", "path"],
       FORBID_ATTR: ["style", "onerror", "onclick", "onload"],
     });
-
     const wrapper = document.createElement("div");
     wrapper.innerHTML = safeHtml;
 
@@ -251,7 +246,47 @@
       a.setAttribute("rel", "noopener noreferrer");
     }
 
-    return `<div class="cgo-markdown">${wrapper.innerHTML}</div>`;
+    if (!inline || typeof marked.parseInline === "function") return wrapper.innerHTML;
+    if (wrapper.children.length === 1 && wrapper.firstElementChild?.tagName === "P") {
+      return wrapper.firstElementChild.innerHTML;
+    }
+    return wrapper.innerHTML;
+  }
+
+  function restoreRichMarkupBlocks(html, richMarkup) {
+    if (!richMarkup?.blocks?.length || typeof globalThis.CGORichMarkup?.renderBlock !== "function") {
+      return html;
+    }
+
+    let output = html;
+    for (const block of richMarkup.blocks) {
+      const rendered = globalThis.CGORichMarkup.renderBlock(
+        block.ast,
+        (value, options = {}) => renderMarkdownFragmentToSafeHtml(value, options.inline === true),
+        { context: block.context }
+      );
+      if (!rendered) continue;
+
+      const escapedToken = block.token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      output = output
+        .replace(new RegExp(`<p>\\s*${escapedToken}\\s*</p>`, "g"), rendered)
+        .split(block.token)
+        .join(rendered);
+    }
+
+    return output;
+  }
+
+  function renderMessageTextToHtml(text, options = {}) {
+    const source = typeof text === "string" ? text : "";
+    if (!source.trim()) return "";
+
+    const rawSrc = stripChatgptUiArtifacts(source);
+    const richMarkup = options.richMarkup === true && typeof globalThis.CGORichMarkup?.extractBlocks === "function"
+      ? globalThis.CGORichMarkup.extractBlocks(rawSrc)
+      : { source: rawSrc, blocks: [] };
+    const rendered = renderMarkdownFragmentToSafeHtml(richMarkup.source, false);
+    return `<div class="cgo-markdown">${restoreRichMarkupBlocks(rendered, richMarkup)}</div>`;
   }
 
   /**
@@ -794,7 +829,9 @@
     const roleLabel = message.role === "user" ? t("role_user") : t("role_assistant");
     const dateText = formatExportDate(message.createTime);
     const sourceText = pickMessageSourceText(message);
-    let bodyHtml = renderMessageTextToHtml(sourceText);
+    let bodyHtml = renderMessageTextToHtml(sourceText, {
+      richMarkup: message.role === "assistant",
+    });
     bodyHtml = renderPreparedInlineImagesInHtml(bodyHtml, message);
 
     return `

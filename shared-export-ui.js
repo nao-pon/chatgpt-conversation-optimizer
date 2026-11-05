@@ -565,6 +565,35 @@
   }
 
   /**
+   * Synchronize conditional rich-markup values with a radio-group selection.
+   * Only pre-rendered, data-bound variants are toggled; no response code is evaluated.
+   *
+   * @param {HTMLInputElement} input - Changed rich-markup radio input.
+   * @returns {void}
+   */
+  function syncRichMarkupState(input) {
+    const block = input?.closest?.(".cgo-rich-block");
+    const stateName = input?.getAttribute?.("data-cgo-rich-state-input") || "";
+    if (!block || !stateName) return;
+
+    const value = input.value || "";
+    for (const candidate of block.querySelectorAll("[data-cgo-rich-state-input]")) {
+      if (candidate.getAttribute("data-cgo-rich-state-input") !== stateName) continue;
+      candidate.checked = candidate.value === value;
+    }
+    for (const variant of block.querySelectorAll(".cgo-rich-expression-value")) {
+      if (variant.getAttribute("data-cgo-rich-state") !== stateName) continue;
+      variant.hidden = variant.getAttribute("data-cgo-rich-value") !== value;
+    }
+  }
+
+  function initRichMarkupControls() {
+    for (const input of document.querySelectorAll(".cgo-rich-radio input:checked[data-cgo-rich-state-input]")) {
+      syncRichMarkupState(input);
+    }
+  }
+
+  /**
    * Initialize CGO export UI behavior and event handlers.
    *
    * Registers document-level handlers for markdown copying (with modal fallback), code copying, code collapse/expand, and thought-panel toggles, and optionally starts lazy syntax highlighting.
@@ -657,7 +686,13 @@
       }
     }, { passive: false });
 
+    document.addEventListener("change", (event) => {
+      const input = event.target?.closest?.(".cgo-rich-radio input[data-cgo-rich-state-input]");
+      if (input) syncRichMarkupState(input);
+    });
+
     if (enableHighlight) waitForHljs();
+    initRichMarkupControls();
     initConversationNavigator({ getLabel });
   }
 
