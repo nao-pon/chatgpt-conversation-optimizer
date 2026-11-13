@@ -33,6 +33,48 @@
     "xlink:href",
     "src",
   ]);
+  const REACT_SVG_ATTRIBUTE_ALIASES = Object.freeze({
+    alignmentbaseline: "alignment-baseline",
+    baselineshift: "baseline-shift",
+    clippath: "clip-path",
+    cliprule: "clip-rule",
+    colorinterpolation: "color-interpolation",
+    colorinterpolationfilters: "color-interpolation-filters",
+    dominantbaseline: "dominant-baseline",
+    fillopacity: "fill-opacity",
+    fillrule: "fill-rule",
+    floodcolor: "flood-color",
+    floodopacity: "flood-opacity",
+    fontfamily: "font-family",
+    fontsize: "font-size",
+    fontstyle: "font-style",
+    fontweight: "font-weight",
+    letterspacing: "letter-spacing",
+    markerend: "marker-end",
+    markermid: "marker-mid",
+    markerstart: "marker-start",
+    shaperendering: "shape-rendering",
+    stopcolor: "stop-color",
+    stopopacity: "stop-opacity",
+    strokedasharray: "stroke-dasharray",
+    strokedashoffset: "stroke-dashoffset",
+    strokelinecap: "stroke-linecap",
+    strokelinejoin: "stroke-linejoin",
+    strokemiterlimit: "stroke-miterlimit",
+    strokeopacity: "stroke-opacity",
+    strokewidth: "stroke-width",
+    textanchor: "text-anchor",
+    vectoreffect: "vector-effect",
+  });
+
+  function normalizeReactSvgAttributes(markup) {
+    return String(markup || "").replace(/<[^<>]+>/g, (tag) => {
+      return tag.replace(/\s([A-Za-z][A-Za-z0-9]*)(?=\s*=)/g, (attribute, name) => {
+        const alias = REACT_SVG_ATTRIBUTE_ALIASES[name.toLowerCase()];
+        return alias ? attribute.replace(name, alias) : attribute;
+      });
+    });
+  }
 
   function getFencedCodeRanges(source) {
     const ranges = [];
@@ -165,7 +207,7 @@
   function sanitizeBlock(markup, sanitizer) {
     if (!sanitizer || typeof sanitizer.sanitize !== "function") return "";
 
-    const safe = sanitizer.sanitize(String(markup || ""), {
+    const safe = sanitizer.sanitize(normalizeReactSvgAttributes(markup), {
       USE_PROFILES: { svg: true, svgFilters: true },
       FORBID_TAGS: Array.from(FORBIDDEN_SVG_TAGS),
       FORBID_ATTR: Array.from(FORBIDDEN_SVG_ATTRIBUTES),

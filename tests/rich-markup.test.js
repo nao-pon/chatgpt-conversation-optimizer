@@ -12,6 +12,14 @@ function loadRichMarkup() {
   return context.CGORichMarkup;
 }
 
+function loadSafeSvg() {
+  const context = vm.createContext({ console });
+  context.globalThis = context;
+  const filePath = path.join(__dirname, "..", "safe-svg.js");
+  vm.runInContext(fs.readFileSync(filePath, "utf8"), context, { filename: filePath });
+  return context.CGOSafeSvg;
+}
+
 const SAMPLE = `実装できました！
 
 <box border radius="lg" padding={3} gap={2}>
@@ -200,4 +208,42 @@ test("extracts safe inline text and standalone captions outside boxes", () => {
   assert.match(rendered[0], /^<span class="cgo-rich-text/);
   assert.match(rendered[0], /cgo-rich-color-success/);
   assert.match(rendered[1], /^<div class="cgo-rich-caption">/);
+});
+
+test("preserves a complete SVG with text elements inside a box", () => {
+  const rich = loadRichMarkup();
+  const safeSvg = loadSafeSvg();
+  const source = `<box gap={2}>
+<svg viewBox="0 0 340 240" width="100%" xmlns="http://www.w3.org/2000/svg">
+  <g fill="none" stroke="#16a2b5" strokeWidth="1.4" strokeDasharray="5 4">
+    <path d="M175 37 L129 125 L241 154 Z"/>
+  </g>
+  <g fontSize="11" fontWeight="600">
+    <text x="192" y="35">上面</text>
+    <text x="126" y="233">パレット＋積荷</text>
+  </g>
+</svg>
+<caption>概念図：上方と側方から計測する構成。</caption>
+</box>`;
+  const result = rich.extractBlocks(source);
+  const svgNode = result.blocks[0].ast.children.find((child) => child.type === "svg");
+  const sanitizer = { sanitize: (markup) => markup };
+  const html = rich.renderBlock(result.blocks[0].ast, (value) => {
+    const extracted = safeSvg.extractBlocks(value);
+    if (!extracted.blocks.length) return String(value).trim();
+    return safeSvg.restoreBlocks(
+      `<p>${extracted.blocks[0].token}</p>`,
+      extracted,
+      sanitizer
+    );
+  });
+
+  assert.ok(svgNode);
+  assert.match(svgNode.markup, /<text x="192" y="35">上面<\/text>/);
+  assert.equal((html.match(/<text\b/g) || []).length, 2);
+  assert.match(html, /class="cgo-inline-svg"/);
+  assert.match(html, /stroke-width="1.4"/);
+  assert.match(html, /font-size="11"/);
+  assert.match(html, /class="cgo-rich-caption"/);
+  assert.doesNotMatch(html, /class="cgo-rich-text/);
 });

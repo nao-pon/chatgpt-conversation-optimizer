@@ -89,6 +89,28 @@ test("removes external paint URLs while preserving local SVG fragment references
   assert.match(html, /filter="url\(#shadow\)"/);
 });
 
+test("normalizes React-style presentation attributes before sanitizing", () => {
+  const safeSvg = loadSafeSvg();
+  let receivedMarkup = "";
+  const sanitizer = {
+    sanitize(markup) {
+      receivedMarkup = markup;
+      return markup;
+    },
+  };
+
+  const html = safeSvg.sanitizeBlock(
+    '<svg><g strokeWidth="1.5" strokeDasharray="5 4"><text fontSize="11" fontWeight="600">Label</text></g></svg>',
+    sanitizer
+  );
+
+  assert.match(receivedMarkup, /stroke-width="1.5"/);
+  assert.match(receivedMarkup, /stroke-dasharray="5 4"/);
+  assert.match(receivedMarkup, /font-size="11"/);
+  assert.match(receivedMarkup, /font-weight="600"/);
+  assert.doesNotMatch(html, /strokeWidth|fontSize/);
+});
+
 test("drops a block when sanitization does not return an SVG root", () => {
   const safeSvg = loadSafeSvg();
   const extracted = safeSvg.extractBlocks("<svg><path/></svg>");

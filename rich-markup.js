@@ -372,7 +372,7 @@
 
     const rootNode = { type: "root", children: [] };
     const stack = [rootNode];
-    const tokenPattern = /<\/?(?:box|row|text|title|badge|icon|divider|radio-group|radio|table|table-row|table-cell|caption|list|list-item|grid|grid-item)\b[^<>]*>/gi;
+    const tokenPattern = /<\/?(?:box|row|text|title|badge|icon|divider|radio-group|radio|table|table-row|table-cell|caption|list|list-item|grid|grid-item|svg)\b[^<>]*>/gi;
     let cursor = 0;
     let nodeCount = 0;
     let match;
@@ -385,6 +385,25 @@
       const closing = /^<\s*\//.test(rawTag);
       const nameMatch = rawTag.match(/^<\s*\/?\s*([a-zA-Z][\w-]*)/);
       const tag = nameMatch?.[1]?.toLowerCase() || "";
+
+      // SVG has a <text> element that otherwise collides with CGO's own
+      // <text> component. Preserve the complete graphic as one opaque node;
+      // the caller's normal Markdown path will sanitize it before rendering.
+      if (tag === "svg" && !closing) {
+        const end = findComponentEnd(markup, match.index, "svg");
+        if (end < 0) return null;
+
+        nodeCount += 1;
+        if (nodeCount > MAX_NODES || stack.length > MAX_DEPTH) return null;
+        stack[stack.length - 1].children.push({
+          type: "svg",
+          markup: markup.slice(match.index, end),
+        });
+        cursor = end;
+        tokenPattern.lastIndex = end;
+        continue;
+      }
+
       if (!SUPPORTED_TAGS.has(tag)) return null;
 
       if (closing) {
@@ -588,6 +607,13 @@
 
   function renderChildren(node, renderContext, parentTag = node.tag) {
     return node.children.map((child) => {
+      if (child.type === "svg") {
+        const rendered = renderContext.renderMarkdown(child.markup, { inline: false });
+        return rendered
+          ? `<div class="cgo-rich-content cgo-rich-svg-content">${rendered}</div>`
+          : "";
+      }
+
       if (child.type === "text") {
         if (!child.value.trim()) return "";
 
