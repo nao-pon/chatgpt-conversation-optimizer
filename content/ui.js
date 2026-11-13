@@ -61,12 +61,9 @@
   function findConversationHeaderActionsInSurface(surface) {
     if (!surface) return null;
 
-    for (const button of surface.querySelectorAll('button[aria-haspopup="menu"]')) {
-      if (!button.closest(".cgo-toolbar") && button.parentElement) {
-        return button.parentElement;
-      }
-    }
-
+    // ChatGPT keeps the share/public-link action in the trailing header obstacle.
+    // Prefer that stable layout boundary over generic menu buttons: the latter now
+    // includes the conversation-title dropdown and would place CGO beside the title.
     const obstacles = surface.querySelectorAll(
       '[data-app-shell-header-obstacle="true"]'
     );
@@ -75,6 +72,12 @@
         if (!button.closest(".cgo-toolbar") && button.parentElement) {
           return button.parentElement;
         }
+      }
+    }
+
+    for (const button of surface.querySelectorAll('button[aria-haspopup="menu"]')) {
+      if (!button.closest(".cgo-toolbar") && button.parentElement) {
+        return button.parentElement;
       }
     }
 

@@ -83,7 +83,50 @@ test("header action lookup supports the current app-shell sibling layout", () =>
   assert.equal(guideAnchor.layout, "app-shell");
 });
 
-test("header action lookup falls back to a native button inside an app-shell obstacle", () => {
+test("header action lookup prefers the official trailing actions over the title menu", () => {
+  const titleActionRow = { id: "title-action-row" };
+  const titleMenuButton = {
+    parentElement: titleActionRow,
+    closest() {
+      return null;
+    },
+  };
+  const officialActionRow = { id: "official-action-row" };
+  const publicLinkButton = {
+    parentElement: officialActionRow,
+    closest() {
+      return null;
+    },
+  };
+  const trailingObstacle = {
+    querySelectorAll(selector) {
+      return selector === "button" ? [publicLinkButton] : [];
+    },
+  };
+  const surface = {
+    querySelectorAll(selector) {
+      if (selector === '[data-app-shell-header-obstacle="true"]') {
+        return [trailingObstacle];
+      }
+      return selector === 'button[aria-haspopup="menu"]'
+        ? [titleMenuButton]
+        : [];
+    },
+  };
+  const document = {
+    getElementById() {
+      return null;
+    },
+    querySelector() {
+      return surface;
+    },
+  };
+
+  const CGO = loadUi(document);
+  assert.equal(CGO.findConversationHeaderActions(), officialActionRow);
+});
+
+test("header action lookup uses a native button inside an app-shell obstacle", () => {
   const actionRow = { id: "fallback-action-row" };
   const nativeButton = {
     parentElement: actionRow,
