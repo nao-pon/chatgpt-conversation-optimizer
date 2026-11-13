@@ -3,7 +3,7 @@
 ![CGO](docs/images/CGO_rounded_transparent.png)
 
 [![Chrome Web Store Version](https://img.shields.io/chrome-web-store/v/chmaignkjgccgmacmlfgnmbfbnnfmnpl?logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/conversation-optimizer-fo/chmaignkjgccgmacmlfgnmbfbnnfmnpl)
-[![Version](https://img.shields.io/badge/version-2.1.2-blue)](../../releases)
+[![Version](https://img.shields.io/badge/version-2.2.0-blue)](../../releases)
 [![Manifest](https://img.shields.io/badge/manifest-v3-green)](./manifest.json)
 [![Platform](https://img.shields.io/badge/platform-Chrome-orange)](https://www.google.com/chrome/)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey)](./LICENSE)
@@ -48,7 +48,7 @@ CGO works in the signed-in ChatGPT Web session. It does not require an OpenAI AP
 - Navigate between user messages from the conversation navigator
 - Copy individual messages as Markdown
 - Copy, collapse, and expand code blocks
-- Recreate supported ChatGPT rich response cards, badges, selectors, and tables
+- Recreate supported ChatGPT rich response cards, badges, selectors, tables, and sanitized inline SVG graphics
 - Review thoughts, generated images, and attachments when that data is available
 - Open the original conversation in ChatGPT Web from the exported view
 
