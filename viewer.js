@@ -213,17 +213,26 @@
   /**
    * Convert message text (plain or Markdown) into sanitized HTML suitable for embedding in the page.
    *
-   * This strips known ChatGPT UI artifact sequences, escapes HTML, renders Markdown when `marked` is available
+   * This strips known ChatGPT UI artifact sequences, escapes ordinary HTML, renders Markdown when `marked` is available
    * (falling back to simple paragraph/line-break conversion), sanitizes the generated HTML with `DOMPurify`
-   * when present, and ensures all links open in a new tab with `rel="noopener noreferrer"`.
+   * when present, restores explicitly allowed SVG blocks, and ensures all links open in a new tab with
+   * `rel="noopener noreferrer"`.
    * @param {string} text - The message content to render; non-string values are treated as empty.
+   * @param {boolean} [inline=false] - Whether to render an inline-only fragment.
+   * @param {boolean} [allowSvg=false] - Whether sanitized raw SVG blocks may be rendered.
    * @returns {string} An HTML string wrapped in a `<div class="cgo-markdown">` containing the rendered and sanitized content.
    */
-  function renderMarkdownFragmentToSafeHtml(text, inline = false) {
+  function renderMarkdownFragmentToSafeHtml(text, inline = false, allowSvg = false) {
     const source = typeof text === "string" ? text.trim() : "";
     if (!source) return "";
 
-    const markdownSrc = source.replace(/<([^<>]+)>/g, "&lt;$1&gt;");
+    const safeSvg = allowSvg === true &&
+      typeof marked !== "undefined" &&
+      typeof DOMPurify !== "undefined" &&
+      typeof globalThis.CGOSafeSvg?.extractBlocks === "function"
+      ? globalThis.CGOSafeSvg.extractBlocks(source)
+      : { source, blocks: [] };
+    const markdownSrc = safeSvg.source.replace(/<([^<>]+)>/g, "&lt;$1&gt;");
 
     if (typeof marked === "undefined" || typeof DOMPurify === "undefined") {
       return escapeHtml(markdownSrc).replace(/\n/g, inline ? " " : "<br>");
@@ -246,14 +255,20 @@
       a.setAttribute("rel", "noopener noreferrer");
     }
 
-    if (!inline || typeof marked.parseInline === "function") return wrapper.innerHTML;
+    const withSvg = globalThis.CGOSafeSvg?.restoreBlocks?.(
+      wrapper.innerHTML,
+      safeSvg,
+      DOMPurify
+    ) || wrapper.innerHTML;
+    if (!inline || typeof marked.parseInline === "function") return withSvg;
+    wrapper.innerHTML = withSvg;
     if (wrapper.children.length === 1 && wrapper.firstElementChild?.tagName === "P") {
       return wrapper.firstElementChild.innerHTML;
     }
     return wrapper.innerHTML;
   }
 
-  function restoreRichMarkupBlocks(html, richMarkup) {
+  function restoreRichMarkupBlocks(html, richMarkup, allowSvg = false) {
     if (!richMarkup?.blocks?.length || typeof globalThis.CGORichMarkup?.renderBlock !== "function") {
       return html;
     }
@@ -262,7 +277,11 @@
     for (const block of richMarkup.blocks) {
       const rendered = globalThis.CGORichMarkup.renderBlock(
         block.ast,
-        (value, options = {}) => renderMarkdownFragmentToSafeHtml(value, options.inline === true),
+        (value, options = {}) => renderMarkdownFragmentToSafeHtml(
+          value,
+          options.inline === true,
+          allowSvg
+        ),
         { context: block.context }
       );
       if (!rendered) continue;
@@ -285,8 +304,16 @@
     const richMarkup = options.richMarkup === true && typeof globalThis.CGORichMarkup?.extractBlocks === "function"
       ? globalThis.CGORichMarkup.extractBlocks(rawSrc)
       : { source: rawSrc, blocks: [] };
-    const rendered = renderMarkdownFragmentToSafeHtml(richMarkup.source, false);
-    return `<div class="cgo-markdown">${restoreRichMarkupBlocks(rendered, richMarkup)}</div>`;
+    const rendered = renderMarkdownFragmentToSafeHtml(
+      richMarkup.source,
+      false,
+      options.allowSvg === true
+    );
+    return `<div class="cgo-markdown">${restoreRichMarkupBlocks(
+      rendered,
+      richMarkup,
+      options.allowSvg === true
+    )}</div>`;
   }
 
   /**
@@ -831,6 +858,7 @@
     const sourceText = pickMessageSourceText(message);
     let bodyHtml = renderMessageTextToHtml(sourceText, {
       richMarkup: message.role === "assistant",
+      allowSvg: message.role === "assistant",
     });
     bodyHtml = renderPreparedInlineImagesInHtml(bodyHtml, message);
 

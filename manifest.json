@@ -36,6 +36,7 @@
         "vendor/marked.min.js",
         "vendor/purify.min.js",
         "vendor/jszip.min.js",
+        "safe-svg.js",
         "rich-markup.js",
         "viewer-storage.js",
         "content/config.js",
@@ -70,6 +71,7 @@
         "vendor/purify.min.js",
         "vendor/highlight.min.js",
         "vendor/github-dark.min.css",
+        "safe-svg.js",
         "rich-markup.js",
         "shared-export.css",
         "shared-export-ui.js"

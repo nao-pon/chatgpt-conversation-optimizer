@@ -1394,7 +1394,13 @@
     const source = typeof text === "string" ? text.trim() : "";
     if (!source) return "";
 
-    const markdownSrc = source.replace(/<([^<>]+)>/g, "&lt;$1&gt;");
+    const safeSvg = options.allowSvg === true &&
+      typeof marked !== "undefined" &&
+      typeof DOMPurify !== "undefined" &&
+      typeof globalThis.CGOSafeSvg?.extractBlocks === "function"
+      ? globalThis.CGOSafeSvg.extractBlocks(source)
+      : { source, blocks: [] };
+    const markdownSrc = safeSvg.source.replace(/<([^<>]+)>/g, "&lt;$1&gt;");
 
     if (typeof marked !== "undefined" && typeof DOMPurify !== "undefined") {
       const renderer = createMarkedRenderer(options);
@@ -1408,10 +1414,15 @@
       });
 
       const processed = postProcessRenderedMarkdown(safeHtml);
-      if (!inline || typeof marked.parseInline === "function") return processed;
+      const withSvg = globalThis.CGOSafeSvg?.restoreBlocks?.(
+        processed,
+        safeSvg,
+        DOMPurify
+      ) || processed;
+      if (!inline || typeof marked.parseInline === "function") return withSvg;
 
       const wrapper = document.createElement("div");
-      wrapper.innerHTML = processed;
+      wrapper.innerHTML = withSvg;
       if (wrapper.children.length === 1 && wrapper.firstElementChild?.tagName === "P") {
         return wrapper.firstElementChild.innerHTML;
       }
@@ -1670,6 +1681,7 @@
       let bodyHtml = renderMessageTextToHtml(renderedText, {
         interactiveCode,
         richMarkup: message.role === "assistant",
+        allowSvg: message.role === "assistant",
       });
       bodyHtml = renderPreparedInlineImagesInHtml(bodyHtml, message, {
         noImg: !!lightweight,

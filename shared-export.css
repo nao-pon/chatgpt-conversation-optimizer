@@ -1076,6 +1076,20 @@ code {
   height: 100%;
 }
 
+.cgo-inline-svg {
+  display: block;
+  max-width: 100%;
+  margin: 1rem 0;
+  overflow-x: auto;
+}
+
+.cgo-inline-svg > svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-inline: auto;
+}
+
 .cgo-rich-icon-size-xs { width: 13px; height: 13px; }
 .cgo-rich-icon-size-sm { width: 16px; height: 16px; }
 .cgo-rich-icon-size-md { width: 19px; height: 19px; }
