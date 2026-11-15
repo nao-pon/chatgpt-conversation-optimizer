@@ -18,6 +18,18 @@ CGO works in the signed-in ChatGPT Web session. It does not require an OpenAI AP
 
 ## What CGO does today
 
+### Keep the conversation going, even when a chat reaches its limit
+
+Some of our best ideas take shape through conversation. What starts as a vague thought can gradually become a clear plan through questions, exploration, and discussion.
+
+But when a ChatGPT conversation reaches its limit, that valuable context can be difficult to carry forward.
+
+**Conversation Optimizer for ChatGPT helps you preserve that journey.**
+
+Export your conversation as a structured handoff ZIP, start a new chat, and let ChatGPT reconstruct the context — including previous decisions, important discoveries, and unfinished work.
+
+You don't have to start from scratch just because the conversation has to start over.
+
 ### Export long conversations
 
 - Detects ChatGPT's paginated conversation format
