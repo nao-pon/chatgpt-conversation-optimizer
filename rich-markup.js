@@ -475,8 +475,164 @@
     return ranges;
   }
 
+  function getMarkdownCodeRanges(source) {
+    const input = String(source || "");
+    const ranges = getFencedCodeRanges(input);
+    const tickRuns = Array.from(input.matchAll(/`+/g));
+
+    for (let index = 0; index < tickRuns.length; index += 1) {
+      const opening = tickRuns[index];
+      if (isInsideRange(opening.index, ranges)) continue;
+
+      for (let closingIndex = index + 1; closingIndex < tickRuns.length; closingIndex += 1) {
+        const closing = tickRuns[closingIndex];
+        if (isInsideRange(closing.index, ranges)) continue;
+        if (closing[0].length !== opening[0].length) continue;
+        ranges.push([opening.index, closing.index + closing[0].length]);
+        index = closingIndex;
+        break;
+      }
+    }
+
+    return ranges.sort((left, right) => left[0] - right[0]);
+  }
+
   function isInsideRange(index, ranges) {
     return ranges.some(([start, end]) => index >= start && index <= end);
+  }
+
+  function escapeMarkdownLabel(value) {
+    return String(value || "")
+      .replace(/\\/g, "\\\\")
+      .replace(/([\[\]])/g, "\\$1")
+      .trim();
+  }
+
+  function renderFallbackLink(rawTag) {
+    const attrs = parseAttributes(rawTag, "Link");
+    const url = String(attrs.url || attrs.href || "").trim();
+    if (!/^https?:\/\/[^\s<>]+$/i.test(url)) return "";
+
+    const label = escapeMarkdownLabel(attrs.title || attrs.label || url);
+    return label ? `[${label}](<${url}>)` : "";
+  }
+
+  function renderFallbackEntity(rawTag) {
+    const attrs = parseAttributes(rawTag, "Entity");
+    return String(attrs.value || attrs.title || attrs.name || "").trim();
+  }
+
+  function renderFallbackCodeBlock(rawTag, content) {
+    const attrs = parseAttributes(rawTag, "CodeBlock");
+    const language = /^[A-Za-z0-9_+-]{1,32}$/.test(String(attrs.language || ""))
+      ? String(attrs.language)
+      : "";
+    let longestTicks = 0;
+    for (const match of String(content || "").matchAll(/`+/g)) {
+      longestTicks = Math.max(longestTicks, match[0].length);
+    }
+    const fence = "`".repeat(Math.max(3, longestTicks + 1));
+    return `\n\n${fence}${language}\n${String(content || "").trim()}\n${fence}\n\n`;
+  }
+
+  function findUiTagEnd(source, start) {
+    let quote = "";
+    let escaped = false;
+    let braceDepth = 0;
+
+    for (let index = start + 1; index < source.length; index += 1) {
+      const character = source[index];
+      if (quote) {
+        if (escaped) {
+          escaped = false;
+        } else if (character === "\\") {
+          escaped = true;
+        } else if (character === quote) {
+          quote = "";
+        }
+        continue;
+      }
+
+      if (character === "\"" || character === "'" || character === "`") {
+        quote = character;
+        continue;
+      }
+      if (character === "{") braceDepth += 1;
+      if (character === "}") braceDepth = Math.max(0, braceDepth - 1);
+      if (character === ">" && braceDepth === 0) return index + 1;
+    }
+
+    return -1;
+  }
+
+  function stripUiWrapperTags(segment) {
+    const input = String(segment || "");
+    const tagPattern = /<\/?(?:button|label)\b/gi;
+    let output = "";
+    let cursor = 0;
+    let match;
+
+    while ((match = tagPattern.exec(input))) {
+      const end = findUiTagEnd(input, match.index);
+      if (end < 0) break;
+      output += input.slice(cursor, match.index);
+      cursor = end;
+      tagPattern.lastIndex = end;
+    }
+
+    output += input.slice(cursor);
+    return output;
+  }
+
+  function stripUiControlSyntax(segment) {
+    return String(segment || "")
+      .replace(
+        /^[\t ]*\{\s*(?:#(?:if|each|await|key)\b[^\n]*|:(?:else|then|catch)\b[^\n]*|\/(?:if|each|await|key)\s*|@(?:body|html|debug|const)\b[^\n]*)\}[\t ]*(?:\r?\n|$)/gim,
+        ""
+      )
+      .replace(
+        /^[\t ]*\{\s*[A-Za-z_$][^{}\n]*(?:=>|===?|!==?|&&|\|\||\.[A-Za-z_$][\w$]*|\?)[^{}\n]*\}[\t ]*(?:\r?\n|$)/gm,
+        ""
+      );
+  }
+
+  function normalizeChatgptUiSegment(segment) {
+    const normalized = String(segment || "")
+      .replace(/<CodeBlock\b([^<>]*)>([\s\S]*?)<\/CodeBlock\s*>/gi, (whole, _attrs, content) => {
+        return renderFallbackCodeBlock(whole.slice(0, whole.indexOf(">") + 1), content);
+      })
+      .replace(/<Link\b[^<>]*\/?>/gi, (tag) => renderFallbackLink(tag))
+      .replace(/<Entity\b[^<>]*\/?>/gi, (tag) => renderFallbackEntity(tag))
+      .replace(/<(?:AsyncImage|Cite|MemoryCite|FileNavList)\b[^<>]*\/?>/gi, "")
+      .replace(/<\/?Chart\b[^<>]*>/gi, "")
+      // Future ChatGPT components conventionally use PascalCase. Strip only
+      // their wrappers while retaining any human-readable child content.
+      .replace(/<\/?[A-Z][A-Za-z0-9-]*\b[^<>]*\/?>/g, "");
+    return stripUiWrapperTags(normalized);
+  }
+
+  /**
+   * Convert unsupported ChatGPT UI components to readable Markdown without
+   * altering literal examples inside Markdown code spans or fenced blocks.
+   * Supported rich-layout tags are left intact for the normal renderer.
+   *
+   * @param {string} source - Original assistant message text.
+   * @returns {string} Message text with graceful fallbacks for UI artifacts.
+   */
+  function normalizeChatgptUiArtifacts(source) {
+    const input = String(source || "");
+    const ranges = getMarkdownCodeRanges(input);
+    if (!ranges.length) return normalizeChatgptUiSegment(input);
+
+    let output = "";
+    let cursor = 0;
+    for (const [start, end] of ranges) {
+      output += normalizeChatgptUiSegment(input.slice(cursor, start));
+      output += input.slice(start, end);
+      cursor = end;
+    }
+    output += normalizeChatgptUiSegment(input.slice(cursor));
+    return output;
   }
 
   function findComponentEnd(source, start, tagName) {
@@ -505,7 +661,7 @@
     const body = extractBodyContext(input);
     const workingSource = body.source;
     const ranges = getFencedCodeRanges(workingSource);
-    const openPattern = /<(box|caption|text|badge)(?:\s|>)/gi;
+    const openPattern = /<(box|row|text|title|badge|radio-group|radio|table|table-row|table-cell|caption|list|list-item|grid|grid-item)(?:\s|>)/gi;
     const blocks = [];
     let output = "";
     let cursor = 0;
@@ -751,7 +907,9 @@
 
   root.CGORichMarkup = Object.freeze({
     extractBlocks,
+    normalizeChatgptUiArtifacts,
     parseBlock,
     renderBlock,
+    stripUiControlSyntax,
   });
 })();

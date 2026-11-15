@@ -66,6 +66,32 @@
     textanchor: "text-anchor",
     vectoreffect: "vector-effect",
   });
+  const SVG_LENGTH_ATTRIBUTES = new Set([
+    "x",
+    "y",
+    "x1",
+    "y1",
+    "x2",
+    "y2",
+    "cx",
+    "cy",
+    "r",
+    "rx",
+    "ry",
+    "dx",
+    "dy",
+    "width",
+    "height",
+  ]);
+  const SVG_LENGTH_VALUE = /^[+-]?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)(?:px|em|ex|ch|rem|in|cm|mm|q|pt|pc|%)?$/i;
+  const SVG_CSS_LENGTH_KEYWORDS = new Set([
+    "auto",
+    "inherit",
+    "initial",
+    "revert",
+    "revert-layer",
+    "unset",
+  ]);
 
   function normalizeReactSvgAttributes(markup) {
     return String(markup || "").replace(/<[^<>]+>/g, (tag) => {
@@ -74,6 +100,76 @@
         return alias ? attribute.replace(name, alias) : attribute;
       });
     });
+  }
+
+  /**
+   * Return whether an SVG still contains ChatGPT UI template syntax.
+   *
+   * Browsers do not evaluate constructs such as `{#each ...}`, `x={item.x}`,
+   * or template literals in SVG attributes. Passing them to innerHTML produces
+   * noisy parser errors and a partially broken graphic, so the complete block
+   * is omitted instead of attempting to execute an evolving UI dialect.
+   *
+   * @param {string} markup - SVG markup before or after sanitization.
+   * @returns {boolean} Whether unresolved template syntax was found.
+   */
+  function hasUnresolvedTemplateSyntax(markup) {
+    const input = String(markup || "");
+    if (/\{\s*(?:#|\/|:|@)\s*(?:each|if|else|await|key|html|debug|const)\b/i.test(input)) {
+      return true;
+    }
+
+    return /<[^<>]*[{}][^<>]*>/.test(input);
+  }
+
+  function isBalancedCssLengthFunction(value) {
+    if (!/^(?:calc|min|max|clamp|var)\(/i.test(value)) return false;
+    if (/[{};<>`]/.test(value)) return false;
+
+    let depth = 0;
+    for (const character of value) {
+      if (character === "(") depth += 1;
+      if (character === ")") {
+        depth -= 1;
+        if (depth < 0) return false;
+      }
+    }
+    return depth === 0;
+  }
+
+  function isValidSvgLengthList(value) {
+    const normalized = String(value || "").trim();
+    if (!normalized) return false;
+    if (SVG_CSS_LENGTH_KEYWORDS.has(normalized.toLowerCase())) return true;
+    if (isBalancedCssLengthFunction(normalized)) return true;
+
+    const values = normalized.split(/[\s,]+/).filter(Boolean);
+    return values.length > 0 && values.every((item) => SVG_LENGTH_VALUE.test(item));
+  }
+
+  /**
+   * Reject coordinate and size attributes that a browser cannot interpret as
+   * SVG lengths. This is intentionally limited to geometry attributes so that
+   * valid paint, filter, path, and accessibility values remain unaffected.
+   *
+   * @param {string} markup - Sanitized SVG markup.
+   * @returns {boolean} Whether an invalid geometry attribute was found.
+   */
+  function hasInvalidGeometryAttributes(markup) {
+    const tagPattern = /<[^<>]+>/g;
+    let tagMatch;
+
+    while ((tagMatch = tagPattern.exec(String(markup || "")))) {
+      const attributePattern = /\s([A-Za-z_:][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+      let attributeMatch;
+      while ((attributeMatch = attributePattern.exec(tagMatch[0]))) {
+        const name = attributeMatch[1].toLowerCase();
+        if (!SVG_LENGTH_ATTRIBUTES.has(name)) continue;
+        if (!isValidSvgLengthList(attributeMatch[2] ?? attributeMatch[3] ?? "")) return true;
+      }
+    }
+
+    return false;
   }
 
   function getFencedCodeRanges(source) {
@@ -206,6 +302,7 @@
    */
   function sanitizeBlock(markup, sanitizer) {
     if (!sanitizer || typeof sanitizer.sanitize !== "function") return "";
+    if (hasUnresolvedTemplateSyntax(markup)) return "";
 
     const safe = sanitizer.sanitize(normalizeReactSvgAttributes(markup), {
       USE_PROFILES: { svg: true, svgFilters: true },
@@ -227,6 +324,8 @@
 
     if (!/^<svg(?:\s|>)/i.test(normalized)) return "";
     if (!/<\/svg>\s*$/i.test(normalized)) return "";
+    if (hasUnresolvedTemplateSyntax(normalized)) return "";
+    if (hasInvalidGeometryAttributes(normalized)) return "";
     return normalized;
   }
 
@@ -259,6 +358,8 @@
 
   root.CGOSafeSvg = Object.freeze({
     extractBlocks,
+    hasInvalidGeometryAttributes,
+    hasUnresolvedTemplateSyntax,
     restoreBlocks,
     sanitizeBlock,
   });

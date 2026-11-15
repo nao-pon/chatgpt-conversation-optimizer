@@ -223,7 +223,11 @@
    * @returns {string} An HTML string wrapped in a `<div class="cgo-markdown">` containing the rendered and sanitized content.
    */
   function renderMarkdownFragmentToSafeHtml(text, inline = false, allowSvg = false) {
-    const source = typeof text === "string" ? text.trim() : "";
+    const rawSource = typeof text === "string" ? text.trim() : "";
+    const source = allowSvg === true &&
+      typeof globalThis.CGORichMarkup?.stripUiControlSyntax === "function"
+      ? globalThis.CGORichMarkup.stripUiControlSyntax(rawSource)
+      : rawSource;
     if (!source) return "";
 
     const safeSvg = allowSvg === true &&
@@ -300,7 +304,11 @@
     const source = typeof text === "string" ? text : "";
     if (!source.trim()) return "";
 
-    const rawSrc = stripChatgptUiArtifacts(source);
+    const strippedSrc = stripChatgptUiArtifacts(source);
+    const rawSrc = options.richMarkup === true &&
+      typeof globalThis.CGORichMarkup?.normalizeChatgptUiArtifacts === "function"
+      ? globalThis.CGORichMarkup.normalizeChatgptUiArtifacts(strippedSrc)
+      : strippedSrc;
     const richMarkup = options.richMarkup === true && typeof globalThis.CGORichMarkup?.extractBlocks === "function"
       ? globalThis.CGORichMarkup.extractBlocks(rawSrc)
       : { source: rawSrc, blocks: [] };

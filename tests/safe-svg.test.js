@@ -121,3 +121,46 @@ test("drops a block when sanitization does not return an SVG root", () => {
     ""
   );
 });
+
+test("drops SVG blocks containing unresolved ChatGPT template expressions", () => {
+  const safeSvg = loadSafeSvg();
+  let sanitizerCalled = false;
+  const sanitizer = {
+    sanitize(markup) {
+      sanitizerCalled = true;
+      return markup;
+    },
+  };
+  const markup = `<svg viewBox="0 0 100 100">
+    {#each points as point}
+      <line x1={point.x} y1="0" x2={point.x} y2="100"/>
+    {/each}
+  </svg>`;
+
+  assert.equal(safeSvg.sanitizeBlock(markup, sanitizer), "");
+  assert.equal(sanitizerCalled, false);
+  assert.equal(safeSvg.hasUnresolvedTemplateSyntax(markup), true);
+});
+
+test("drops SVG blocks with browser-invalid geometry values", () => {
+  const safeSvg = loadSafeSvg();
+  const sanitizer = { sanitize: (markup) => markup };
+
+  assert.equal(
+    safeSvg.sanitizeBlock('<svg><text x="13" y="69+i*24">Label</text></svg>', sanitizer),
+    ""
+  );
+  assert.equal(
+    safeSvg.sanitizeBlock('<svg><line x1="{t.x}" y1="0" x2="{t.x}" y2="10"/></svg>', sanitizer),
+    ""
+  );
+});
+
+test("keeps static SVG geometry including units, lists, and CSS length functions", () => {
+  const safeSvg = loadSafeSvg();
+  const sanitizer = { sanitize: (markup) => markup };
+  const markup = '<svg width="100%" height="12rem"><text x="10 20" y="calc(50% - 2px)">OK</text><line x1="-1.5" y1="2e1" x2="3px" y2="4.25"/></svg>';
+
+  assert.equal(safeSvg.sanitizeBlock(markup, sanitizer), markup);
+  assert.equal(safeSvg.hasInvalidGeometryAttributes(markup), false);
+});

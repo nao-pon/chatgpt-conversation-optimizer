@@ -174,6 +174,94 @@ test("renders numbered connected lists recursively inside a box", () => {
   assert.doesNotMatch(html, /<list|&lt;list/);
 });
 
+test("converts unsupported ChatGPT UI components to readable Markdown fallbacks", () => {
+  const rich = loadRichMarkup();
+  const source = `<row align="start" gap={3}>
+<AsyncImage query="Panasonic AQW614" aspectRatio="1:1"/>
+<Entity category="product" value="Panasonic AQW614" disambig="PhotoMOS"/>
+
+NOとNCの2回路を収めた半導体リレーです。
+<Cite ref="turn1search3"/>
+<Link url="https://industry.panasonic.com/aqw614" title="パナソニック公式製品ページ"/>
+</row>`;
+
+  const normalized = rich.normalizeChatgptUiArtifacts(source);
+
+  assert.doesNotMatch(normalized, /AsyncImage|Entity|Cite|<Link/);
+  assert.match(normalized, /Panasonic AQW614/);
+  assert.match(normalized, /\[パナソニック公式製品ページ\]\(<https:\/\/industry\.panasonic\.com\/aqw614>\)/);
+
+  const result = rich.extractBlocks(normalized);
+  assert.equal(result.blocks.length, 1);
+  assert.equal(result.blocks[0].ast.tag, "row");
+});
+
+test("preserves UI-looking tags inside Markdown code", () => {
+  const rich = loadRichMarkup();
+  const inline = 'Use `<Entity value="example"/>` literally.';
+  const fenced = '```xml\n<AsyncImage query="example"/>\n```';
+
+  assert.equal(rich.normalizeChatgptUiArtifacts(inline), inline);
+  assert.equal(rich.normalizeChatgptUiArtifacts(fenced), fenced);
+});
+
+test("converts proprietary CodeBlock components to fenced Markdown", () => {
+  const rich = loadRichMarkup();
+  const normalized = rich.normalizeChatgptUiArtifacts(
+    '<CodeBlock language="text">OPEN ── Relay\nCLOSE ── Relay</CodeBlock>'
+  );
+
+  assert.match(normalized, /```text\nOPEN ── Relay\nCLOSE ── Relay\n```/);
+  assert.doesNotMatch(normalized, /CodeBlock/);
+});
+
+test("removes interactive button and label wrappers while preserving their readable text", () => {
+  const rich = loadRichMarkup();
+  const source = `<label>出力保持時間</label>
+<button block color="primary" onClick={()=>GenUI.issueNewTurn("設定を検討")}>この設定で仕様を検討</button>`;
+
+  const normalized = rich.normalizeChatgptUiArtifacts(source);
+
+  assert.doesNotMatch(normalized, /<\/?(?:button|label)|onClick|issueNewTurn/);
+  assert.match(normalized, /出力保持時間/);
+  assert.match(normalized, /この設定で仕様を検討/);
+});
+
+test("removes residual GenUI control syntax after rich-block expansion", () => {
+  const rich = loadRichMarkup();
+  const source = `{modes.find(x=>x.value===mode).desc}
+{#if mode==="tag"}
+出力保持時間
+{:else if mode==="moving" || mode==="open"}
+動作タイムアウト時は自動OFF。
+{:else}
+起動時はOFF。
+{/if}`;
+
+  const stripped = rich.stripUiControlSyntax(source);
+
+  assert.doesNotMatch(stripped, /modes\.find|\{[#/:@]|\{modes/);
+  assert.match(stripped, /出力保持時間/);
+  assert.match(stripped, /動作タイムアウト時は自動OFF/);
+  assert.match(stripped, /起動時はOFF/);
+});
+
+test("keeps supported body and each directives until the rich parser expands them", () => {
+  const rich = loadRichMarkup();
+  const source = `{@body const items = [{value:"a",label:"A"}]}
+<box>{#each items as item}<text>{item.label}</text>{/each}</box>`;
+
+  const normalized = rich.normalizeChatgptUiArtifacts(source);
+  const extracted = rich.extractBlocks(normalized);
+
+  assert.match(normalized, /\{@body/);
+  assert.match(normalized, /\{#each/);
+  assert.equal(extracted.blocks.length, 1);
+  assert.doesNotMatch(extracted.blocks[0].markup, />A</);
+  const rendered = rich.renderBlock(extracted.blocks[0].ast, (value) => String(value).trim());
+  assert.match(rendered, />A</);
+});
+
 test("renders responsive grids, nested surfaces, and the newer icon names", () => {
   const rich = loadRichMarkup();
   const source = `<box border radius="lg" padding={3} gap={3}>
