@@ -4,7 +4,7 @@
   window.__cgoInstalled = true;
   const CGO = (globalThis.__CGO ||= {});
   CGO.PAGE_BOOTSTRAP_VERSION = "6";
-  CGO.PAGE_HOOK_VERSION = "9";
+  CGO.PAGE_HOOK_VERSION = "10";
   CGO.PAGE_MAIN_HOOK_ID = "cgo-page-hook-script";
   // Keep viewer payloads reloadable for 24 hours unless this hardcoded switch is enabled.
   CGO.VIEWER_DELETE_AFTER_RENDER = false;
@@ -87,9 +87,12 @@
 
   CGO.SETTING_STORAGE_KEY = "cgo_settings";
   const CONVERSATION_STRUCTURE_BASELINES = Object.freeze({
-    nodeCount: 2700,
-    turnCount: 1640,
-    autoAdjustScore: 5170,
+    // A conversation was observed reaching its server-side limit near these
+    // values in November 2026. This is a conservative advisory reference, not
+    // a universal limit: other conversations can continue well beyond it.
+    nodeCount: 1525,
+    turnCount: 1004,
+    autoAdjustScore: 3362,
   });
   const CONVERSATION_STRUCTURE_THRESHOLDS = Object.freeze({
     level1: 0.7,
@@ -283,6 +286,9 @@
     );
     const turnCount = Number(stats?.turnCount || 0);
     const autoAdjustScore = Number(stats?.autoAdjustScore || 0);
+    const explicitReplyLimit =
+      stats?.conversationTooLarge === true ||
+      stats?.conversationLimitCode === "conversation_too_large";
     const ratios = [
       nodeCount > 0
         ? nodeCount / CONVERSATION_STRUCTURE_BASELINES.nodeCount
@@ -296,7 +302,26 @@
     ].filter((value) => Number.isFinite(value) && value > 0)
       .sort((left, right) => left - right);
 
-    if (!ratios.length) return null;
+    if (!ratios.length) {
+      if (!explicitReplyLimit) return null;
+      return {
+        nodeCount,
+        turnCount,
+        autoAdjustScore,
+        ratio: 0,
+        progressPercent: 100,
+        level: 3,
+        directFailureSignal: true,
+        abnormalCompletion: false,
+        replyLimitReached: true,
+        streamIncomplete: stats?.streamIncomplete === true,
+        streamError: stats?.streamError === true,
+        latestAssistantPersisted:
+          typeof stats?.latestAssistantPersisted === "boolean"
+            ? stats.latestAssistantPersisted
+            : null,
+      };
+    }
 
     const middle = Math.floor(ratios.length / 2);
     const ratio = ratios.length % 2
@@ -306,6 +331,7 @@
       stats?.streamDone === true &&
       stats?.streamCompletedNormally === false &&
       ratio >= CONVERSATION_STRUCTURE_THRESHOLDS.level2;
+    const replyLimitReached = explicitReplyLimit;
     const longEnoughForFailureSignal =
       ratio >= CONVERSATION_STRUCTURE_THRESHOLDS.level1;
     const directFailureSignal =
@@ -314,6 +340,7 @@
         stats?.streamIncomplete === true ||
         stats?.streamError === true ||
         stats?.latestAssistantPersisted === false ||
+        replyLimitReached ||
         abnormalCompletion
       );
     let level = 0;
@@ -334,6 +361,7 @@
       level,
       directFailureSignal,
       abnormalCompletion,
+      replyLimitReached,
       streamIncomplete: stats?.streamIncomplete === true,
       streamError: stats?.streamError === true,
       latestAssistantPersisted:
@@ -351,7 +379,11 @@
    */
   function getProjectGuideProfileKey(stats = null) {
     const structure = getConversationStructureRiskDetails(stats);
-    if (structure) return "structure-v1:2700:1640:5170";
+    if (structure) {
+      return `structure-v2:1525:1004:3362${
+        structure.replyLimitReached ? ":reply-limit" : ""
+      }`;
+    }
 
     const risk = getContextRiskDetails(stats);
     if (!risk) return "legacy";

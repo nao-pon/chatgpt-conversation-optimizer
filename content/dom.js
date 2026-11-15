@@ -1205,6 +1205,35 @@
       return;
     }
 
+    if (data.type === "conversationLimitReached") {
+      if (data.code !== "conversation_too_large") return;
+
+      const routeConversationId = CGO.getConversationIdFromLocation?.() || "";
+      const conversationId = data.conversationId || routeConversationId;
+      if (!conversationId || conversationId !== routeConversationId) return;
+
+      const previous =
+        CGO.STATE.projectGuide?.conversationId === conversationId
+          ? CGO.STATE.projectGuide
+          : null;
+      CGO.STATE.projectGuide = {
+        conversationId,
+        projectName: previous?.projectName || "",
+        stats: {
+          ...(previous?.stats || {}),
+          conversationTooLarge: true,
+          conversationLimitCode: data.code,
+          conversationLimitMessage: String(data.message || ""),
+        },
+        level: 3,
+      };
+
+      CGO.updateExportButtonVisibility?.(true);
+      void CGO.updateProjectGuideVisibility?.();
+      void CGO.updateProjectGuideAlertVisibility?.();
+      return;
+    }
+
     if (data.type === "conversationHeadMeta") {
       if (!isDomPruningEnabled()) return;
       if (data.conversationId &&

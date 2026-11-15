@@ -538,10 +538,10 @@ test("migration prompt fallback preserves a ProseMirror paragraph", () => {
   assert.equal(events[0].data, prompt);
 });
 
-test("project guide ZIP button shows progress, completion, and retry state", async () => {
-  let clickZip;
+test("project guide handoff ZIP button shows progress, completion, and retry state", async () => {
+  let clickHandoff;
   let mountedGuide = null;
-  const zipButton = {
+  const handoffButton = {
     dataset: {},
     textContent: "",
     title: "",
@@ -550,7 +550,7 @@ test("project guide ZIP button shows progress, completion, and retry state", asy
     setAttribute() {},
     querySelector() { return null; },
     addEventListener(type, listener) {
-      if (type === "click") clickZip = listener;
+      if (type === "click") clickHandoff = listener;
     },
   };
   const migrateButton = { textContent: "", addEventListener() {} };
@@ -566,7 +566,7 @@ test("project guide ZIP button shows progress, completion, and retry state", asy
     querySelector(selector) {
       return {
         ".cgo-project-guide-migrate": migrateButton,
-        ".cgo-project-guide-zip": zipButton,
+        ".cgo-project-guide-handoff": handoffButton,
         ".cgo-project-guide-hide": hideButton,
         ".cgo-project-guide-title": title,
         ".cgo-project-guide-body": body,
@@ -593,7 +593,7 @@ test("project guide ZIP button shows progress, completion, and retry state", asy
   CGO.getConversationIdFromLocation = () => "conversation-1";
   CGO.isProjectGuideDismissed = async () => false;
   CGO.t = (key) => ({
-    zip_download_button: "Save as ZIP",
+    handoff_zip_button: "Save handoff ZIP",
     hide_button: "Hide",
     exporting: "Exporting...",
     export_retry: "Retry",
@@ -605,25 +605,94 @@ test("project guide ZIP button shows progress, completion, and retry state", asy
 
   let finishExport;
   let receivedButton;
-  CGO.exportCurrentConversationAsZip = (button) => {
+  CGO.exportCurrentConversationAsHandoffZip = (button) => {
     receivedButton = button;
     CGO.setToolbarButtonText(button, "Loading history...");
     return new Promise((resolve) => { finishExport = resolve; });
   };
-  const pending = clickZip();
-  assert.equal(receivedButton, zipButton);
-  assert.equal(zipButton.disabled, true);
-  assert.equal(zipButton.textContent, "Loading history...");
+  const pending = clickHandoff();
+  assert.equal(receivedButton, handoffButton);
+  assert.equal(handoffButton.disabled, true);
+  assert.equal(handoffButton.textContent, "Loading history...");
   finishExport();
   await pending;
-  assert.equal(zipButton.disabled, false);
-  assert.equal(zipButton.textContent, "Save as ZIP");
+  assert.equal(handoffButton.disabled, false);
+  assert.equal(handoffButton.textContent, "Save handoff ZIP");
 
-  CGO.exportCurrentConversationAsZip = async () => {
-    throw new Error("ZIP download failed");
+  CGO.exportCurrentConversationAsHandoffZip = async () => {
+    throw new Error("Handoff ZIP download failed");
   };
-  await clickZip();
-  assert.equal(zipButton.disabled, false);
-  assert.equal(zipButton.textContent, "Retry");
-  assert.equal(zipButton.title, "ZIP download failed");
+  await clickHandoff();
+  assert.equal(handoffButton.disabled, false);
+  assert.equal(handoffButton.textContent, "Retry");
+  assert.equal(handoffButton.title, "Handoff ZIP download failed");
+});
+
+test("reply-limit guide hides the unusable migration action and promotes handoff ZIP", async () => {
+  let mountedGuide = null;
+  const migrateButton = { textContent: "", hidden: false, addEventListener() {} };
+  const handoffButton = {
+    dataset: {},
+    textContent: "",
+    title: "",
+    classList: { add() {}, remove() {} },
+    setAttribute() {},
+    addEventListener() {},
+  };
+  const hideButton = { textContent: "", addEventListener() {} };
+  const title = { textContent: "" };
+  const body = { textContent: "" };
+  const headerActions = { after(guide) { mountedGuide = guide; } };
+  const guide = {
+    dataset: {},
+    hidden: true,
+    querySelector(selector) {
+      return {
+        ".cgo-project-guide-migrate": migrateButton,
+        ".cgo-project-guide-handoff": handoffButton,
+        ".cgo-project-guide-hide": hideButton,
+        ".cgo-project-guide-title": title,
+        ".cgo-project-guide-body": body,
+      }[selector] || null;
+    },
+  };
+  const document = {
+    getElementById(id) {
+      if (id === "conversation-header-actions") return headerActions;
+      if (id === "cgo-project-guide") return mountedGuide;
+      return null;
+    },
+    createElement() { return guide; },
+  };
+  const CGO = loadUi(document);
+  CGO.STATE = {
+    projectGuide: {
+      conversationId: "conversation-1",
+      projectName: "Project",
+      stats: { mappingCount: 1525 },
+      level: 3,
+    },
+  };
+  CGO.getConversationIdFromLocation = () => "conversation-1";
+  CGO.isProjectGuideDismissed = async () => false;
+  CGO.getConversationStructureRiskDetails = () => ({
+    replyLimitReached: true,
+  });
+  CGO.t = (key) => ({
+    migration_prompt_button: "Request migration prompt",
+    handoff_zip_button: "Save handoff ZIP",
+    hide_button: "Hide",
+    reply_limit_reached_title: "Reply limit reached",
+    reply_limit_reached_body: "Extract the handoff ZIP and attach its Markdown files.",
+  })[key] || key;
+
+  await CGO.updateProjectGuideVisibility();
+
+  assert.equal(guide.hidden, false);
+  assert.equal(guide.dataset.replyLimitReached, "true");
+  assert.equal(migrateButton.hidden, true);
+  assert.equal(handoffButton.textContent, "Save handoff ZIP");
+  assert.equal(handoffButton.dataset.baseTitle, "Save handoff ZIP");
+  assert.equal(title.textContent, "Reply limit reached");
+  assert.equal(body.textContent, "Extract the handoff ZIP and attach its Markdown files.");
 });

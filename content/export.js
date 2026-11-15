@@ -1587,6 +1587,645 @@
     return `<div class="cgo-attachments">${items.join("\n")}</div>`;
   }
 
+  const HANDOFF_CHUNK_TARGET_TOKENS = 40000;
+
+  /**
+   * Estimate tokens for handoff chunking without sending text off-device.
+   * CJK characters are conservatively counted individually; other text uses
+   * a four-characters-per-token approximation.
+   *
+   * @param {string} text - Text to estimate.
+   * @returns {number} Conservative approximate token count.
+   */
+  function estimateHandoffTokenCount(text) {
+    let cjkCount = 0;
+    let otherCount = 0;
+
+    for (const character of String(text || "")) {
+      if (/[぀-ヿ㐀-鿿豈-﫿＀-￯]/u.test(character)) {
+        cjkCount += 1;
+      } else {
+        otherCount += 1;
+      }
+    }
+
+    return Math.max(1, Math.ceil(cjkCount + otherCount / 4));
+  }
+
+  /**
+   * Remove ChatGPT-only citation markers while preserving Markdown content.
+   *
+   * @param {string} text - Export message text.
+   * @returns {string} Handoff-safe Markdown text.
+   */
+  function cleanHandoffMarkdownText(text) {
+    return String(text || "")
+      .replace(/\uE200(?:filecite|cite)\uE202[\s\S]*?\uE201/g, "")
+      .replace(/\uE200(?:filenavlist|navlist|schedule|forecast|standing|finance)\uE202[\s\S]*?\uE201/g, "")
+      .replace(/<MemoryCite\b[^<>]*\/?>/gi, "")
+      .replace(/[\uE200\uE201\uE202]/g, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+
+  /**
+   * Format a normalized message as a self-contained Markdown section.
+   * Hidden thoughts and raw tool payloads are intentionally omitted.
+   *
+   * @param {Object} message - Normalized export message.
+   * @param {number} index - Zero-based message index.
+   * @returns {string} Markdown section.
+   */
+  function formatHandoffMessage(message, index) {
+    const role = message?.role === "user" ? "User" : "Assistant";
+    const messageId = String(message?.id || "").replace(/`/g, "");
+    const rawTimestamp = Number(message?.createTime);
+    const timestamp = Number.isFinite(rawTimestamp) && rawTimestamp > 0
+      ? new Date(rawTimestamp > 1000000000000 ? rawTimestamp : rawTimestamp * 1000).toISOString()
+      : "";
+    const text = cleanHandoffMarkdownText(
+      typeof message?.text === "string" ? message.text : message?.renderText
+    );
+    const lines = [
+      `## Message ${String(index + 1).padStart(6, "0")} — ${role}`,
+      "",
+    ];
+
+    if (messageId) lines.push(`- Message ID: \`${messageId}\``);
+    if (timestamp) lines.push(`- Time: ${timestamp}`);
+    if (messageId || timestamp) lines.push("");
+
+    lines.push(text || "_(No text content)_");
+
+    const images = Array.isArray(message?.images) ? message.images : [];
+    if (images.length) {
+      lines.push("", "### Images", "");
+      for (const image of images) {
+        const label = String(
+          image?.fileName || image?.title || image?.alt || image?.hint || "Image"
+        ).replace(/\s+/g, " ").trim();
+        const mimeType = String(image?.mimeType || "").trim();
+        lines.push(`- ${label}${mimeType ? ` (${mimeType})` : ""}`);
+      }
+    }
+
+    const attachments = Array.isArray(message?.attachments)
+      ? message.attachments.filter((attachment) => attachment?.kind !== "image")
+      : [];
+    if (attachments.length) {
+      lines.push("", "### Attachments", "");
+      for (const attachment of attachments) {
+        const name = String(attachment?.name || "Attachment").replace(/\s+/g, " ").trim();
+        const mimeType = String(attachment?.mimeType || "").trim();
+        const size = Number(attachment?.fileSizeBytes || 0);
+        const metadata = [mimeType, size > 0 ? `${size} bytes` : ""].filter(Boolean).join(", ");
+        lines.push(`- ${name}${metadata ? ` (${metadata})` : ""}`);
+      }
+    }
+
+    return `${lines.join("\n")}\n`;
+  }
+
+  /**
+   * Split normalized messages into Markdown chunks without splitting messages.
+   *
+   * @param {Object[]} messages - Normalized export messages.
+   * @param {number} [targetTokens=HANDOFF_CHUNK_TARGET_TOKENS] - Approximate target size.
+   * @returns {Object[]} Chunk descriptors.
+   */
+  function buildHandoffChunks(messages, targetTokens = HANDOFF_CHUNK_TARGET_TOKENS) {
+    const safeTarget = Math.max(1000, Math.round(Number(targetTokens) || HANDOFF_CHUNK_TARGET_TOKENS));
+    const chunks = [];
+    let current = null;
+
+    const flush = () => {
+      if (!current?.sections.length) return;
+      chunks.push(current);
+      current = null;
+    };
+
+    (messages || []).forEach((message, index) => {
+      const markdown = formatHandoffMessage(message, index);
+      const estimatedTokens = estimateHandoffTokenCount(markdown);
+
+      if (current && current.estimatedTokens + estimatedTokens > safeTarget) {
+        flush();
+      }
+
+      if (!current) {
+        current = {
+          startMessageIndex: index + 1,
+          endMessageIndex: index + 1,
+          startMessageId: String(message?.id || ""),
+          endMessageId: String(message?.id || ""),
+          messageCount: 0,
+          estimatedTokens: 0,
+          sections: [],
+        };
+      }
+
+      current.sections.push(markdown);
+      current.endMessageIndex = index + 1;
+      current.endMessageId = String(message?.id || "");
+      current.messageCount += 1;
+      current.estimatedTokens += estimatedTokens;
+    });
+
+    flush();
+    return chunks;
+  }
+
+  /**
+   * Build compact asset metadata without signed URLs or embedded media.
+   *
+   * @param {Object[]} messages - Normalized export messages.
+   * @returns {Object[]} Asset metadata entries.
+   */
+  function collectHandoffAttachments(messages) {
+    const entries = [];
+    const seen = new Set();
+
+    const add = (entry) => {
+      const key = [
+        entry.type,
+        entry.messageId,
+        entry.fileId,
+        entry.name,
+        entry.mimeType,
+      ].join(":");
+      if (seen.has(key)) return;
+      seen.add(key);
+      entries.push(entry);
+    };
+
+    (messages || []).forEach((message, index) => {
+      for (const image of message?.images || []) {
+        add({
+          type: "image",
+          messageIndex: index + 1,
+          messageId: String(message?.id || ""),
+          name: String(image?.fileName || image?.title || image?.alt || "Image"),
+          mimeType: String(image?.mimeType || ""),
+          sizeBytes: Number(image?.fileSizeBytes || 0),
+          fileId: String(image?.fileId || ""),
+          description: String(image?.hint || image?.alt || ""),
+        });
+      }
+
+      for (const attachment of message?.attachments || []) {
+        if (attachment?.kind === "image") continue;
+        add({
+          type: "attachment",
+          messageIndex: index + 1,
+          messageId: String(message?.id || ""),
+          name: String(attachment?.name || "Attachment"),
+          mimeType: String(attachment?.mimeType || ""),
+          sizeBytes: Number(attachment?.fileSizeBytes || 0),
+          fileId: String(attachment?.fileId || ""),
+          kind: String(attachment?.kind || "attachment"),
+        });
+      }
+    });
+
+    return entries;
+  }
+
+  /**
+   * Match agent-generated handoff summaries, including browser-added duplicate
+   * suffixes such as `handoff-summary (1).md`.
+   *
+   * @param {string} name - Attachment filename.
+   * @returns {boolean} Whether the filename is a handoff summary candidate.
+   */
+  function isHandoffSummaryFileName(name) {
+    let decodedName = String(name || "").trim();
+    try {
+      decodedName = decodeURIComponent(decodedName);
+    } catch {
+      // Keep the original filename when it is not URI-encoded.
+    }
+    return /^handoff-summary(?:\s*[\(（]\d+[\)）])?\.md$/i.test(decodedName);
+  }
+
+  /**
+   * Find the newest handoff summary attached by an assistant response.
+   * User uploads are deliberately excluded: the reusable checkpoint is the
+   * file produced by the agent after processing the previous handoff ZIP.
+   *
+   * @param {Object[]} messages - Normalized export messages.
+   * @returns {?{message:Object,attachment:Object}} Latest matching attachment.
+   */
+  function findLatestHandoffSummaryAttachment(messages) {
+    for (let index = (messages || []).length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message?.role !== "assistant") continue;
+
+      const attachments = Array.isArray(message?.attachments)
+        ? message.attachments
+        : [];
+      for (let attachmentIndex = attachments.length - 1; attachmentIndex >= 0; attachmentIndex -= 1) {
+        const attachment = attachments[attachmentIndex];
+        if (isHandoffSummaryFileName(attachment?.name)) {
+          return { message, attachment };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Compute a SHA-256 digest when Web Crypto is available.
+   *
+   * @param {ArrayBuffer|ArrayBufferView} bytes - Exact bytes to hash.
+   * @returns {Promise<string>} Lowercase hexadecimal digest or an empty string.
+   */
+  async function sha256Bytes(bytes) {
+    try {
+      if (!globalThis.crypto?.subtle) return "";
+      const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+      return Array.from(new Uint8Array(digest))
+        .map((value) => value.toString(16).padStart(2, "0"))
+        .join("");
+    } catch {
+      return "";
+    }
+  }
+
+  /**
+   * Compute SHA-256 for UTF-8 text.
+   *
+   * @param {string} text - Text to hash.
+   * @returns {Promise<string>} Lowercase hexadecimal digest or an empty string.
+   */
+  async function sha256Text(text) {
+    if (typeof TextEncoder === "undefined") return "";
+    return sha256Bytes(new TextEncoder().encode(String(text || "")));
+  }
+
+  /**
+   * Compute SHA-256 over the exact bytes contained in a finalized Blob.
+   *
+   * @param {Blob} blob - Final archive Blob.
+   * @returns {Promise<string>} Lowercase hexadecimal digest or an empty string.
+   */
+  async function sha256Blob(blob) {
+    if (!blob?.arrayBuffer) return "";
+    return sha256Bytes(await blob.arrayBuffer());
+  }
+
+  /**
+   * Format a standard sha256sum-compatible sidecar line.
+   *
+   * @param {string} digest - Lowercase hexadecimal SHA-256 digest.
+   * @param {string} fileName - Hashed archive filename.
+   * @returns {string} Sidecar file contents.
+   */
+  function buildSha256Sidecar(digest, fileName) {
+    return `${String(digest || "").toLowerCase()}  ${String(fileName || "")}\n`;
+  }
+
+  /**
+   * Trigger a browser download for an in-memory Blob.
+   *
+   * @param {Blob} blob - Download contents.
+   * @param {string} fileName - Browser download filename.
+   */
+  function downloadBlob(blob, fileName) {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = fileName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+
+  /**
+   * Resolve and read the newest agent-generated handoff summary.
+   * Failure is non-fatal: a new package can still be generated without a
+   * previous checkpoint.
+   *
+   * @param {Object[]} messages - Normalized export messages.
+   * @param {string} conversationId - Active conversation id.
+   * @param {string} [authorization=""] - Optional authorization header.
+   * @returns {Promise<?Object>} Imported summary metadata and content.
+   */
+  async function loadLatestHandoffSummary(
+    messages,
+    conversationId,
+    authorization = ""
+  ) {
+    const match = findLatestHandoffSummaryAttachment(messages);
+    if (!match) return null;
+
+    const { message, attachment } = match;
+    try {
+      await CGO.resolveAttachmentUrlsWithDownloadApi(
+        [{ id: message.id, attachments: [attachment] }],
+        conversationId,
+        authorization,
+        null,
+        1
+      );
+      if (!attachment.url) return null;
+
+      const blob = await fetchBlobWithAuth(attachment.url, "attachment", 30000);
+      const maxSummaryBytes = 2 * 1024 * 1024;
+      if (blob.size > maxSummaryBytes) {
+        CGO.log("[warn] handoff summary is too large to import", {
+          name: attachment.name,
+          size: blob.size,
+        });
+        return null;
+      }
+
+      const content = (await blob.text()).replace(/^\uFEFF/, "").trim();
+      if (!content || content.includes("\u0000")) return null;
+
+      return {
+        content: `${content}\n`,
+        originalName: String(attachment.name || "handoff-summary.md"),
+        sourceMessageId: String(message.id || ""),
+        sizeBytes: blob.size,
+          contentSha256: await sha256Text(content),
+      };
+    } catch (error) {
+      CGO.log("[warn] failed to import previous handoff summary", {
+        name: attachment?.name || "",
+        error: String(error),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Assemble all text files for a conversation handoff archive.
+   *
+   * @param {Object} options - Handoff metadata and normalized messages.
+   * @returns {{readme:string,manifest:Object,attachments:Object[],chunks:Object[]}} Package files.
+   */
+  function buildConversationHandoffFiles(options = {}) {
+    const messages = Array.isArray(options.messages) ? options.messages : [];
+    const chunks = buildHandoffChunks(messages, options.targetTokens);
+    const exportedAt = String(options.exportedAt || new Date().toISOString());
+    const title = String(options.title || "ChatGPT Conversation");
+    const priorSummary = options.priorSummary?.content
+      ? {
+          content: String(options.priorSummary.content),
+          originalName: String(options.priorSummary.originalName || "handoff-summary.md"),
+          sourceMessageId: String(options.priorSummary.sourceMessageId || ""),
+          sizeBytes: Number(options.priorSummary.sizeBytes || 0),
+          contentSha256: String(
+            options.priorSummary.contentSha256 || options.priorSummary.sha256 || ""
+          ),
+        }
+      : null;
+    const priorGenerationMatch = priorSummary?.content.match(
+      /^generation:\s*(\d+)\s*$/im
+    );
+    const nextSummaryGeneration = priorGenerationMatch
+      ? Math.max(1, Number(priorGenerationMatch[1]) + 1)
+      : 1;
+    const firstUserMessage = messages.find((message) => message?.role === "user");
+    const firstRequestText = cleanHandoffMarkdownText(
+      firstUserMessage?.text || firstUserMessage?.renderText || ""
+    );
+    const firstRequest = firstRequestText.length > 8000
+      ? `${firstRequestText.slice(0, 8000)}\n\n_(truncated; see the first chunk)_`
+      : firstRequestText;
+
+    const chunkFiles = chunks.map((chunk, index) => {
+      const file = `chunks/${String(index + 1).padStart(3, "0")}.md`;
+      const header = [
+        `# ${title} — Chunk ${index + 1}/${chunks.length}`,
+        "",
+        `Messages: ${chunk.startMessageIndex}–${chunk.endMessageIndex}`,
+        `Estimated tokens: ${chunk.estimatedTokens}`,
+        "",
+        "---",
+        "",
+      ].join("\n");
+      return { ...chunk, file, markdown: header + chunk.sections.join("\n") };
+    });
+
+    const manifest = {
+      format: "cgo-conversation-handoff",
+      version: 1,
+      exportedAt,
+      conversation: {
+        id: String(options.conversationId || ""),
+        title,
+        projectName: String(options.projectName || ""),
+        url: String(options.webUrl || ""),
+      },
+      messageCount: messages.length,
+      estimatedTokens: chunkFiles.reduce((sum, chunk) => sum + chunk.estimatedTokens, 0),
+      chunkTargetTokens: Math.max(
+        1000,
+        Math.round(Number(options.targetTokens) || HANDOFF_CHUNK_TARGET_TOKENS)
+      ),
+      chunks: chunkFiles.map((chunk) => ({
+        file: chunk.file,
+        startMessageIndex: chunk.startMessageIndex,
+        endMessageIndex: chunk.endMessageIndex,
+        startMessageId: chunk.startMessageId,
+        endMessageId: chunk.endMessageId,
+        messageCount: chunk.messageCount,
+        estimatedTokens: chunk.estimatedTokens,
+      })),
+      notes: {
+        thoughtsIncluded: false,
+        embeddedMediaIncluded: false,
+        signedUrlsIncluded: false,
+      },
+      priorSummary: priorSummary
+        ? {
+            file: "prior/handoff-summary.md",
+            originalName: priorSummary.originalName,
+            sourceMessageId: priorSummary.sourceMessageId,
+            sizeBytes: priorSummary.sizeBytes,
+            contentSha256: priorSummary.contentSha256,
+          }
+        : null,
+      nextSummaryGeneration,
+    };
+
+    const readme = `# Instructions for the Receiving Agent
+
+This ZIP is a conversation handoff package produced by Conversation Optimizer for ChatGPT. Extract the ZIP and handle its contents as prior-conversation context. These instructions describe the required handoff workflow.
+
+## Required workflow
+
+1. Read \`manifest.json\` to understand the available chunks and their order.
+2. If \`prior/handoff-summary.md\` exists, read it first as the cumulative checkpoint from an earlier handoff.
+3. Read the available Markdown files under \`chunks/\`. For a complete reconstruction, process them in numeric order. If only some chunks are initially available, use the manifest to identify exactly which additional chunk is needed.
+4. Reconcile the prior summary with the chunk evidence. Preserve established objectives, decisions, rationale, user preferences, constraints, current state, and unfinished work. Do not silently discard or invent information.
+5. Before continuing the substantive task, include the updated cumulative handoff summary in your response and attach the same content as a downloadable Markdown file named \`handoff-summary.md\`. If file creation is unavailable, provide the complete summary in a saveable Markdown code block.
+6. Respond in the language the user normally uses in the conversation, unless the user explicitly requests another language. The summary file may use that same language while retaining the English YAML field names shown below.
+7. If anything is ambiguous, contradictory, missing, or requires additional information from the user, state that clearly in the response and ask focused questions. If another chunk is required, identify its exact filename.
+8. After completing the handoff summary and resolving any necessary questions, continue the user's unfinished work.
+
+## handoff-summary.md format
+
+Update it as one cumulative summary of the current correct state, rather than appending another summary. Do not remove existing constraints or unfinished work without evidence.
+
+~~~md
+---
+format: cgo-handoff-summary
+version: 1
+generation: ${nextSummaryGeneration}
+updated_at: ISO 8601 timestamp
+---
+
+# Conversation Handoff Summary
+
+## Objective
+## Important background
+## User preferences and non-negotiable constraints
+## Decisions and rationale
+## Current state
+## Completed work
+## Unfinished work
+## Related files and artifacts
+## Open questions
+## Changes since the previous handoff
+## First action for the next agent
+~~~
+
+## Conversation
+
+- Title: ${title}
+- Project: ${String(options.projectName || "") || "None"}
+- Conversation ID: ${String(options.conversationId || "")}
+- Original URL: ${String(options.webUrl || "")}
+- Exported at: ${exportedAt}
+- Messages: ${messages.length}
+- Chunks: ${chunkFiles.length}
+
+## First request
+
+${firstRequest || "_(Unavailable)_"}
+
+## Notes
+
+- Markdown contains visible user and assistant text.
+- Hidden thoughts, Base64 images, expiring signed URLs, and attachment binaries are excluded.
+- Image and attachment metadata is stored in \`attachments.json\`.
+- The latest agent-generated \`handoff-summary.md\` in this conversation, including numbered duplicate filenames, is stored as \`prior/handoff-summary.md\` when it can be retrieved.
+- The SHA-256 sidecar downloaded beside this ZIP is calculated over the final ZIP byte sequence. It is intentionally external because embedding the digest would change the archive bytes.
+`;
+
+    return {
+      readme,
+      manifest,
+      attachments: collectHandoffAttachments(messages),
+      chunks: chunkFiles,
+      priorSummary,
+    };
+  }
+
+  /**
+   * Export a model-oriented, chunked conversation handoff ZIP.
+   *
+   * @param {HTMLButtonElement} exportButton - Button used for progress text.
+   * @returns {Promise<void>} Resolves after the download is triggered.
+   */
+  async function exportCurrentConversationAsHandoffZip(exportButton) {
+    if (typeof JSZip === "undefined") {
+      throw new Error("JSZip is not loaded");
+    }
+
+    const conversationId = CGO.getConversationIdFromLocation();
+    if (!conversationId) throw new Error("conversationId not found");
+
+    const conversationData = await CGO.getConversationForExport?.(conversationId, {
+      onHistoryProgress: ({ messageCount }) => {
+        if (exportButton) {
+          CGO.setToolbarButtonText(
+            exportButton,
+            CGO.t("export_conversation_history_progress", [messageCount])
+          );
+        }
+      },
+    }) || await CGO.getConversationFromCache(conversationId);
+    if (!conversationData) throw new Error("conversation cache not found");
+
+    if (exportButton) CGO.setToolbarButtonText(exportButton, CGO.t("exporting"));
+
+    const mapping = conversationData.mapping || {};
+    const currentNode = conversationData.current_node || null;
+    const chain = CGO.buildExportChain(mapping, currentNode);
+    const baseMessages = CGO.normalizeMessagesForExport(chain, mapping);
+    const messages = CGO.mergeMessagesWithDomAssets(baseMessages, CGO.buildDomAssetMap());
+    const authorization = await CGO.getLastAuthorizationFromPage();
+    const priorSummary = await loadLatestHandoffSummary(
+      messages,
+      conversationId,
+      authorization
+    );
+    const conversationTitle = String(conversationData?.title || "").trim() || "ChatGPT Conversation";
+    const fallbackProjectName = CGO.extractProjectNameFromDocumentTitle(
+      document.title,
+      conversationTitle
+    );
+    const projectName = String(conversationData?.project_name || "").trim() || fallbackProjectName;
+    const title = projectName ? `${projectName} / ${conversationTitle}` : conversationTitle;
+    const downloadName = CGO.buildSafeFilename(`${title} handoff`, "zip");
+    const sha256SidecarName = `${downloadName}.sha256`;
+    const projectGizmoId =
+      CGO.getProjectGizmoIdFromLocation?.() ||
+      String(conversationData?.gizmo_id || conversationData?.conversation_template_id || "").trim();
+    const webUrl = CGO.buildChatgptWebConversationUrl?.(
+      conversationId,
+      projectGizmoId,
+      /^https:\/\/(chatgpt\.com|chat\.openai\.com)$/i.test(location.origin)
+        ? location.origin
+        : "https://chatgpt.com"
+    ) || "";
+    const files = buildConversationHandoffFiles({
+      conversationId,
+      title,
+      projectName,
+      webUrl,
+      language: CGO.DETECTION_LANG || "en",
+      messages,
+      priorSummary,
+    });
+    files.manifest.integrity = {
+      algorithm: "SHA-256",
+      scope: "final ZIP byte sequence",
+      sidecarFile: sha256SidecarName,
+      digestEmbedded: false,
+    };
+    const zip = new JSZip();
+
+    zip.file("README.md", files.readme);
+    zip.file("manifest.json", JSON.stringify(files.manifest, null, 2));
+    zip.file("attachments.json", JSON.stringify(files.attachments, null, 2));
+    if (files.priorSummary?.content) {
+      zip.file("prior/handoff-summary.md", files.priorSummary.content);
+    }
+    for (const chunk of files.chunks) {
+      zip.file(chunk.file, chunk.markdown);
+    }
+
+    const zipBlob = await zip.generateAsync({ type: "blob" });
+    const archiveSha256 = await sha256Blob(zipBlob);
+    downloadBlob(zipBlob, downloadName);
+
+    if (archiveSha256) {
+      const sidecarBlob = new Blob(
+        [buildSha256Sidecar(archiveSha256, downloadName)],
+        { type: "text/plain;charset=utf-8" }
+      );
+      downloadBlob(sidecarBlob, sha256SidecarName);
+    } else {
+      CGO.log("[warn] Web Crypto unavailable; ZIP SHA-256 sidecar was not created");
+    }
+  }
+
   /**
    * Export the current conversation as a ZIP archive with HTML, images, and attachments.
    *
@@ -1776,10 +2415,19 @@
   }
 
   CGO.buildAssistantDomImagePools = buildAssistantDomImagePools;
+  CGO.buildConversationHandoffFiles = buildConversationHandoffFiles;
+  CGO.buildHandoffChunks = buildHandoffChunks;
+  CGO.buildSha256Sidecar = buildSha256Sidecar;
   CGO.buildDomAssetMap = buildDomAssetMap;
   CGO.buildDomImageUrlIndex = buildDomImageUrlIndex;
   CGO.embedImagesInMessages = embedImagesInMessages;
   CGO.exportCurrentConversationAsZip = exportCurrentConversationAsZip;
+  CGO.exportCurrentConversationAsHandoffZip = exportCurrentConversationAsHandoffZip;
+  CGO.estimateHandoffTokenCount = estimateHandoffTokenCount;
+  CGO.findLatestHandoffSummaryAttachment = findLatestHandoffSummaryAttachment;
+  CGO.isHandoffSummaryFileName = isHandoffSummaryFileName;
+  CGO.loadLatestHandoffSummary = loadLatestHandoffSummary;
+  CGO.sha256Blob = sha256Blob;
   CGO.extractImageAssetsFromContentReferences = extractImageAssetsFromContentReferences;
   CGO.extractProjectNameFromDocumentTitle = extractProjectNameFromDocumentTitle;
   CGO.extractPromptHintsFromMessage = extractPromptHintsFromMessage;

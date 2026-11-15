@@ -589,6 +589,10 @@
           </select>
         </label>
 
+        <div class="cgo-settings-export-actions">
+          <button type="button" class="cgo-settings-handoff-btn">${CGO.escapeHtml(CGO.t("handoff_zip_button") || "Save handoff ZIP")}</button>
+        </div>
+
         <div class="cgo-settings-actions">
           <button type="button" class="cgo-settings-save-btn">${CGO.escapeHtml(CGO.t("save_button"))}</button>
           <button type="button" class="cgo-settings-cancel-btn">${CGO.escapeHtml(CGO.t("cancel_button"))}</button>
@@ -604,8 +608,13 @@
     const htmlImagesInput = panel.querySelector("#cgo-setting-html-include-images");
     const debugEnabledInput = panel.querySelector("#cgo-setting-debug-enabled");
     const debugLevelInput = panel.querySelector("#cgo-setting-debug-level");
+    const handoffBtn = panel.querySelector(".cgo-settings-handoff-btn");
     const saveBtn = panel.querySelector(".cgo-settings-save-btn");
     const cancelBtn = panel.querySelector(".cgo-settings-cancel-btn");
+
+    handoffBtn.dataset.baseTitle = handoffBtn.textContent;
+    handoffBtn.dataset.cgoExportKind = "handoff";
+    handoffBtn.title = handoffBtn.textContent;
 
     /**
      * Update the auto-adjust label text to reflect the current effective keepDomMessages value.
@@ -714,6 +723,13 @@
       syncDomOptimizationVisibility();
       syncDebugLevelEnabledState();
       syncCustomContextLimitVisibility();
+      const hasConversation = !!CGO.getConversationIdFromLocation?.();
+      handoffBtn.disabled = !hasConversation;
+      handoffBtn.title = hasConversation
+        ? handoffBtn.dataset.baseTitle
+        : (CGO.t("handoff_zip_no_conversation") || "Open a conversation first");
+      handoffBtn.setAttribute("aria-label", handoffBtn.title);
+      handoffBtn.setAttribute("aria-disabled", hasConversation ? "false" : "true");
       await updateAutoAdjustLabel();
     }
 
@@ -776,6 +792,20 @@
       const saved = await savePanelSettings();
       if (saved) {
         void CGO.closeSettingsPanel?.({ save: false });
+      }
+    });
+
+    handoffBtn.addEventListener("click", async () => {
+      if (!CGO.getConversationIdFromLocation?.()) return;
+      try {
+        handoffBtn.title = handoffBtn.dataset.baseTitle;
+        setExportButtonState(handoffBtn, "loading");
+        await CGO.exportCurrentConversationAsHandoffZip(handoffBtn);
+        setExportButtonState(handoffBtn, "idle");
+      } catch (error) {
+        CGO.log("[error] settings handoff export failed", String(error));
+        setExportButtonState(handoffBtn, "export_retry");
+        handoffBtn.title = String(error?.message || error);
       }
     });
 
@@ -1045,19 +1075,20 @@
          </div>
          <div class="cgo-project-guide-actions">
            <button type="button" class="cgo-project-guide-migrate"></button>
-           <button type="button" class="cgo-project-guide-zip"></button>
+           <button type="button" class="cgo-project-guide-handoff"></button>
            <button type="button" class="cgo-project-guide-hide"></button>
          </div>
       `;
 
     const migrateBtn = guide.querySelector(".cgo-project-guide-migrate");
-    const zipBtn = guide.querySelector(".cgo-project-guide-zip");
+    const handoffBtn = guide.querySelector(".cgo-project-guide-handoff");
     const hideBtn = guide.querySelector(".cgo-project-guide-hide");
 
     migrateBtn.textContent = CGO.t("migration_prompt_button") || "Yes";
-    zipBtn.textContent = CGO.t("zip_download_button") || "Save as ZIP";
-    zipBtn.dataset.baseTitle = zipBtn.textContent;
-    zipBtn.title = zipBtn.textContent;
+    handoffBtn.textContent = CGO.t("handoff_zip_button") || "Save handoff ZIP";
+    handoffBtn.dataset.baseTitle = handoffBtn.textContent;
+    handoffBtn.dataset.cgoExportKind = "handoff";
+    handoffBtn.title = handoffBtn.textContent;
     hideBtn.textContent = CGO.t("hide_button") || "Hide";
 
     migrateBtn.addEventListener("click", async () => {
@@ -1091,16 +1122,16 @@
       }
     });
 
-    zipBtn.addEventListener("click", async () => {
+    handoffBtn.addEventListener("click", async () => {
       try {
-        zipBtn.title = zipBtn.dataset.baseTitle;
-        setExportButtonState(zipBtn, "loading");
-        await CGO.exportCurrentConversationAsZip(zipBtn);
-        setExportButtonState(zipBtn, "idle");
+        handoffBtn.title = handoffBtn.dataset.baseTitle;
+        setExportButtonState(handoffBtn, "loading");
+        await CGO.exportCurrentConversationAsHandoffZip(handoffBtn);
+        setExportButtonState(handoffBtn, "idle");
       } catch (error) {
-        CGO.log("[error] project guide zip export failed", String(error));
-        setExportButtonState(zipBtn, "export_retry");
-        zipBtn.title = String(error?.message || error);
+        CGO.log("[error] project guide handoff export failed", String(error));
+        setExportButtonState(handoffBtn, "export_retry");
+        handoffBtn.title = String(error?.message || error);
       }
     });
 
@@ -1143,6 +1174,12 @@
     }
 
     const structure = CGO.getConversationStructureRiskDetails?.(stats) || null;
+    if (structure?.replyLimitReached) {
+      return {
+        title: CGO.t("reply_limit_reached_title"),
+        body: CGO.t("reply_limit_reached_body"),
+      };
+    }
     if (!structure) {
       return {
         title: CGO.t("conversation_limit_warning_title"),
@@ -1173,7 +1210,12 @@
     const reference = risk
       ? `${formatTokens(risk.contextLimit)}${referenceSuffix}`
       : "";
-    const tokenMetrics = risk
+    const showTokenMetrics = !!(
+      risk &&
+      stats?.tokenConfidence === "medium" &&
+      risk.contextLimitSource !== "fallback"
+    );
+    const tokenMetrics = showTokenMetrics
       ? ` ${CGO.t("context_reference_metrics", [
         `${stats?.historyComplete === true ? "" : "≥"}${formatTokens(risk.safeTokenCount)}`,
         reference,
@@ -1253,12 +1295,21 @@
 
     const titleEl = guide.querySelector(".cgo-project-guide-title");
     const bodyEl = guide.querySelector(".cgo-project-guide-body");
+    const migrateBtn = guide.querySelector(".cgo-project-guide-migrate");
+    const handoffBtn = guide.querySelector(".cgo-project-guide-handoff");
+    const replyLimitReached = !!CGO.getConversationStructureRiskDetails?.(stats)
+      ?.replyLimitReached;
 
     const texts = getProjectGuideTexts({ level, projectName, stats });
     titleEl.textContent = texts.title;
     bodyEl.textContent = texts.body;
+    migrateBtn.hidden = replyLimitReached;
+    handoffBtn.textContent = CGO.t("handoff_zip_button") || "Save handoff ZIP";
+    handoffBtn.dataset.baseTitle = handoffBtn.textContent;
+    handoffBtn.title = handoffBtn.textContent;
 
     guide.dataset.level = String(level);
+    guide.dataset.replyLimitReached = replyLimitReached ? "true" : "false";
     guide.hidden = false;
     positionProjectGuide(guide);
     await CGO.updateProjectGuideAlertVisibility?.();
@@ -1538,6 +1589,32 @@
     margin-top: 12px;
   }
 
+  .cgo-settings-export-actions {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(255,255,255,0.1);
+  }
+
+  .cgo-settings-export-actions button {
+    width: 100%;
+    background: #f5f5f5;
+    color: #171717;
+    border: 1px solid #f5f5f5;
+    border-radius: 8px;
+    padding: 7px 10px;
+    cursor: pointer;
+    font-weight: 700;
+  }
+
+  .cgo-settings-export-actions button:hover {
+    background: #ffffff;
+  }
+
+  .cgo-settings-export-actions button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
   .cgo-settings-actions button {
     background: #2f2f2f;
     color: #f5f5f5;
@@ -1649,6 +1726,13 @@
 
   .cgo-project-guide-actions .cgo-project-guide-migrate:hover {
     background: #ffffff;
+  }
+
+  .cgo-project-guide[data-reply-limit-reached="true"] .cgo-project-guide-handoff {
+    background: #f5f5f5;
+    border-color: #f5f5f5;
+    color: #171717;
+    font-weight: 700;
   }
 
   .cgo-project-guide-actions button:disabled {

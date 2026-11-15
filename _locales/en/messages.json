@@ -252,25 +252,25 @@
     "message": "This conversation is getting long"
   },
   "context_risk_title_level2": {
-    "message": "Consider preparing a handoff soon"
+    "message": "This conversation is near a previously observed limit case"
   },
   "context_risk_title_level3": {
-    "message": "Continuing this conversation may cause the latest exchange to be lost"
+    "message": "An early handoff is recommended"
   },
   "context_risk_body_level1": {
     "message": "It may be useful to review and preserve important decisions."
   },
   "context_risk_body_level2": {
-    "message": "Creating a migration prompt now is recommended."
+    "message": "The actual limit varies by conversation. Consider preparing a migration prompt while replies are still available."
   },
   "context_risk_body_level3": {
-    "message": "Save the conversation and create a migration prompt as soon as possible."
+    "message": "This estimate cannot confirm that the limit has been reached. Save the conversation and create a migration prompt while replies are still available."
   },
   "context_risk_metrics": {
     "message": "Estimated cumulative conversation size: $1 / warning reference $2 tokens (model: $3, confidence: $4)."
   },
   "conversation_structure_metrics": {
-    "message": "Conversation structure estimate: $1% ($2 nodes)."
+    "message": "Compared with a previously observed limit case: $1% ($2 nodes)."
   },
   "context_reference_metrics": {
     "message": "Estimated cumulative conversation size: $1 / reference $2 tokens (confidence: $3)."
@@ -297,13 +297,25 @@
     "message": "unknown"
   },
   "migration_prompt_button": {
-    "message": "Yes"
+    "message": "Request migration prompt"
   },
   "migration_prompt_text": {
     "message": "This conversation is long enough that the latest exchange may be lost. I will start a new conversation, so please create a concise but complete migration prompt that preserves the objective, important background, decisions, constraints, current state, and unfinished work."
   },
   "migration_prompt_input_failed": {
     "message": "Could not find the ChatGPT prompt box"
+  },
+  "reply_limit_reached_title": {
+    "message": "This conversation may have reached its reply limit"
+  },
+  "reply_limit_reached_body": {
+    "message": "Save and extract the handoff ZIP, then attach the README, manifest, and required Markdown chunks to a new conversation."
+  },
+  "handoff_zip_button": {
+    "message": "Save handoff ZIP"
+  },
+  "handoff_zip_no_conversation": {
+    "message": "Open a conversation first"
   },
   "project_guide_title_level1": {
     "message": "This conversation is growing"

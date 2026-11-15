@@ -140,6 +140,30 @@ test("DOM pruning is disabled for paginated history and retained for legacy hist
   assert.equal(window.__CGO.STATE.domTrimState.omittedCount, 0);
   assert.equal(window.__CGO.isPaginatedHistoryActive(), true);
 
+  let guideRefreshes = 0;
+  let alertRefreshes = 0;
+  window.__CGO.updateProjectGuideVisibility = async () => {
+    guideRefreshes += 1;
+  };
+  window.__CGO.updateProjectGuideAlertVisibility = async () => {
+    alertRefreshes += 1;
+  };
+  postRuntimeMessage({
+    type: "conversationLimitReached",
+    conversationId: "conversation-1",
+    code: "conversation_too_large",
+    message: "Conversation length limit reached.",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(window.__CGO.STATE.projectGuide.level, 3);
+  assert.equal(window.__CGO.STATE.projectGuide.stats.conversationTooLarge, true);
+  assert.equal(
+    window.__CGO.STATE.projectGuide.stats.conversationLimitCode,
+    "conversation_too_large"
+  );
+  assert.equal(guideRefreshes, 1);
+  assert.equal(alertRefreshes, 1);
+
   activeConversationId = "conversation-2";
   window.__CGO.setActiveConversationHistoryMode("legacy", "conversation-2");
   window.__CGO.scheduleDomTrim(0);

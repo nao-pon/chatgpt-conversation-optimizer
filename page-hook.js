@@ -4,7 +4,7 @@
   // =========================================================
   // INSTALL GUARD / CONSTANTS / CONFIG / STATE
   // =========================================================
-  const PAGE_HOOK_VERSION = "9";
+  const PAGE_HOOK_VERSION = "10";
   const PAGE_BRIDGE_SECRET = "CGO_BRIDGE_" + Math.random().toString(36).slice(2, 15);
 
   if (window.__CGO_MAIN_HOOK_INSTALLED__) {
@@ -163,6 +163,25 @@
         source: "cgo-prune-runtime",
         type: "streamNotify",
         message
+      },
+      "*"
+    );
+  }
+
+  /**
+   * Notify the content layer that ChatGPT explicitly rejected a turn because
+   * the conversation reached its server-side size limit.
+   *
+   * @param {Object} detail - Error detail returned by the conversation endpoint.
+   */
+  function postConversationLimitReached(detail) {
+    window.postMessage(
+      {
+        source: "cgo-prune-runtime",
+        type: "conversationLimitReached",
+        conversationId: getConversationIdFromLocation() || "",
+        code: String(detail?.code || ""),
+        message: String(detail?.message || ""),
       },
       "*"
     );
@@ -7065,6 +7084,21 @@
     try {
       clonedResponse = orgResponse.clone();
     } catch {
+      return orgResponse;
+    }
+
+    // The current conversation endpoint returns a JSON 413 instead of an SSE
+    // stream after the server-side conversation limit is reached. Handle this
+    // before the streaming path attempts to parse the body as event-stream data.
+    if (isStreamingConversationRequest(url) && orgResponse.status === 413) {
+      try {
+        const errorPayload = await clonedResponse.json();
+        if (errorPayload?.detail?.code === "conversation_too_large") {
+          postConversationLimitReached(errorPayload.detail);
+        }
+      } catch (error) {
+        log.basic("failed to inspect conversation limit response", String(error));
+      }
       return orgResponse;
     }
 

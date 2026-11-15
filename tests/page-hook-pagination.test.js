@@ -115,6 +115,45 @@ function createPageHookHarness(fetchImpl) {
   return { context, window, postedMessages, idleCallbacks, requestCache };
 }
 
+test("conversation endpoint 413 publishes an explicit reply-limit event", async () => {
+  const harness = createPageHookHarness(async () => jsonResponse({}));
+  const payload = {
+    detail: {
+      code: "conversation_too_large",
+      message: "This conversation has reached its maximum length.",
+    },
+  };
+  const originalResponse = jsonResponse(payload, 413);
+
+  const returnedResponse = await harness.window.__CGO_MAIN_HOOK_API__.handleFetchResponse({
+    args: ["/backend-api/f/conversation"],
+    response: originalResponse,
+    url: "/backend-api/f/conversation",
+  });
+
+  assert.equal(returnedResponse, originalResponse);
+  assert.deepEqual(await returnedResponse.json(), payload);
+  const event = harness.postedMessages.find(
+    (message) => message.type === "conversationLimitReached"
+  );
+  assert.equal(event?.conversationId, "conversation-1");
+  assert.equal(event?.code, "conversation_too_large");
+  assert.equal(event?.message, payload.detail.message);
+
+  await harness.window.__CGO_MAIN_HOOK_API__.handleFetchResponse({
+    args: ["/backend-api/f/conversation"],
+    response: jsonResponse({ detail: { code: "different_error" } }, 413),
+    url: "/backend-api/f/conversation",
+  });
+  assert.equal(
+    harness.postedMessages.filter(
+      (message) => message.type === "conversationLimitReached"
+    ).length,
+    1,
+    "unrelated 413 responses must not trigger the handoff guide"
+  );
+});
+
 test("paginated ChatGPT history is accumulated for export without rewriting responses", async () => {
   const initialUrl =
     "/backend-api/conversations/conversation-1?include_has_versions=true&num_turns=10";

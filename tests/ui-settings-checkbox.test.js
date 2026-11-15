@@ -11,11 +11,17 @@ test("settings checkboxes keep edits while history mode changes and save them", 
       checked: false,
       disabled: false,
       value: "",
+      textContent: "",
+      title: "",
+      dataset: {},
       style: {},
       listeners: {},
       addEventListener(type, listener) {
         this.listeners[type] = listener;
       },
+      setAttribute() {},
+      classList: { add() {}, remove() {} },
+      querySelector() { return null; },
     };
     controls.set(selector, element);
     return element;
@@ -30,6 +36,7 @@ test("settings checkboxes keep edits while history mode changes and save them", 
   const images = control("#cgo-setting-html-include-images");
   const debug = control("#cgo-setting-debug-enabled");
   const debugLevel = control("#cgo-setting-debug-level");
+  const handoff = control(".cgo-settings-handoff-btn");
   control(".cgo-settings-save-btn");
   control(".cgo-settings-cancel-btn");
 
@@ -96,6 +103,10 @@ test("settings checkboxes keep edits while history mode changes and save them", 
   CGO.escapeHtml = String;
   CGO.t = (key) => key;
   CGO.log = () => {};
+  let exportedHandoff = false;
+  CGO.exportCurrentConversationAsHandoffZip = async (button) => {
+    exportedHandoff = button === handoff;
+  };
   let savedSettings = null;
   CGO.saveSettings = async (settings) => {
     savedSettings = { ...settings };
@@ -113,6 +124,11 @@ test("settings checkboxes keep edits while history mode changes and save them", 
   assert.equal(mountedPanel, panel);
   assert.equal(images.checked, true);
   assert.equal(debug.checked, false);
+  assert.equal(handoff.disabled, false);
+
+  await handoff.listeners.click();
+  assert.equal(exportedHandoff, true);
+  assert.equal(handoff.disabled, false);
 
   panel.hidden = false;
   images.checked = false;

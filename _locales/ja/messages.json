@@ -252,25 +252,25 @@
     "message": "会話が長くなってきました"
   },
   "context_risk_title_level2": {
-    "message": "そろそろ引き継ぎの準備をおすすめします"
+    "message": "過去の制限例に近い会話量です"
   },
   "context_risk_title_level3": {
-    "message": "このまま会話を続けると、直前のやり取りが失われる可能性があります"
+    "message": "早めの引き継ぎをおすすめします"
   },
   "context_risk_body_level1": {
     "message": "重要な決定事項を確認し、保存しておくと安心です。"
   },
   "context_risk_body_level2": {
-    "message": "今のうちに移行プロンプトを作成することをおすすめします。"
+    "message": "実際の上限は会話ごとに異なります。まだ返信できる間に移行プロンプトを準備すると安心です。"
   },
   "context_risk_body_level3": {
-    "message": "会話を保存し、できるだけ早く移行プロンプトを作成してください。"
+    "message": "この表示だけでは上限到達を確定できません。会話を保存し、返信できる間に移行プロンプトを作成してください。"
   },
   "context_risk_metrics": {
     "message": "推定累積会話量: $1 / 警告基準 $2トークン（モデル: $3、信頼度: $4）。"
   },
   "conversation_structure_metrics": {
-    "message": "会話構造の目安: $1%（$2ノード）。"
+    "message": "過去の制限観測例との比較: $1%（$2ノード）。"
   },
   "context_reference_metrics": {
     "message": "推定累積会話量: $1 / 参考基準 $2トークン（信頼度: $3）。"
@@ -297,13 +297,25 @@
     "message": "不明"
   },
   "migration_prompt_button": {
-    "message": "はい"
+    "message": "移行プロンプトを依頼"
   },
   "migration_prompt_text": {
     "message": "この会話が長くなり、直前のやり取りが失われる可能性があります。新しい会話を始めますので、目的、重要な背景、決定事項、制約、現在の状態、未完了の作業を保持した、簡潔で漏れのない移行プロンプトを作成してください。"
   },
   "migration_prompt_input_failed": {
     "message": "ChatGPTの入力欄が見つかりませんでした"
+  },
+  "reply_limit_reached_title": {
+    "message": "この会話は返信制限に達した可能性があります"
+  },
+  "reply_limit_reached_body": {
+    "message": "引き継ぎZIPを保存して展開し、README、manifest、必要なMarkdownチャンクを新しい会話に添付してください。"
+  },
+  "handoff_zip_button": {
+    "message": "引き継ぎZIPを保存"
+  },
+  "handoff_zip_no_conversation": {
+    "message": "先に会話を開いてください"
   },
   "project_guide_title_level1": {
     "message": "会話が少し長くなってきました"

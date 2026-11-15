@@ -28,9 +28,13 @@ CGO works in the signed-in ChatGPT Web session. It does not require an OpenAI AP
 
 ### Warn before older context may be lost
 
-- Uses observed conversation-node, role-message, and weighted-size ranges to warn in stages as a conversation grows
+- Uses a conservative previously observed conversation-limit case to provide advisory warning stages while the conversation can still produce a migration prompt; these stages are not treated as a universal limit
 - Checks whether the latest assistant response appears in ChatGPT history for long conversations and raises a strong warning when it is not persisted
 - Treats stream errors or incomplete stream reconstruction as direct warning signals
+- When the conversation endpoint returns HTTP 413 with `conversation_too_large`, replaces the unusable migration-prompt action with a model-oriented handoff ZIP containing instructions, a manifest, attachment metadata, and chunked Markdown conversation files
+- Carries the newest agent-generated `handoff-summary.md` (including numbered duplicate filenames) into the next handoff ZIP as a versioned cumulative checkpoint
+- Makes the handoff ZIP available on demand from the settings panel as well as from conversation-limit guidance
+- Downloads a `*.zip.sha256` sidecar computed from the finalized handoff ZIP bytes for external integrity verification
 - Estimates cumulative visible-message tokens locally as secondary reference information rather than the primary warning trigger
 - Uses plausible ChatGPT-reported per-message token counts only to calibrate the local estimate; undocumented outliers are ignored
 - Detects known model aliases where possible, falls back conservatively to a provisional 128K reference, and supports manual 64K, 128K, 256K, 400K, or custom references

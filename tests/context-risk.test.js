@@ -42,28 +42,101 @@ function loadConfig() {
 test("conversation structure risk uses empirically calibrated stages", () => {
   const CGO = loadConfig();
   assert.equal(CGO.getProjectGuideLevel({
-    mappingCount: 1750,
-    turnCount: 1050,
-    autoAdjustScore: 3350,
+    mappingCount: 1000,
+    turnCount: 660,
+    autoAdjustScore: 2200,
   }), 0);
   assert.equal(CGO.getProjectGuideLevel({
-    mappingCount: 1900,
-    turnCount: 1150,
-    autoAdjustScore: 3650,
+    mappingCount: 1070,
+    turnCount: 705,
+    autoAdjustScore: 2360,
   }), 1);
   assert.equal(CGO.getProjectGuideLevel({
-    mappingCount: 2170,
-    turnCount: 1300,
-    autoAdjustScore: 4150,
+    mappingCount: 1190,
+    turnCount: 785,
+    autoAdjustScore: 2630,
   }), 2);
   assert.equal(CGO.getProjectGuideLevel({
-    mappingCount: 2450,
-    turnCount: 1500,
-    autoAdjustScore: 4700,
+    mappingCount: 1375,
+    turnCount: 905,
+    autoAdjustScore: 3030,
   }), 3);
 });
 
-test("observed long and failed conversations map to preparation and strong stages", () => {
+test("November 2026 observation reaches the advisory strong-warning stage", () => {
+  const CGO = loadConfig();
+  const stats = {
+    mappingCount: 1525,
+    chainLength: 1525,
+    turnCount: 1004,
+    autoAdjustScore: 3362.449,
+    safeTokenCount: 182419,
+    contextLimit: 128000,
+    contextLimitSource: "fallback",
+    historyComplete: true,
+    hasUncertainContext: true,
+    currentNodeId: "limit-message",
+    currentNodeRole: "assistant",
+    currentMessageStatus: "finished_successfully",
+    currentMessageEndTurn: false,
+    latestAssistantMessageId: "previous-reply",
+    latestAssistantStatus: "finished_successfully",
+    latestAssistantEndTurn: false,
+  };
+
+  assert.equal(CGO.getProjectGuideLevel(stats), 3);
+  const structure = CGO.getConversationStructureRiskDetails(stats);
+  assert.ok(structure.ratio >= 1);
+  assert.equal(structure.replyLimitReached, false);
+  assert.equal(structure.directFailureSignal, false);
+  assert.equal(
+    CGO.getProjectGuideProfileKey(stats),
+    "structure-v2:1525:1004:3362"
+  );
+});
+
+test("reply-limit state uses a fresh dismissal profile", () => {
+  const CGO = loadConfig();
+  const base = {
+    mappingCount: 1375,
+    turnCount: 905,
+    autoAdjustScore: 3030,
+  };
+  const limited = {
+    ...base,
+    conversationTooLarge: true,
+    conversationLimitCode: "conversation_too_large",
+  };
+
+  assert.equal(
+    CGO.getProjectGuideProfileKey(base),
+    "structure-v2:1525:1004:3362"
+  );
+  assert.equal(
+    CGO.getProjectGuideProfileKey(limited),
+    "structure-v2:1525:1004:3362:reply-limit"
+  );
+});
+
+test("explicit conversation-too-large response is sufficient without structure stats", () => {
+  const CGO = loadConfig();
+  const stats = {
+    conversationTooLarge: true,
+    conversationLimitCode: "conversation_too_large",
+  };
+
+  assert.equal(CGO.getProjectGuideLevel(stats), 3);
+  assert.equal(
+    CGO.getConversationStructureRiskDetails(stats).replyLimitReached,
+    true
+  );
+  assert.equal(
+    CGO.getProjectGuideProfileKey(stats),
+    "structure-v2:1525:1004:3362:reply-limit"
+  );
+});
+
+test("previously observed long conversations now map to the strong stage", () => {
   const CGO = loadConfig();
   const longConversation = {
     mappingCount: 2174,
@@ -78,7 +151,7 @@ test("observed long and failed conversations map to preparation and strong stage
     autoAdjustScore: 5173.292333333334,
   };
 
-  assert.equal(CGO.getProjectGuideLevel(longConversation), 2);
+  assert.equal(CGO.getProjectGuideLevel(longConversation), 3);
   assert.equal(CGO.getProjectGuideLevel(failedConversation), 3);
 });
 
@@ -86,8 +159,8 @@ test("one structural outlier does not dominate the median", () => {
   const CGO = loadConfig();
   const stats = {
     mappingCount: 2800,
-    turnCount: 900,
-    autoAdjustScore: 2800,
+    turnCount: 500,
+    autoAdjustScore: 1600,
   };
 
   assert.equal(CGO.getProjectGuideLevel(stats), 0);
@@ -97,9 +170,9 @@ test("one structural outlier does not dominate the median", () => {
 test("persistence and stream failures immediately raise a strong warning", () => {
   const CGO = loadConfig();
   const base = {
-    mappingCount: 1950,
-    turnCount: 1160,
-    autoAdjustScore: 3650,
+    mappingCount: 1070,
+    turnCount: 705,
+    autoAdjustScore: 2360,
   };
 
   assert.equal(CGO.getProjectGuideLevel(base), 1);
@@ -111,9 +184,9 @@ test("persistence and stream failures immediately raise a strong warning", () =>
   assert.equal(CGO.getProjectGuideLevel({ ...base, streamIncomplete: true }), 3);
 
   const nearLimit = {
-    mappingCount: 2170,
-    turnCount: 1300,
-    autoAdjustScore: 4150,
+    mappingCount: 1190,
+    turnCount: 785,
+    autoAdjustScore: 2630,
     streamDone: true,
     streamCompletedNormally: false,
   };
