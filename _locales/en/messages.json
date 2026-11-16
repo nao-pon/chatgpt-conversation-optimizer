@@ -203,18 +203,6 @@
   "auto_adjust_enabled_label": {
     "message": "Automatically adjust message count (current value: $1)"
   },
-  "context_token_limit_label": {
-    "message": "Context window reference"
-  },
-  "context_token_limit_auto": {
-    "message": "Auto (128K if unknown)"
-  },
-  "context_token_limit_custom": {
-    "message": "Custom"
-  },
-  "context_token_limit_custom_label": {
-    "message": "Custom token limit"
-  },
   "html_include_images_label": {
     "message": "Embed images in HTML download"
   },
@@ -266,35 +254,11 @@
   "context_risk_body_level3": {
     "message": "This estimate cannot confirm that the limit has been reached. Save the conversation and create a migration prompt while replies are still available."
   },
-  "context_risk_metrics": {
-    "message": "Estimated cumulative conversation size: $1 / warning reference $2 tokens (model: $3, confidence: $4)."
-  },
   "conversation_structure_metrics": {
     "message": "Compared with a previously observed limit case: $1% ($2 nodes)."
   },
-  "context_reference_metrics": {
-    "message": "Estimated cumulative conversation size: $1 / reference $2 tokens (confidence: $3)."
-  },
   "conversation_persistence_warning": {
     "message": "The latest response may not be saved in history, or the stream may not have completed normally."
-  },
-  "context_reference_fallback_suffix": {
-    "message": " (provisional)"
-  },
-  "context_risk_scope_note": {
-    "message": "This measures the stored branch and may differ from what is actually sent with the current response."
-  },
-  "context_risk_uncertain_note": {
-    "message": "The warning is earlier because history, internal context, or media token usage is uncertain."
-  },
-  "context_confidence_medium": {
-    "message": "medium"
-  },
-  "context_confidence_low": {
-    "message": "low"
-  },
-  "context_model_unknown": {
-    "message": "unknown"
   },
   "migration_prompt_button": {
     "message": "Request migration prompt"

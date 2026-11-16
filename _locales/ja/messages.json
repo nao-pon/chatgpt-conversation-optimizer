@@ -203,18 +203,6 @@
   "auto_adjust_enabled_label": {
     "message": "メッセージ数の自動調整 (自動調整値: $1)"
   },
-  "context_token_limit_label": {
-    "message": "コンテキスト上限の基準値"
-  },
-  "context_token_limit_auto": {
-    "message": "自動（不明時は128K）"
-  },
-  "context_token_limit_custom": {
-    "message": "カスタム"
-  },
-  "context_token_limit_custom_label": {
-    "message": "カスタム上限トークン"
-  },
   "html_include_images_label": {
     "message": "HTMLダウンロードでイメージを埋め込む"
   },
@@ -266,35 +254,11 @@
   "context_risk_body_level3": {
     "message": "この表示だけでは上限到達を確定できません。会話を保存し、返信できる間に移行プロンプトを作成してください。"
   },
-  "context_risk_metrics": {
-    "message": "推定累積会話量: $1 / 警告基準 $2トークン（モデル: $3、信頼度: $4）。"
-  },
   "conversation_structure_metrics": {
     "message": "過去の制限観測例との比較: $1%（$2ノード）。"
   },
-  "context_reference_metrics": {
-    "message": "推定累積会話量: $1 / 参考基準 $2トークン（信頼度: $3）。"
-  },
   "conversation_persistence_warning": {
     "message": "直前の応答が履歴に保存されていないか、通信が正常に完了していない可能性があります。"
-  },
-  "context_reference_fallback_suffix": {
-    "message": "（暫定）"
-  },
-  "context_risk_scope_note": {
-    "message": "これは保存済み分岐の指標で、現在の応答へ実際に渡される量とは異なる場合があります。"
-  },
-  "context_risk_uncertain_note": {
-    "message": "履歴、内部コンテキスト、または画像・添付の使用量が不明なため、早めに通知しています。"
-  },
-  "context_confidence_medium": {
-    "message": "中"
-  },
-  "context_confidence_low": {
-    "message": "低"
-  },
-  "context_model_unknown": {
-    "message": "不明"
   },
   "migration_prompt_button": {
     "message": "移行プロンプトを依頼"

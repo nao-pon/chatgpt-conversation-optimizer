@@ -4,7 +4,7 @@
   window.__cgoInstalled = true;
   const CGO = (globalThis.__CGO ||= {});
   CGO.PAGE_BOOTSTRAP_VERSION = "6";
-  CGO.PAGE_HOOK_VERSION = "10";
+  CGO.PAGE_HOOK_VERSION = "11";
   CGO.PAGE_MAIN_HOOK_ID = "cgo-page-hook-script";
   // Keep viewer payloads reloadable for 24 hours unless this hardcoded switch is enabled.
   CGO.VIEWER_DELETE_AFTER_RENDER = false;
@@ -75,7 +75,6 @@
   CGO.DEFAULT_SETTINGS = {
     keepDomMessages: 40,
     autoAdjustEnabled: true,
-    contextTokenLimit: 0,
     htmlDownloadIncludeImages: true,
     debugEnabled: false,
     debugLevel: "BASIC",
@@ -121,22 +120,10 @@
   }
 
   /**
-   * Normalize a context-window reference. Zero selects automatic detection.
-   *
-   * @param {*} value - Candidate token limit.
-   * @returns {number} Zero or a bounded integer token limit.
-   */
-  function clampContextTokenLimit(value) {
-    const n = Number(value);
-    if (!Number.isFinite(n) || n <= 0) return 0;
-    return Math.max(16000, Math.min(2000000, Math.round(n)));
-  }
-
-  /**
    * Normalize persisted settings into a complete configuration object with defaults applied.
    *
    * @param {Object} [input={}] - Partial settings loaded from storage or UI input.
-   * @returns {{keepDomMessages: number, autoAdjustEnabled: boolean, contextTokenLimit: number, htmlDownloadIncludeImages: boolean, debugEnabled: boolean, debugLevel: string}} Sanitized settings.
+   * @returns {{keepDomMessages: number, autoAdjustEnabled: boolean, htmlDownloadIncludeImages: boolean, debugEnabled: boolean, debugLevel: string}} Sanitized settings.
    */
   function normalizeSettings(input = {}) {
     return {
@@ -145,9 +132,6 @@
       ),
       autoAdjustEnabled: Boolean(
         input.autoAdjustEnabled ?? CGO.DEFAULT_SETTINGS.autoAdjustEnabled
-      ),
-      contextTokenLimit: clampContextTokenLimit(
-        input.contextTokenLimit ?? CGO.DEFAULT_SETTINGS.contextTokenLimit
       ),
       htmlDownloadIncludeImages:
         input.htmlDownloadIncludeImages !== false,
@@ -171,7 +155,6 @@
 
     CGO.SETTINGS.keepDomMessages = normalized.keepDomMessages;
     CGO.SETTINGS.autoAdjustEnabled = normalized.autoAdjustEnabled;
-    CGO.SETTINGS.contextTokenLimit = normalized.contextTokenLimit;
     CGO.SETTINGS.htmlDownloadIncludeImages = normalized.htmlDownloadIncludeImages;
     CGO.SETTINGS.debugEnabled = normalized.debugEnabled;
     CGO.SETTINGS.debugLevel = normalized.debugLevel;
@@ -216,7 +199,6 @@
       [CGO.SETTING_STORAGE_KEY]: {
         keepDomMessages: next.keepDomMessages,
         autoAdjustEnabled: next.autoAdjustEnabled,
-        contextTokenLimit: next.contextTokenLimit,
         htmlDownloadIncludeImages: next.htmlDownloadIncludeImages,
         debugEnabled: next.debugEnabled,
         debugLevel: next.debugLevel,
@@ -227,49 +209,6 @@
   }
 
   const PROJECT_GUIDE_DISMISSED_STORAGE_KEY = "cgo_project_guide_dismissed";
-
-  /**
-   * Derive the effective context reference and risk ratio for warning UI.
-   *
-   * @param {?Object} [stats=null] - Conversation statistics from the page hook.
-   * @returns {?Object} Risk details or `null` when token data is unavailable.
-   */
-  function getContextRiskDetails(stats = null) {
-    const safeTokenCount = Number(stats?.safeTokenCount || 0);
-    if (!Number.isFinite(safeTokenCount) || safeTokenCount <= 0) return null;
-
-    const configuredLimit = clampContextTokenLimit(
-      CGO.SETTINGS.contextTokenLimit
-    );
-    const reportedLimit = clampContextTokenLimit(stats?.contextLimit);
-    const contextLimit =
-      configuredLimit || reportedLimit || 128000;
-    const reserveTokens = Math.max(12000, Math.round(contextLimit * 0.1));
-    const usableTokenLimit = Math.max(1, contextLimit - reserveTokens);
-    const uncertain =
-      stats?.historyComplete !== true ||
-      stats?.hasUncertainMedia === true ||
-      stats?.hasUncertainInternalContext === true ||
-      stats?.hasUncertainContext === true;
-    const thresholdShift = uncertain ? 0.05 : 0;
-    const ratio = safeTokenCount / usableTokenLimit;
-
-    return {
-      safeTokenCount,
-      contextLimit,
-      reserveTokens,
-      usableTokenLimit,
-      ratio,
-      uncertain,
-      modelSlug: String(stats?.modelSlug || ""),
-      contextLimitSource: configuredLimit > 0
-        ? "setting"
-        : String(stats?.contextLimitSource || "fallback"),
-      level3Threshold: 0.88 - thresholdShift,
-      level2Threshold: 0.78 - thresholdShift,
-      level1Threshold: 0.65 - thresholdShift,
-    };
-  }
 
   /**
    * Estimate conversation-storage risk from empirically observed structural
@@ -385,13 +324,7 @@
       }`;
     }
 
-    const risk = getContextRiskDetails(stats);
-    if (!risk) return "legacy";
-    return [
-      risk.modelSlug || "unknown",
-      risk.contextLimit,
-      risk.contextLimitSource,
-    ].join(":");
+    return "legacy";
   }
 
   /**
@@ -517,7 +450,6 @@
       keepDomMessages,
       baseKeepDomMessages: CGO.CONFIG.keepDomMessages,
       autoAdjustEnabled: CGO.SETTINGS.autoAdjustEnabled,
-      contextTokenLimit: CGO.SETTINGS.contextTokenLimit,
       debugEnabled: CGO.SETTINGS.debugEnabled,
       debugLevel: CGO.SETTINGS.debugLevel,
     });
@@ -540,7 +472,6 @@
           keepDomMessages: keepDomMessages,
           baseKeepDomMessages: CGO.CONFIG.keepDomMessages,
           autoAdjustEnabled: CGO.SETTINGS.autoAdjustEnabled,
-          contextTokenLimit: CGO.SETTINGS.contextTokenLimit,
           debugEnabled: CGO.SETTINGS.debugEnabled,
           debugLevel: CGO.SETTINGS.debugLevel,
         },
@@ -814,7 +745,6 @@
           keepDomMessages: CGO.SETTINGS.keepDomMessages,
           baseKeepDomMessages: CGO.CONFIG.keepDomMessages,
           autoAdjustEnabled: CGO.SETTINGS.autoAdjustEnabled,
-          contextTokenLimit: CGO.SETTINGS.contextTokenLimit,
           debugEnabled: CGO.SETTINGS.debugEnabled,
           debugLevel: CGO.SETTINGS.debugLevel,
         };
@@ -1117,7 +1047,6 @@
   }
 
   CGO.clampKeepDomMessages = clampKeepDomMessages;
-  CGO.clampContextTokenLimit = clampContextTokenLimit;
   CGO.clearProjectGuideDismissed = clearProjectGuideDismissed;
   CGO.dismissProjectGuide = dismissProjectGuide;
   CGO.ensurePageHooksInjected = ensurePageHooksInjected;
@@ -1126,7 +1055,6 @@
   CGO.getEffectiveKeepDomMessagesForSettings = getEffectiveKeepDomMessagesForSettings;
   CGO.getProjectGuideLevel = getProjectGuideLevel;
   CGO.getProjectGuideProfileKey = getProjectGuideProfileKey;
-  CGO.getContextRiskDetails = getContextRiskDetails;
   CGO.getConversationStructureRiskDetails = getConversationStructureRiskDetails;
   CGO.getActiveKeepDomMessages = getActiveKeepDomMessages;
   CGO.hash = hash;

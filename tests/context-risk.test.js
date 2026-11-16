@@ -70,11 +70,6 @@ test("November 2026 observation reaches the advisory strong-warning stage", () =
     chainLength: 1525,
     turnCount: 1004,
     autoAdjustScore: 3362.449,
-    safeTokenCount: 182419,
-    contextLimit: 128000,
-    contextLimitSource: "fallback",
-    historyComplete: true,
-    hasUncertainContext: true,
     currentNodeId: "limit-message",
     currentNodeRole: "assistant",
     currentMessageStatus: "finished_successfully",
@@ -204,40 +199,6 @@ test("stream errors do not turn a short conversation into a limit warning", () =
     }),
     0
   );
-});
-
-test("manual context reference overrides the detected model limit", () => {
-  const CGO = loadConfig();
-  CGO.SETTINGS.contextTokenLimit = 256000;
-  const stats = {
-    safeTokenCount: 90000,
-    contextLimit: 128000,
-    contextLimitSource: "model",
-    historyComplete: true,
-    hasUncertainMedia: false,
-    modelSlug: "gpt-5-chat-latest",
-  };
-
-  const risk = CGO.getContextRiskDetails(stats);
-  assert.equal(risk.contextLimit, 256000);
-  assert.equal(risk.contextLimitSource, "setting");
-  assert.equal(CGO.getProjectGuideLevel(stats), 0);
-});
-
-test("token estimates remain reference data and do not trigger warnings", () => {
-  const CGO = loadConfig();
-  const stats = {
-    safeTokenCount: 500000,
-    contextLimit: 128000,
-    contextLimitSource: "fallback",
-    tokenConfidence: "low",
-    mappingCount: 500,
-    turnCount: 300,
-    autoAdjustScore: 900,
-  };
-
-  assert.equal(CGO.getProjectGuideLevel(stats), 0);
-  assert.ok(CGO.getContextRiskDetails(stats).ratio > 1);
 });
 
 test("legacy visible-message thresholds remain a structural-data fallback", () => {

@@ -590,23 +590,6 @@
           <span id="cgo-setting-auto-adjust-label">${CGO.escapeHtml(CGO.t("auto_adjust_disabled_label"))}</span>
         </label>
 
-        <label class="cgo-settings-row">
-          <span>${CGO.escapeHtml(CGO.t("context_token_limit_label") || "Context reference")}</span>
-          <select id="cgo-setting-context-token-limit">
-            <option value="0">${CGO.escapeHtml(CGO.t("context_token_limit_auto") || "Auto (128K fallback)")}</option>
-            <option value="64000">64K</option>
-            <option value="128000">128K</option>
-            <option value="256000">256K</option>
-            <option value="400000">400K</option>
-            <option value="custom">${CGO.escapeHtml(CGO.t("context_token_limit_custom") || "Custom")}</option>
-          </select>
-        </label>
-
-        <label class="cgo-settings-row cgo-context-token-limit-custom-row" hidden>
-          <span>${CGO.escapeHtml(CGO.t("context_token_limit_custom_label") || "Custom tokens")}</span>
-          <input id="cgo-setting-context-token-limit-custom" type="number" min="16000" max="2000000" step="1000">
-        </label>
-
         <label class="cgo-settings-row cgo-settings-check">
           <input id="cgo-setting-html-include-images" type="checkbox">
           <span>${CGO.escapeHtml(CGO.t("html_include_images_label"))}</span>
@@ -640,9 +623,6 @@
     const keepInput = panel.querySelector("#cgo-setting-keep-dom-messages");
     const autoAdjustInput = panel.querySelector("#cgo-setting-auto-adjust-enabled");
     const autoAdjustLabel = panel.querySelector("#cgo-setting-auto-adjust-label");
-    const contextLimitInput = panel.querySelector("#cgo-setting-context-token-limit");
-    const customContextLimitInput = panel.querySelector("#cgo-setting-context-token-limit-custom");
-    const customContextLimitRow = panel.querySelector(".cgo-context-token-limit-custom-row");
     const htmlImagesInput = panel.querySelector("#cgo-setting-html-include-images");
     const debugEnabledInput = panel.querySelector("#cgo-setting-debug-enabled");
     const debugLevelInput = panel.querySelector("#cgo-setting-debug-level");
@@ -704,10 +684,6 @@
       return {
         keepDomMessages: keepInput.value,
         autoAdjustEnabled: !!autoAdjustInput.checked,
-        contextTokenLimit:
-          contextLimitInput.value === "custom"
-            ? customContextLimitInput.value
-            : contextLimitInput.value,
         htmlDownloadIncludeImages: htmlImagesInput.checked,
         debugEnabled: debugEnabledInput.checked,
         debugLevel: debugLevelInput.value,
@@ -723,13 +699,6 @@
 
     function syncDebugLevelEnabledState() {
       debugLevelInput.disabled = !debugEnabledInput.checked;
-    }
-
-    function syncCustomContextLimitVisibility() {
-      const custom = contextLimitInput.value === "custom";
-      customContextLimitRow.hidden = !custom;
-      customContextLimitRow.style.display = custom ? "" : "none";
-      customContextLimitInput.disabled = !custom;
     }
 
     /**
@@ -752,18 +721,11 @@
     async function syncFromSettings() {
       keepInput.value = String(CGO.SETTINGS.keepDomMessages ?? CGO.CONFIG.keepDomMessages ?? 40);
       autoAdjustInput.checked = !!CGO.SETTINGS.autoAdjustEnabled;
-      const contextTokenLimit = Number(CGO.SETTINGS.contextTokenLimit || 0);
-      const presetLimits = new Set([0, 64000, 128000, 256000, 400000]);
-      contextLimitInput.value = presetLimits.has(contextTokenLimit)
-        ? String(contextTokenLimit)
-        : "custom";
-      customContextLimitInput.value = String(contextTokenLimit > 0 ? contextTokenLimit : 128000);
       htmlImagesInput.checked = CGO.SETTINGS.htmlDownloadIncludeImages !== false;
       debugEnabledInput.checked = !!CGO.SETTINGS.debugEnabled;
       debugLevelInput.value = CGO.SETTINGS.debugLevel ?? CGO.CONFIG.debugLevel ?? "BASIC";
       syncDomOptimizationVisibility();
       syncDebugLevelEnabledState();
-      syncCustomContextLimitVisibility();
       const hasConversation = !!CGO.getConversationIdFromLocation?.();
       handoffBtn.disabled = !hasConversation;
       handoffBtn.title = hasConversation
@@ -775,8 +737,6 @@
     }
 
     debugEnabledInput.addEventListener("change", syncDebugLevelEnabledState);
-    contextLimitInput.addEventListener("change", syncCustomContextLimitVisibility);
-
     async function savePanelSettings() {
       if (panel.__cgoSavePromise) {
         return panel.__cgoSavePromise;
@@ -1319,48 +1279,17 @@
       };
     }
 
-    const formatTokens = (value) => {
-      const tokens = Math.max(0, Number(value || 0));
-      if (tokens >= 1000000) {
-        return `${Number((tokens / 1000000).toFixed(1))}M`;
-      }
-      return `${Math.round(tokens / 1000)}K`;
-    };
-    const risk = CGO.getContextRiskDetails?.(stats) || null;
-    const confidence = CGO.t(
-      stats?.tokenConfidence === "medium"
-        ? "context_confidence_medium"
-        : "context_confidence_low"
-    );
     const structureMetrics = CGO.t("conversation_structure_metrics", [
       String(structure.progressPercent),
       Math.round(structure.nodeCount).toLocaleString(),
     ]);
-    const referenceSuffix = risk?.contextLimitSource === "fallback"
-      ? CGO.t("context_reference_fallback_suffix")
-      : "";
-    const reference = risk
-      ? `${formatTokens(risk.contextLimit)}${referenceSuffix}`
-      : "";
-    const showTokenMetrics = !!(
-      risk &&
-      stats?.tokenConfidence === "medium" &&
-      risk.contextLimitSource !== "fallback"
-    );
-    const tokenMetrics = showTokenMetrics
-      ? ` ${CGO.t("context_reference_metrics", [
-        `${stats?.historyComplete === true ? "" : "≥"}${formatTokens(risk.safeTokenCount)}`,
-        reference,
-        confidence,
-      ])}`
-      : "";
     const directSignalNote = structure.directFailureSignal
       ? ` ${CGO.t("conversation_persistence_warning")}`
       : "";
 
     return {
       title: CGO.t(`context_risk_title_level${level}`),
-      body: `${structureMetrics}${tokenMetrics} ${CGO.t(`context_risk_body_level${level}`)}${directSignalNote}`,
+      body: `${structureMetrics} ${CGO.t(`context_risk_body_level${level}`)}${directSignalNote}`,
     };
   }
 
