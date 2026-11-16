@@ -849,6 +849,78 @@
     return panel;
   }
 
+  function getSettingsViewportBounds() {
+    const visualViewport = window.visualViewport;
+    const left = Number(visualViewport?.offsetLeft) || 0;
+    const top = Number(visualViewport?.offsetTop) || 0;
+    const width =
+      Number(visualViewport?.width) ||
+      Number(document.documentElement?.clientWidth) ||
+      Number(window.innerWidth) ||
+      0;
+    const height =
+      Number(visualViewport?.height) ||
+      Number(document.documentElement?.clientHeight) ||
+      Number(window.innerHeight) ||
+      0;
+
+    return {
+      left,
+      top,
+      right: left + width,
+      bottom: top + height,
+    };
+  }
+
+  /**
+   * Keep the settings popover within the current visual viewport.
+   *
+   * @param {HTMLElement} panel - Visible settings panel to position.
+   * @param {HTMLElement} buttonEl - Toolbar button used as the anchor.
+   * @returns {{left: number, top: number}|null} Applied viewport coordinates.
+   */
+  function positionSettingsPanel(panel, buttonEl) {
+    if (!panel?.getBoundingClientRect || !buttonEl?.getBoundingClientRect) return null;
+
+    const margin = 8;
+    const gap = 8;
+    const viewport = getSettingsViewportBounds();
+    const anchorRect = buttonEl.getBoundingClientRect();
+
+    panel.style.position = "fixed";
+    panel.style.right = "auto";
+    panel.style.bottom = "auto";
+
+    const availableWidth = Math.max(0, viewport.right - viewport.left - margin * 2);
+    const availableHeight = Math.max(0, viewport.bottom - viewport.top - margin * 2);
+    panel.style.maxWidth = `${Math.round(availableWidth)}px`;
+    panel.style.maxHeight = `${Math.round(availableHeight)}px`;
+
+    const panelRect = panel.getBoundingClientRect();
+    const panelWidth = Math.min(Number(panelRect.width) || 0, availableWidth);
+    const panelHeight = Math.min(Number(panelRect.height) || 0, availableHeight);
+    // Keep the panel flush with the visible right edge. Its width is already
+    // capped to the viewport above, so this remains safe on narrow screens.
+    const left = Math.max(viewport.left, viewport.right - panelWidth);
+
+    const minimumTop = viewport.top + margin;
+    const maximumTop = Math.max(minimumTop, viewport.bottom - margin - panelHeight);
+    const belowTop = Number(anchorRect.bottom) + gap;
+    const aboveTop = Number(anchorRect.top) - gap - panelHeight;
+    let top;
+    if (belowTop <= maximumTop) {
+      top = belowTop;
+    } else if (aboveTop >= minimumTop) {
+      top = aboveTop;
+    } else {
+      top = Math.min(maximumTop, Math.max(minimumTop, belowTop));
+    }
+
+    panel.style.left = `${Math.round(left)}px`;
+    panel.style.top = `${Math.round(top)}px`;
+    return { left, top };
+  }
+
   /**
    * Position and reveal the settings panel near the toolbar button that opened it.
    *
@@ -859,17 +931,11 @@
     if (!panel) return;
     void panel.__cgoSyncFromSettings?.();
 
-    const rect = buttonEl.getBoundingClientRect();
-    const panelWidth = 200;
-    let left = rect.right - panelWidth;
-    if (left < 8) left = 8;
-    if (left + panelWidth > window.innerWidth - 8) {
-      left = window.innerWidth - panelWidth - 8;
-    }
-    panel.style.position = "fixed";
-    panel.style.top = `${rect.bottom + 8}px`;
-    panel.style.left = `${left}px`; // 幅に応じて調整
+    panel.__cgoAnchorButton = buttonEl;
+    panel.style.visibility = "hidden";
     panel.hidden = false;
+    positionSettingsPanel(panel, buttonEl);
+    panel.style.visibility = "";
   }
 
   /**
@@ -1510,11 +1576,16 @@
     transform: none;
   }
   .cgo-settings-panel {
-    position: absolute;
-    top: calc(100% + 8px);
-    right: 0;
-    min-width: 280px;
+    box-sizing: border-box;
+    position: fixed;
+    width: 320px;
+    min-width: 0;
+    max-width: calc(100vw - 16px);
+    max-height: calc(100vh - 16px);
     padding: 12px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
     border-radius: 12px;
     border: 1px solid rgba(255,255,255,0.12);
     background: #1f1f1f;
@@ -1538,6 +1609,11 @@
     font-size: 13px;
   }
 
+  .cgo-settings-row > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
   .cgo-settings-row input[type="number"] {
     width: 78px;
     padding: 4px 6px;
@@ -1548,7 +1624,9 @@
   }
 
   .cgo-settings-row select {
-    min-width: 110px;
+    min-width: 0;
+    max-width: 62%;
+    flex: 0 1 170px;
     padding: 4px 6px;
     border-radius: 8px;
     border: 1px solid #555;
@@ -2048,9 +2126,16 @@
       subtree: true
     });
 
-    window.addEventListener("resize", () => {
+    const repositionFloatingUi = () => {
       positionProjectGuide();
-    });
+      const panel = document.getElementById("cgo-settings-panel");
+      if (!panel?.hidden && panel.__cgoAnchorButton?.isConnected !== false) {
+        positionSettingsPanel(panel, panel.__cgoAnchorButton);
+      }
+    };
+    window.addEventListener("resize", repositionFloatingUi);
+    window.visualViewport?.addEventListener?.("resize", repositionFloatingUi);
+    window.visualViewport?.addEventListener?.("scroll", repositionFloatingUi);
 
     scheduleExportButtonInjection(0);
   }
@@ -2100,6 +2185,7 @@
   CGO.injectExportButtonIntoHeader = injectExportButtonIntoHeader;
   CGO.injectExportButtonStyle = injectExportButtonStyle;
   CGO.onDomReady = onDomReady;
+  CGO.positionSettingsPanel = positionSettingsPanel;
   CGO.positionProjectGuide = positionProjectGuide;
   CGO.applyVoiceExportGuardToButton = applyVoiceExportGuardToButton;
   CGO.refreshExportButtonsLockState = refreshExportButtonsLockState;
