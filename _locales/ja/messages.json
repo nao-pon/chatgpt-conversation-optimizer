@@ -317,6 +317,9 @@
   "handoff_zip_no_conversation": {
     "message": "先に会話を開いてください"
   },
+  "handoff_prompt_copy_button": {
+    "message": "指示文をコピー"
+  },
   "project_guide_title_level1": {
     "message": "会話が少し長くなってきました"
   },

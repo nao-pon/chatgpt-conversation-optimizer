@@ -483,6 +483,43 @@
   }
 
   /**
+   * Copy text through the Clipboard API, with a legacy fallback for browsers
+   * where the extension content script cannot access it directly.
+   *
+   * @param {string} value - Text to copy.
+   * @returns {Promise<void>} Resolves when the copy succeeds.
+   */
+  async function copyTextToClipboard(value) {
+    const clipboard = globalThis.navigator?.clipboard;
+    if (typeof clipboard?.writeText === "function") {
+      try {
+        await clipboard.writeText(String(value || ""));
+        return;
+      } catch {
+        // Continue with the user-gesture-compatible legacy path below.
+      }
+    }
+
+    const textarea = document.createElement("textarea");
+    textarea.value = String(value || "");
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    let copied = false;
+    try {
+      textarea.focus();
+      textarea.select();
+      copied = typeof document.execCommand === "function" &&
+        document.execCommand("copy");
+    } finally {
+      textarea.remove();
+    }
+    if (!copied) throw new Error("Clipboard write failed");
+  }
+
+  /**
    * Create the alert button used to reopen a dismissed large-conversation guide.
    *
    * @returns {HTMLButtonElement} Configured toolbar button.
@@ -591,6 +628,7 @@
 
         <div class="cgo-settings-export-actions">
           <button type="button" class="cgo-settings-handoff-btn">${CGO.escapeHtml(CGO.t("handoff_zip_button") || "Save handoff ZIP")}</button>
+          <button type="button" class="cgo-settings-copy-handoff-prompt-btn">${CGO.escapeHtml(CGO.t("handoff_prompt_copy_button") || "Copy instructions")}</button>
         </div>
 
         <div class="cgo-settings-actions">
@@ -609,12 +647,15 @@
     const debugEnabledInput = panel.querySelector("#cgo-setting-debug-enabled");
     const debugLevelInput = panel.querySelector("#cgo-setting-debug-level");
     const handoffBtn = panel.querySelector(".cgo-settings-handoff-btn");
+    const copyHandoffPromptBtn = panel.querySelector(".cgo-settings-copy-handoff-prompt-btn");
     const saveBtn = panel.querySelector(".cgo-settings-save-btn");
     const cancelBtn = panel.querySelector(".cgo-settings-cancel-btn");
 
     handoffBtn.dataset.baseTitle = handoffBtn.textContent;
     handoffBtn.dataset.cgoExportKind = "handoff";
     handoffBtn.title = handoffBtn.textContent;
+    copyHandoffPromptBtn.dataset.baseTitle = copyHandoffPromptBtn.textContent;
+    copyHandoffPromptBtn.title = copyHandoffPromptBtn.textContent;
 
     /**
      * Update the auto-adjust label text to reflect the current effective keepDomMessages value.
@@ -807,6 +848,31 @@
         setExportButtonState(handoffBtn, "export_retry");
         handoffBtn.title = String(error?.message || error);
       }
+    });
+
+    copyHandoffPromptBtn.addEventListener("click", async () => {
+      const baseTitle = copyHandoffPromptBtn.dataset.baseTitle;
+      try {
+        const language = /^ja(?:[-_]|$)/i.test(String(CGO.DETECTION_LANG || ""))
+          ? "ja"
+          : "en";
+        const prompt = CGO.buildHandoffPromptMarkdown?.(language, {
+          bilingual: false,
+        });
+        if (!prompt) throw new Error("Handoff prompt generator is unavailable");
+        await copyTextToClipboard(prompt);
+        copyHandoffPromptBtn.textContent = CGO.t("copied_button") || "Copied";
+        copyHandoffPromptBtn.title = copyHandoffPromptBtn.textContent;
+      } catch (error) {
+        CGO.log("[error] handoff prompt copy failed", String(error));
+        copyHandoffPromptBtn.textContent = CGO.t("copy_failed_button") || "Failed";
+        copyHandoffPromptBtn.title = String(error?.message || error);
+      }
+
+      globalThis.setTimeout?.(() => {
+        copyHandoffPromptBtn.textContent = baseTitle;
+        copyHandoffPromptBtn.title = baseTitle;
+      }, 1500);
     });
 
     autoAdjustInput.addEventListener("change", () => {
@@ -1668,6 +1734,8 @@
   }
 
   .cgo-settings-export-actions {
+    display: grid;
+    gap: 8px;
     margin-top: 12px;
     padding-top: 12px;
     border-top: 1px solid rgba(255,255,255,0.1);
@@ -1686,6 +1754,16 @@
 
   .cgo-settings-export-actions button:hover {
     background: #ffffff;
+  }
+
+  .cgo-settings-export-actions .cgo-settings-copy-handoff-prompt-btn {
+    background: #2f2f2f;
+    color: #f5f5f5;
+    border-color: #555;
+  }
+
+  .cgo-settings-export-actions .cgo-settings-copy-handoff-prompt-btn:hover {
+    background: #3a3a3a;
   }
 
   .cgo-settings-export-actions button:disabled {

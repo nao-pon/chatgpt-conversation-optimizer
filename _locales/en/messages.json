@@ -317,6 +317,9 @@
   "handoff_zip_no_conversation": {
     "message": "Open a conversation first"
   },
+  "handoff_prompt_copy_button": {
+    "message": "Copy instructions"
+  },
   "project_guide_title_level1": {
     "message": "This conversation is growing"
   },

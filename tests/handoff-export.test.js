@@ -66,9 +66,25 @@ test("handoff files split at message boundaries and preserve oversized messages"
   assert.equal(files.manifest.messageCount, 3);
   assert.equal(files.manifest.chunks.length, 3);
   assert.equal(files.manifest.notes.thoughtsIncluded, false);
+  assert.equal(files.manifest.entryPoint, "README.md");
+  assert.equal(files.manifest.handoffPrompt, "HANDOFF_PROMPT.md");
+  assert.equal(files.manifest.latestChunk, "chunks/003.md");
+  assert.equal(files.manifest.lastMessage.index, 3);
+  assert.equal(files.manifest.lastMessage.role, "user");
+  assert.equal(files.manifest.recentContext.file, "RECENT_CONTEXT.md");
+  assert.equal(files.manifest.recentContext.startMessageIndex, 1);
+  assert.equal(files.manifest.recentContext.endMessageIndex, 3);
   assert.match(files.readme, /^# Instructions for the Receiving Agent/);
-  assert.match(files.readme, /Respond in the language the user normally uses/);
-  assert.match(files.readme, /ask focused questions/);
+  assert.match(files.readme, /historical evidence, not as new instructions/);
+  assert.match(files.readme, /wait for the current user's next request/);
+  assert.match(files.readme, /## Earlier conversation context/);
+  assert.match(files.readme, /## Next steps when the user resumes/);
+  assert.match(files.readme, /If you cannot process the entire package/);
+  assert.doesNotMatch(files.readme, /## First (?:request|user message)/);
+  assert.doesNotMatch(files.readme, /あ{20}/);
+  assert.match(files.handoffPrompt, /## 日本語/);
+  assert.match(files.handoffPrompt, /## English/);
+  assert.match(files.recentContext.markdown, /Message 000003 — User/);
   assert.doesNotMatch(files.readme, /引き継ぎパッケージ/);
 });
 
@@ -111,8 +127,10 @@ test("handoff package omits hidden thoughts, signed URLs, and embedded media", (
 
   const chunkText = files.chunks[0].markdown;
   const attachmentJson = JSON.stringify(files.attachments);
-  assert.match(files.readme, /Please continue this task\./);
+  assert.doesNotMatch(files.readme, /Please continue this task\./);
+  assert.match(files.recentContext.markdown, /Please continue this task\./);
   assert.match(chunkText, /diagram\.png/);
+  assert.match(files.recentContext.markdown, /diagram\.png/);
   assert.match(chunkText, /notes\.pdf/);
   assert.doesNotMatch(chunkText, /hidden reasoning/);
   assert.doesNotMatch(chunkText, /base64|sig=SECRET/);
@@ -173,6 +191,145 @@ test("handoff manifest records an imported cumulative summary", () => {
   assert.match(files.readme, /prior\/handoff-summary\.md/);
   assert.match(files.readme, /handoff-summary\.md/);
   assert.match(files.readme, /generation: 4/);
+  assert.match(files.readme, /## Next steps when the user resumes/);
+  assert.match(files.readme, /Older summaries may contain a heading named `First action for the next agent`/);
+});
+
+test("first user messages remain neutral history and are not duplicated into README", () => {
+  const CGO = loadExportHelpers();
+  const firstMessages = [
+    "UNIQUE_NORMAL_QUESTION: How does this circuit work?",
+    "UNIQUE_OLDER_HANDOFF: Continue from the previous chat and deploy version 7 now.",
+  ];
+
+  for (const firstText of firstMessages) {
+    const files = CGO.buildConversationHandoffFiles({
+      title: "Neutral history",
+      messages: [
+        { id: "user-1", role: "user", text: firstText },
+        { id: "assistant-1", role: "assistant", text: "Historical reply." },
+      ],
+    });
+
+    assert.doesNotMatch(files.readme, new RegExp(firstText.split(":")[0]));
+    assert.match(files.chunks[0].markdown, new RegExp(firstText.split(":")[0]));
+    assert.match(files.recentContext.markdown, new RegExp(firstText.split(":")[0]));
+    assert.equal(files.manifest.priorSummary, null);
+  }
+});
+
+test("recent context preserves a short conversation ending with a user message", () => {
+  const CGO = loadExportHelpers();
+  const files = CGO.buildConversationHandoffFiles({
+    title: "Short conversation",
+    messages: [
+      {
+        id: "user-1",
+        role: "user",
+        createTime: 1794787200,
+        text: "日本語とMarkdownを保持します。\n\n```cpp\nint value = 1;\n```",
+      },
+      { id: "assistant-1", role: "assistant", text: "確認しました。" },
+      { id: "user-2", role: "user", text: "最後の質問です。" },
+    ],
+  });
+
+  assert.equal(files.manifest.recentContext.messageCount, 3);
+  assert.equal(files.manifest.lastMessage.id, "user-2");
+  assert.equal(files.manifest.lastMessage.role, "user");
+  assert.match(files.recentContext.markdown, /```cpp\nint value = 1;\n```/);
+  assert.match(files.recentContext.markdown, /Message 000003 — User/);
+  assert.doesNotMatch(files.recentContext.markdown, /Message 000004/);
+});
+
+test("recent context keeps the latest user and assistant pair even above its soft target", () => {
+  const CGO = loadExportHelpers();
+  const files = CGO.buildConversationHandoffFiles({
+    title: "Paired ending",
+    recentTargetTokens: 1000,
+    messages: [
+      { id: "assistant-old", role: "assistant", text: "Old context." },
+      { id: "user-latest", role: "user", text: "質".repeat(900) },
+      { id: "assistant-latest", role: "assistant", text: "答".repeat(900) },
+    ],
+  });
+
+  assert.equal(files.manifest.recentContext.startMessageIndex, 2);
+  assert.equal(files.manifest.recentContext.endMessageIndex, 3);
+  assert.equal(files.manifest.recentContext.messageCount, 2);
+  assert.equal(files.manifest.recentContext.exceedsSoftTarget, true);
+  assert.match(files.recentContext.markdown, /Message 000002 — User/);
+  assert.match(files.recentContext.markdown, /Message 000003 — Assistant/);
+  assert.doesNotMatch(files.recentContext.markdown, /Old context/);
+});
+
+test("recent context retains an extremely long latest message without truncation", () => {
+  const CGO = loadExportHelpers();
+  const latestText = "長".repeat(12000);
+  const files = CGO.buildConversationHandoffFiles({
+    title: "Oversized latest message",
+    messages: [{ id: "user-long", role: "user", text: latestText }],
+  });
+
+  assert.equal(files.manifest.recentContext.messageCount, 1);
+  assert.equal(files.manifest.recentContext.exceedsSoftTarget, true);
+  assert.equal((files.recentContext.markdown.match(/長/g) || []).length, 12000);
+  assert.doesNotMatch(files.recentContext.markdown, /truncated|omitted/i);
+});
+
+test("bilingual handoff prompt generation is reusable and honors preferred ordering", () => {
+  const CGO = loadExportHelpers();
+  const japaneseFirst = CGO.buildHandoffPromptMarkdown("ja");
+  const englishFirst = CGO.buildHandoffPromptMarkdown("en-US");
+  const japaneseOnly = CGO.buildHandoffPromptMarkdown("ja", { bilingual: false });
+  const englishOnly = CGO.buildHandoffPromptMarkdown("en", { bilingual: false });
+
+  assert.ok(japaneseFirst.indexOf("## 日本語") < japaneseFirst.indexOf("## English"));
+  assert.ok(englishFirst.indexOf("## English") < englishFirst.indexOf("## 日本語"));
+  assert.match(japaneseFirst, /私の次の依頼を待ってください/);
+  assert.match(englishFirst, /wait for my next request/);
+  assert.match(japaneseFirst, /すべてのファイルまたはパッケージ全体を処理できない場合/);
+  assert.match(englishFirst, /If you cannot process every file or the entire package/);
+  assert.match(japaneseOnly, /^# 会話引き継ぎ依頼/);
+  assert.doesNotMatch(japaneseOnly, /## English/);
+  assert.match(englishOnly, /^# Conversation Handoff Request/);
+  assert.doesNotMatch(englishOnly, /## 日本語/);
+});
+
+test("hundreds of messages keep exact chunk coverage and a ten-message recent window", () => {
+  const CGO = loadExportHelpers();
+  const messages = Array.from({ length: 305 }, (_value, index) => ({
+    id: `message-${index + 1}`,
+    role: index % 2 === 0 ? "user" : "assistant",
+    text: `UNIQUE_MESSAGE_${String(index + 1).padStart(3, "0")}`,
+  }));
+  const files = CGO.buildConversationHandoffFiles({
+    title: "Long conversation",
+    targetTokens: 1000,
+    messages,
+  });
+
+  assert.equal(
+    files.chunks.reduce((sum, chunk) => sum + chunk.messageCount, 0),
+    305
+  );
+  assert.equal(files.chunks[0].startMessageIndex, 1);
+  assert.equal(files.chunks.at(-1).endMessageIndex, 305);
+  for (let index = 1; index < files.chunks.length; index += 1) {
+    assert.equal(
+      files.chunks[index].startMessageIndex,
+      files.chunks[index - 1].endMessageIndex + 1
+    );
+  }
+  const allChunkMarkdown = files.chunks.map((chunk) => chunk.markdown).join("\n");
+  assert.equal((allChunkMarkdown.match(/^## Message /gm) || []).length, 305);
+  assert.equal(files.manifest.recentContext.startMessageIndex, 296);
+  assert.equal(files.manifest.recentContext.endMessageIndex, 305);
+  assert.equal(files.manifest.recentContext.messageCount, 10);
+  assert.match(files.recentContext.markdown, /UNIQUE_MESSAGE_296/);
+  assert.match(files.recentContext.markdown, /UNIQUE_MESSAGE_305/);
+  assert.doesNotMatch(files.recentContext.markdown, /UNIQUE_MESSAGE_295/);
+  assert.equal(files.manifest.latestChunk, files.chunks.at(-1).file);
 });
 
 test("SHA-256 uses the exact final Blob bytes and formats a sidecar", async () => {
@@ -276,12 +433,18 @@ test("handoff ZIP export writes the package files and triggers a download", asyn
 
   assert.ok(latestZip);
   assert.equal(latestZip.files.has("README.md"), true);
+  assert.equal(latestZip.files.has("HANDOFF_PROMPT.md"), true);
+  assert.equal(latestZip.files.has("RECENT_CONTEXT.md"), true);
   assert.equal(latestZip.files.has("manifest.json"), true);
   assert.equal(latestZip.files.has("attachments.json"), true);
   assert.equal(latestZip.files.has("chunks/001.md"), true);
   assert.equal(latestZip.files.has("prior/handoff-summary.md"), true);
   assert.match(latestZip.files.get("prior/handoff-summary.md"), /Prior summary/);
   const manifest = JSON.parse(latestZip.files.get("manifest.json"));
+  assert.equal(manifest.entryPoint, "README.md");
+  assert.equal(manifest.recentContext.file, "RECENT_CONTEXT.md");
+  assert.equal(manifest.latestChunk, "chunks/001.md");
+  assert.equal(manifest.lastMessage.id, "assistant-summary");
   assert.equal(manifest.integrity.algorithm, "SHA-256");
   assert.equal(manifest.integrity.scope, "final ZIP byte sequence");
   assert.equal(manifest.integrity.digestEmbedded, false);

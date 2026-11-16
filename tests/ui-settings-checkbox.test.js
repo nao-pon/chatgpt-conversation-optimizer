@@ -37,6 +37,7 @@ test("settings checkboxes keep edits while history mode changes and save them", 
   const debug = control("#cgo-setting-debug-enabled");
   const debugLevel = control("#cgo-setting-debug-level");
   const handoff = control(".cgo-settings-handoff-btn");
+  const copyHandoffPrompt = control(".cgo-settings-copy-handoff-prompt-btn");
   control(".cgo-settings-save-btn");
   control(".cgo-settings-cancel-btn");
 
@@ -72,14 +73,24 @@ test("settings checkboxes keep edits while history mode changes and save them", 
       return panel;
     },
   };
-  const window = { __CGO: {} };
+  let copiedText = "";
+  const navigator = {
+    language: "ja",
+    clipboard: {
+      async writeText(value) {
+        copiedText = value;
+      },
+    },
+  };
+  const window = { __CGO: {}, navigator };
   const context = vm.createContext({
     window,
     globalThis: window,
     document,
+    navigator,
     Date,
     console,
-    setTimeout,
+    setTimeout() { return 1; },
     clearTimeout,
   });
   const CGO = window.__CGO;
@@ -103,6 +114,12 @@ test("settings checkboxes keep edits while history mode changes and save them", 
   CGO.escapeHtml = String;
   CGO.t = (key) => key;
   CGO.log = () => {};
+  CGO.DETECTION_LANG = "ja";
+  let promptGeneration = null;
+  CGO.buildHandoffPromptMarkdown = (language, options) => {
+    promptGeneration = { language, options };
+    return "日本語の引き継ぎ指示";
+  };
   let exportedHandoff = false;
   CGO.exportCurrentConversationAsHandoffZip = async (button) => {
     exportedHandoff = button === handoff;
@@ -129,6 +146,12 @@ test("settings checkboxes keep edits while history mode changes and save them", 
   await handoff.listeners.click();
   assert.equal(exportedHandoff, true);
   assert.equal(handoff.disabled, false);
+
+  await copyHandoffPrompt.listeners.click();
+  assert.equal(copiedText, "日本語の引き継ぎ指示");
+  assert.equal(promptGeneration.language, "ja");
+  assert.equal(promptGeneration.options.bilingual, false);
+  assert.equal(copyHandoffPrompt.textContent, "copied_button");
 
   panel.hidden = false;
   images.checked = false;
