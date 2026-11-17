@@ -816,8 +816,10 @@
         const language = /^ja(?:[-_]|$)/i.test(String(CGO.DETECTION_LANG || ""))
           ? "ja"
           : "en";
+        const catalog = await CGO.loadHandoffPromptCatalog?.();
         const prompt = CGO.buildHandoffPromptMarkdown?.(language, {
           bilingual: false,
+          catalog,
         });
         if (!prompt) throw new Error("Handoff prompt generator is unavailable");
         await copyTextToClipboard(prompt);

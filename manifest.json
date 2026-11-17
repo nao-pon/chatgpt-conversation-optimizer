@@ -74,7 +74,9 @@
         "safe-svg.js",
         "rich-markup.js",
         "shared-export.css",
-        "shared-export-ui.js"
+        "shared-export-ui.js",
+        "_locales/en/messages.json",
+        "_locales/ja/messages.json"
       ],
       "matches": [
         "https://chatgpt.com/*",

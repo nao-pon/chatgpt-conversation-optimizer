@@ -5,13 +5,29 @@ const test = require("node:test");
 const vm = require("node:vm");
 const { createHash, webcrypto } = require("node:crypto");
 
+function loadHandoffPromptCatalogFixture() {
+  return Object.fromEntries(["en", "ja"].map((locale) => {
+    const messages = JSON.parse(fs.readFileSync(
+      path.join(__dirname, "..", "_locales", locale, "messages.json"),
+      "utf8"
+    ));
+    return [locale, {
+      title: messages.handoff_prompt_document_title.message,
+      languageHeading: messages.handoff_prompt_language_heading.message,
+      body: messages.handoff_prompt_body.message,
+    }];
+  }));
+}
+
 function loadExportHelpers(overrides = {}) {
   const window = {
     __CGO: {
       DETECTION_LANG: "en",
+      HANDOFF_PROMPT_CATALOG: loadHandoffPromptCatalogFixture(),
     },
   };
   if (overrides.crypto) window.crypto = overrides.crypto;
+  if (overrides.chrome) window.chrome = overrides.chrome;
   const document = overrides.document || {};
   const context = vm.createContext({
     window,
@@ -24,7 +40,7 @@ function loadExportHelpers(overrides = {}) {
     TextEncoder,
     Headers,
     AbortController,
-    fetch,
+    fetch: overrides.fetch || fetch,
     setTimeout: overrides.setTimeout || setTimeout,
     clearTimeout,
     console,
@@ -294,6 +310,50 @@ test("bilingual handoff prompt generation is reusable and honors preferred order
   assert.doesNotMatch(japaneseOnly, /## English/);
   assert.match(englishOnly, /^# Conversation Handoff Request/);
   assert.doesNotMatch(englishOnly, /## 日本語/);
+});
+
+test("handoff prompt catalog loads both packaged locale resources", async () => {
+  const calls = [];
+  const localeMessages = {
+    en: {
+      handoff_prompt_document_title: { message: "English title" },
+      handoff_prompt_language_heading: { message: "English" },
+      handoff_prompt_body: { message: "English body" },
+    },
+    ja: {
+      handoff_prompt_document_title: { message: "日本語タイトル" },
+      handoff_prompt_language_heading: { message: "日本語" },
+      handoff_prompt_body: { message: "日本語本文" },
+    },
+  };
+  const CGO = loadExportHelpers({
+    chrome: {
+      runtime: {
+        getURL(resource) {
+          return `chrome-extension://fixture/${resource}`;
+        },
+      },
+    },
+    async fetch(url) {
+      calls.push(url);
+      const locale = url.includes("/ja/") ? "ja" : "en";
+      return {
+        ok: true,
+        async json() { return localeMessages[locale]; },
+      };
+    },
+  });
+  delete CGO.HANDOFF_PROMPT_CATALOG;
+
+  const catalog = await CGO.loadHandoffPromptCatalog();
+
+  assert.equal(catalog.en.body, "English body");
+  assert.equal(catalog.ja.body, "日本語本文");
+  assert.equal(calls.length, 2);
+  assert.match(
+    CGO.buildHandoffPromptMarkdown("ja", { catalog }),
+    /## 日本語\n\n日本語本文/
+  );
 });
 
 test("hundreds of messages keep exact chunk coverage and a ten-message recent window", () => {

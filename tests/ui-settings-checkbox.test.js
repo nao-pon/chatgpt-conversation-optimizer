@@ -112,6 +112,8 @@ test("settings checkboxes keep edits while history mode changes and save them", 
   CGO.log = () => {};
   CGO.DETECTION_LANG = "ja";
   let promptGeneration = null;
+  const handoffPromptCatalog = { en: {}, ja: {} };
+  CGO.loadHandoffPromptCatalog = async () => handoffPromptCatalog;
   CGO.buildHandoffPromptMarkdown = (language, options) => {
     promptGeneration = { language, options };
     return "日本語の引き継ぎ指示";
@@ -147,6 +149,7 @@ test("settings checkboxes keep edits while history mode changes and save them", 
   assert.equal(copiedText, "日本語の引き継ぎ指示");
   assert.equal(promptGeneration.language, "ja");
   assert.equal(promptGeneration.options.bilingual, false);
+  assert.equal(promptGeneration.options.catalog, handoffPromptCatalog);
   assert.equal(copyHandoffPrompt.textContent, "copied_button");
 
   panel.hidden = false;
