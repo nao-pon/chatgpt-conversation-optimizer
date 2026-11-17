@@ -1,4 +1,7 @@
 {
+  "extensionDescription": {
+    "message": "Continue long ChatGPT chats with handoff ZIPs. Preserve context, export HTML/ZIP, and revisit conversations in a lightweight viewer."
+  },
   "role_user": {
     "message": "User"
   },

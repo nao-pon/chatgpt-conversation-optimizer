@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Conversation Optimizer for ChatGPT",
   "version": "2.3.0",
-  "description": "Continue long ChatGPT chats with handoff ZIPs. Preserve context, export HTML/ZIP, and revisit conversations in a lightweight viewer.",
+  "description": "__MSG_extensionDescription__",
   "minimum_chrome_version": "111",
   "permissions": [
     "storage"

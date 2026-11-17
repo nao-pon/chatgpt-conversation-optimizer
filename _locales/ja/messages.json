@@ -1,4 +1,7 @@
 {
+  "extensionDescription": {
+    "message": "ChatGPTの長い会話を新しいチャットへ引き継ぐためのZIPを作成。HTML・ZIP保存、軽量ビューアーでの閲覧、会話履歴の自動収集にも対応。"
+  },
   "role_user": {
     "message": "ユーザー"
   },
