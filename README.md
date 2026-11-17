@@ -8,60 +8,83 @@
 [![Platform](https://img.shields.io/badge/platform-Chrome-orange)](https://www.google.com/chrome/)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey)](./LICENSE)
 
-**Export, preserve, and revisit the ChatGPT conversations worth keeping.**
+**Keep the context. Continue the conversation.**
 
-Conversation Optimizer for ChatGPT (CGO) is a Chrome extension focused on exporting conversations from ChatGPT Web. It collects history that ChatGPT loads page by page and turns it into a lightweight viewer, a standalone HTML file, or a ZIP archive with downloadable assets where available.
+Conversation Optimizer for ChatGPT (CGO) helps you **continue, export, preserve, and revisit long conversations** on ChatGPT Web. Its conversation handoff feature turns the available history of an existing chat into a structured ZIP package that can help a new chat recover the context — even if the original chat can no longer respond.
 
-CGO works in the signed-in ChatGPT Web session. It does not require an OpenAI API key or send conversation data to a CGO-operated server.
+CGO also provides a lightweight local viewer, standalone HTML exports, and ZIP archives with downloadable assets where available. It works with ChatGPT Web's paginated conversation history and uses your active signed-in session, without an OpenAI developer API key or a CGO account.
+
+> **A conversation can end. Your progress doesn't have to.**
 
 ---
 
-## What CGO does today
+## Conversation handoff: pick up where you left off
 
-### Keep the conversation going, even when a chat reaches its limit
+Have you ever spent days or weeks exploring an idea, debugging a project, or working through an important decision — only to encounter a conversation limit or an error that prevents ChatGPT from replying?
 
-Some of our best ideas take shape through conversation. What starts as a vague thought can gradually become a clear plan through questions, exploration, and discussion.
+That is especially frustrating if you were about to ask the old chat to write a handoff summary. **CGO does not need the original chat to generate that summary.** As long as the conversation history is still accessible, it can package the available messages for a new conversation.
 
-But when a ChatGPT conversation reaches its limit, that valuable context can be difficult to carry forward.
+Rather than relying on a short summary alone, CGO preserves the actual conversation record so the receiving AI can examine **what was decided, why it was decided, what changed, and what remains unresolved**. The package is designed to help the AI understand the history, not automatically execute old instructions.
 
-**Conversation Optimizer for ChatGPT helps you preserve that journey.**
+### How to start a new conversation
 
-Export your conversation as a structured handoff ZIP, start a new chat, and let ChatGPT reconstruct the context — including previous decisions, important discoveries, and unfinished work.
+1. **Save the handoff package.** In the CGO message area or settings panel, select **Save Handoff ZIP**. CGO downloads a handoff `.zip` and a matching `.zip.sha256` checksum file.
+2. **Copy the handoff instructions.** Select **Copy Instructions** in the settings panel to copy a ready-to-use prompt in the current UI language.
+3. **Start a new ChatGPT chat.** Attach the handoff ZIP and checksum file, then paste the copied instructions.
+4. **Continue your conversation.** The new chat can read the archived history, reconstruct its context, and prepare a cumulative handoff summary where supported. You can then carry on with your next request.
 
-You don't have to start from scratch just because the conversation has to start over.
+If your earlier conversation produced source code, documents, images, or other important artifacts, **upload those separately as needed**. The handoff package contains the conversation record and attachment metadata, not a guaranteed copy of every original file. The checksum is provided for ZIP integrity verification; the conversation history is in the ZIP itself.
 
-### Export long conversations
+### What's inside the handoff ZIP?
+
+| File | Purpose |
+| --- | --- |
+| `README.md` | Explains the package structure and how to process the archived conversation |
+| `HANDOFF_PROMPT.md` | Ready-to-use handoff instructions in Japanese and English |
+| `RECENT_CONTEXT.md` | Recent actual messages for quick orientation |
+| `manifest.json` | Message counts, chunk ranges, and package metadata |
+| `attachments.json` | References and metadata for attachments mentioned in the conversation |
+| `chunks/*.md` | The archived conversation, divided into chronological Markdown chunks |
+| `prior/handoff-summary.md` *(when available)* | The latest previously generated cumulative handoff summary, including numbered filename variants, preserved as a checkpoint for the next generation |
+
+The handoff instructions ask the receiving AI to distinguish archived statements from new instructions, reconcile earlier information with later corrections, and report any files or chunks it could not process. Very large conversations may require some chunks to be provided separately.
+
+**Handoff quality depends on the receiving AI and the context it can process.** CGO helps preserve and organize the evidence; it cannot guarantee perfect reconstruction or recover messages and files that ChatGPT Web no longer makes available.
+
+---
+
+## Other features
+
+### Collect and export long conversations
 
 - Detects ChatGPT's paginated conversation format
-- Accumulates older conversation pages while the browser is idle
-- Fetches any remaining pages when an export starts
-- Shows the number of collected messages while export-time history loading is in progress
+- Collects older conversation pages gradually while the browser is idle
+- Fetches remaining available pages when an export begins
+- Shows the collected message count while additional history is loading
 - Reconstructs the available conversation in chronological order for export
 
-### Warn before older context may be lost
+### Warn when a conversation may be reaching its limits
 
-- Uses a conservative previously observed conversation-limit case to provide advisory warning stages while the conversation can still produce a migration prompt; these stages are not treated as a universal limit
-- Checks whether the latest assistant response appears in ChatGPT history for long conversations and raises a strong warning when it is not persisted
-- Treats stream errors or incomplete stream reconstruction as direct warning signals
-- When the conversation endpoint returns HTTP 413 with `conversation_too_large`, replaces the unusable migration-prompt action with a model-oriented handoff ZIP containing receiving-agent instructions, a bilingual paste-in prompt, recent actual messages, a manifest, attachment metadata, and chunked Markdown conversation files
-- Carries the newest agent-generated `handoff-summary.md` (including numbered duplicate filenames) into the next handoff ZIP as a versioned cumulative checkpoint
-- Makes the handoff ZIP available on demand from the settings panel as well as from conversation-limit guidance, and can copy the handoff instructions in the current Japanese or English UI language
-- Downloads a `*.zip.sha256` sidecar computed from the finalized handoff ZIP bytes for external integrity verification
-- Estimates cumulative visible-message tokens locally as secondary reference information rather than the primary warning trigger
-- Uses plausible ChatGPT-reported per-message token counts only to calibrate the local estimate; undocumented outliers are ignored
-- Detects known model aliases where possible, falls back conservatively to a provisional 128K reference, and supports manual 64K, 128K, 256K, 400K, or custom references
+- Provides advisory warning stages based on previously observed long-conversation behavior, **not** an official or universal conversation limit
+- Checks whether the latest assistant response is present in ChatGPT history and warns when it may not have been saved
+- Treats stream errors and incomplete stream reconstruction as warning signals
+- When ChatGPT reports HTTP 413 `conversation_too_large`, offers a handoff ZIP rather than relying on a migration prompt the old chat may be unable to produce
+- Makes handoff export available on demand, without waiting for a warning
 
 ### Choose the right export format
 
 | Format | Best for | What it provides |
 | --- | --- | --- |
+| **Handoff ZIP** | Continuing an existing discussion in a new chat | Chunked conversation history, receiving-agent guidance, recent messages, metadata, and a separate SHA-256 checksum file |
 | **Lightweight viewer** | Quickly reopening and reading a conversation | A dedicated local viewer with fast navigation and reading tools |
 | **HTML** | Keeping a simple, portable archive | A standalone browser-readable conversation file, with optional embedded images |
-| **ZIP** | Preserving the conversation and related files together | HTML plus downloadable images and attachments where ChatGPT makes them available |
+| **Standard ZIP** | Preserving the conversation and related files together | HTML plus downloadable images and attachments where ChatGPT makes them available |
+
+**Handoff ZIP and standard ZIP are different exports:** the first is structured for continuing a conversation with an AI; the second is intended for archiving the conversation and its available assets.
 
 ### Read and reuse exported content
 
-- Navigate between user messages from the conversation navigator
+- Navigate between user messages using the conversation navigator
 - Copy individual messages as Markdown
 - Copy, collapse, and expand code blocks
 - Recreate supported ChatGPT rich response cards, badges, selectors, tables, and sanitized inline SVG graphics
@@ -72,26 +95,26 @@ You don't have to start from scratch just because the conversation has to start 
 
 ## Why CGO changed
 
-CGO was originally created to address a problem with very large ChatGPT conversations. As an entire conversation remained loaded and rendered in the browser, the page could become increasingly heavy and eventually difficult to continue using. Early CGO versions reduced older off-screen content in the DOM so that long-running conversations could remain practical.
+CGO was originally created to address a problem with very large ChatGPT conversations. When entire conversations remained loaded and rendered in the browser, pages could become increasingly heavy and difficult to use. Early CGO versions reduced older off-screen content in the DOM to keep long-running conversations practical.
 
-Export features were added gradually during that development: first as a way to revisit content removed from the live page, and later as useful tools in their own right.
+Export features were added during that development: first to revisit content removed from the live page, then as useful tools in their own right. The conversation handoff feature takes that idea further by helping users carry their accumulated context into a new chat.
 
-ChatGPT Web now loads large conversation histories in pages. This change addresses much of the original browser-load problem, so CGO no longer removes rendered messages when the current paginated format is detected. Its main role is now to collect the available history and create useful, readable local exports.
+ChatGPT Web now loads large conversation histories in pages. Because this addresses much of the original browser-load problem, CGO leaves ChatGPT's rendered messages untouched when the current paginated format is detected. Its main role today is **conversation continuity, history collection, and useful local exports**.
 
-The earlier DOM-retention behavior remains only as compatibility support for legacy full-conversation responses. Its settings are shown only when that older mode is detected.
+The earlier DOM-retention behavior remains only for compatibility with legacy full-conversation response formats. Its settings appear only when that older mode is detected.
 
 ---
 
-## How it works
+## How regular exports work
 
 1. Open a conversation in ChatGPT Web.
 2. CGO detects the conversation response and adds export tools to the conversation header.
 3. For paginated conversations, CGO gradually collects older pages during idle time.
-4. Choose the lightweight viewer, HTML, or ZIP export.
-5. If history is still missing, CGO completes it first and displays the collected message count.
+4. Choose the lightweight viewer, HTML, or standard ZIP export.
+5. If history is still missing, CGO retrieves the remaining available pages and displays the collected message count.
 6. The selected output is generated locally in the browser.
 
-CGO uses the interfaces available to the ChatGPT web app rather than the public OpenAI developer API. Because those web interfaces can change, CGO may occasionally require compatibility updates.
+CGO uses the interfaces available to ChatGPT Web rather than the public OpenAI developer API. These web interfaces can change, so occasional compatibility updates may be necessary.
 
 ---
 
@@ -155,7 +178,8 @@ CGO runs locally in the browser and is intended for exporting your own conversat
 - No OpenAI developer API key is required
 - Export data is prepared locally and saved or opened only when you request it
 - Requests needed to collect conversation history and files use the active ChatGPT Web session
-- Context-risk estimates are calculated locally and do not send conversation text to a token-counting service
+- Conversation warnings are calculated locally from structural and response-state signals
+- Handoff ZIPs are saved locally; **uploading one to a new AI chat shares its contents with that AI service under that service's terms**
 
 See [PRIVACY.md](PRIVACY.md) for the project privacy policy.
 
@@ -164,10 +188,12 @@ See [PRIVACY.md](PRIVACY.md) for the project privacy policy.
 ## Limitations
 
 - CGO depends on ChatGPT Web's internal response formats and endpoints, which may change without notice
-- Conversation-structure warning thresholds are empirical and may change as ChatGPT evolves; token references measure the stored active branch, not the exact context sent for the current response or an authoritative remaining-token count
-- Export can include only the conversation data and files available to the current ChatGPT session
+- Conversation warnings are advisory and based on observed behavior; they are not official or universal limits
+- Export and handoff can include only the history and files accessible through the current ChatGPT session
 - Some images, generated files, or attachments may be unavailable because of expired links, access restrictions, unsupported formats, or ChatGPT-side issues
-- The paginated format exposes an ordered message history rather than the complete legacy branch graph, so alternate branches or versions may not always be reconstructed exactly as before
+- Handoff ZIPs preserve conversation text and attachment metadata, **not a guaranteed copy of the original attachment files**; important artifacts may need separate upload
+- The receiving AI may be unable to process an entire large history at once; follow its request for specific missing chunks if needed
+- The paginated format exposes an ordered message history rather than the complete legacy branch graph, so alternate branches or versions may not be reconstructed exactly as before
 - Legacy DOM optimization is compatibility behavior and is not used for conversations handled by ChatGPT's current paginated format
 
 ---
