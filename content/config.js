@@ -94,9 +94,9 @@
     autoAdjustScore: 3362,
   });
   const CONVERSATION_STRUCTURE_THRESHOLDS = Object.freeze({
-    level1: 0.7,
-    level2: 0.78,
-    level3: 0.9,
+    level1: 1.01,
+    level2: 1.1,
+    level3: 1.2,
   });
 
   function normalizeDebugLevel(value) {
@@ -274,13 +274,15 @@
     const longEnoughForFailureSignal =
       ratio >= CONVERSATION_STRUCTURE_THRESHOLDS.level1;
     const directFailureSignal =
-      longEnoughForFailureSignal &&
+      replyLimitReached ||
       (
-        stats?.streamIncomplete === true ||
-        stats?.streamError === true ||
-        stats?.latestAssistantPersisted === false ||
-        replyLimitReached ||
-        abnormalCompletion
+        longEnoughForFailureSignal &&
+        (
+          stats?.streamIncomplete === true ||
+          stats?.streamError === true ||
+          stats?.latestAssistantPersisted === false ||
+          abnormalCompletion
+        )
       );
     let level = 0;
     if (directFailureSignal || ratio >= CONVERSATION_STRUCTURE_THRESHOLDS.level3) {
@@ -340,11 +342,10 @@
     if (structure) return structure.level;
 
     const conversationalLength = Number(stats.conversationalLength || 0);
-    const chainLength = Number(stats.chainLength || 0);
 
-    if (conversationalLength >= 950 || chainLength >= 3200) return 3;
-    if (conversationalLength >= 800 || chainLength >= 2600) return 2;
-    if (conversationalLength >= 600 || chainLength >= 2000) return 1;
+    if (conversationalLength >= 1200) return 3;
+    if (conversationalLength >= 1100) return 2;
+    if (conversationalLength >= 1010) return 1;
     return 0;
   }
 

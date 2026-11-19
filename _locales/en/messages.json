@@ -252,7 +252,7 @@
     "message": "This conversation is getting long"
   },
   "context_risk_title_level2": {
-    "message": "This conversation is near a previously observed limit case"
+    "message": "This conversation is well beyond a previously observed limit case"
   },
   "context_risk_title_level3": {
     "message": "An early handoff is recommended"

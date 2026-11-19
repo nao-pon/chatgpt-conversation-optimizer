@@ -252,7 +252,7 @@
     "message": "会話が長くなってきました"
   },
   "context_risk_title_level2": {
-    "message": "過去の制限例に近い会話量です"
+    "message": "過去の制限観測例を大きく超えた会話量です"
   },
   "context_risk_title_level3": {
     "message": "早めの引き継ぎをおすすめします"

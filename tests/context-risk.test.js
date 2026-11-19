@@ -39,31 +39,31 @@ function loadConfig() {
   return window.__CGO;
 }
 
-test("conversation structure risk uses empirically calibrated stages", () => {
+test("conversation structure risk starts after the observed baseline", () => {
   const CGO = loadConfig();
   assert.equal(CGO.getProjectGuideLevel({
-    mappingCount: 1000,
-    turnCount: 660,
-    autoAdjustScore: 2200,
+    mappingCount: 1525,
+    turnCount: 1004,
+    autoAdjustScore: 3362,
   }), 0);
   assert.equal(CGO.getProjectGuideLevel({
-    mappingCount: 1070,
-    turnCount: 705,
-    autoAdjustScore: 2360,
+    mappingCount: 1550,
+    turnCount: 1020,
+    autoAdjustScore: 3400,
   }), 1);
   assert.equal(CGO.getProjectGuideLevel({
-    mappingCount: 1190,
-    turnCount: 785,
-    autoAdjustScore: 2630,
+    mappingCount: 1680,
+    turnCount: 1110,
+    autoAdjustScore: 3700,
   }), 2);
   assert.equal(CGO.getProjectGuideLevel({
-    mappingCount: 1375,
-    turnCount: 905,
-    autoAdjustScore: 3030,
+    mappingCount: 1830,
+    turnCount: 1205,
+    autoAdjustScore: 4040,
   }), 3);
 });
 
-test("November 2026 observation reaches the advisory strong-warning stage", () => {
+test("November 2026 observation does not warn at exactly the baseline", () => {
   const CGO = loadConfig();
   const stats = {
     mappingCount: 1525,
@@ -79,7 +79,7 @@ test("November 2026 observation reaches the advisory strong-warning stage", () =
     latestAssistantEndTurn: false,
   };
 
-  assert.equal(CGO.getProjectGuideLevel(stats), 3);
+  assert.equal(CGO.getProjectGuideLevel(stats), 0);
   const structure = CGO.getConversationStructureRiskDetails(stats);
   assert.ok(structure.ratio >= 1);
   assert.equal(structure.replyLimitReached, false);
@@ -103,6 +103,8 @@ test("reply-limit state uses a fresh dismissal profile", () => {
     conversationLimitCode: "conversation_too_large",
   };
 
+  assert.equal(CGO.getProjectGuideLevel(base), 0);
+  assert.equal(CGO.getProjectGuideLevel(limited), 3);
   assert.equal(
     CGO.getProjectGuideProfileKey(base),
     "structure-v2:1525:1004:3362"
@@ -159,15 +161,15 @@ test("one structural outlier does not dominate the median", () => {
   };
 
   assert.equal(CGO.getProjectGuideLevel(stats), 0);
-  assert.ok(CGO.getConversationStructureRiskDetails(stats).ratio < 0.7);
+  assert.ok(CGO.getConversationStructureRiskDetails(stats).ratio < 1.01);
 });
 
-test("persistence and stream failures immediately raise a strong warning", () => {
+test("persistence and stream failures raise a strong warning after the baseline", () => {
   const CGO = loadConfig();
   const base = {
-    mappingCount: 1070,
-    turnCount: 705,
-    autoAdjustScore: 2360,
+    mappingCount: 1550,
+    turnCount: 1020,
+    autoAdjustScore: 3400,
   };
 
   assert.equal(CGO.getProjectGuideLevel(base), 1);
@@ -179,9 +181,9 @@ test("persistence and stream failures immediately raise a strong warning", () =>
   assert.equal(CGO.getProjectGuideLevel({ ...base, streamIncomplete: true }), 3);
 
   const nearLimit = {
-    mappingCount: 1190,
-    turnCount: 785,
-    autoAdjustScore: 2630,
+    mappingCount: 1680,
+    turnCount: 1110,
+    autoAdjustScore: 3700,
     streamDone: true,
     streamCompletedNormally: false,
   };
@@ -203,5 +205,8 @@ test("stream errors do not turn a short conversation into a limit warning", () =
 
 test("legacy visible-message thresholds remain a structural-data fallback", () => {
   const CGO = loadConfig();
-  assert.equal(CGO.getProjectGuideLevel({ conversationalLength: 800 }), 2);
+  assert.equal(CGO.getProjectGuideLevel({ conversationalLength: 1004 }), 0);
+  assert.equal(CGO.getProjectGuideLevel({ conversationalLength: 1010 }), 1);
+  assert.equal(CGO.getProjectGuideLevel({ conversationalLength: 1100 }), 2);
+  assert.equal(CGO.getProjectGuideLevel({ conversationalLength: 1200 }), 3);
 });
