@@ -774,7 +774,7 @@
   /**
    * Render an HTML fragment representing a list of attachments.
    *
-   * @param {Array<Object>} attachments - Array of attachment objects. Each object may include `name`, `localPath`, and `url`.
+   * @param {Array<Object>} attachments - Attachment metadata objects to display without source links.
    * @returns {string} An HTML string containing rendered attachment rows, or an empty string if `attachments` is not a non-empty array.
    */
   function renderAttachments(attachments) {
@@ -784,30 +784,13 @@
 
     return `<div class="cgo-attachments">${nonImageAttachments.map((attachment) => {
       const name = escapeHtml(attachment?.name || "attachment");
-      const rawHref = attachment?.localPath || attachment?.url || "";
       const meta = escapeHtml(t("attachment_not_embedded_label"));
-
-      // Validate URL scheme (only allow http: and https:)
-      let href = "";
-      if (rawHref) {
-        try {
-          if (/^https?:\/\//i.test(rawHref)) {
-            href = rawHref;
-          }
-          // Otherwise omit the link (disallow other schemes)
-        } catch {
-          // Invalid URL; omit link
-        }
-      }
 
       return `<div class="cgo-attachment">
         <div class="cgo-attachment-icon" aria-hidden="true">📎</div>
         <div class="cgo-attachment-main">
           <div class="cgo-attachment-name">${name}</div>
           <div class="cgo-attachment-meta">${meta}</div>
-        </div>
-        <div class="cgo-attachment-actions">
-          ${href ? `<a target="_blank" rel="noopener noreferrer" href="${escapeHtml(href)}">${escapeHtml(t("attachment_open_link"))}</a>` : ""}
         </div>
       </div>`;
     }).join("\n")}</div>`;

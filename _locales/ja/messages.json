@@ -110,9 +110,6 @@
   "attachment_unknown_name": {
     "message": "名称不明の添付ファイル"
   },
-  "attachment_open_link": {
-    "message": "元リンクを開く"
-  },
   "attachment_open_local_link": {
     "message": "ZIP内ファイルを開く"
   },

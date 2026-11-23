@@ -1513,10 +1513,6 @@
         actionHtml = `<a href="${CGO.escapeHtml(attachment.localPath)}" target="_blank" rel="noopener noreferrer">
           ${CGO.escapeHtml(CGO.t("attachment_open_local_link"))}
         </a>`;
-      } else if (attachment.url) {
-        actionHtml = `<a href="${CGO.escapeHtml(attachment.url)}" target="_blank" rel="noopener noreferrer">
-          ${CGO.escapeHtml(CGO.t("attachment_open_link"))}
-        </a>`;
       }
 
       return `<div class="cgo-attachment cgo-attachment-${CGO.escapeHtml(attachment.kind || "attachment")}">
@@ -1556,21 +1552,9 @@
         : "";
       const meta = [kindLabel, sizeText].filter(Boolean).join(" · ");
 
-      let actionHtml = "";
-
-      const skipLabel = getAttachmentSkipLabel(attachment);
-
-      if (skipLabel) {
-        actionHtml = `<span class="cgo-attachment-skip">${CGO.escapeHtml(skipLabel)}</span>`;
-      } else if (attachment.isSandboxArtifact) {
-        actionHtml = `<span>${CGO.escapeHtml(CGO.t("attachment_sandbox_artifact_label"))}</span>`;
-      } else if (attachment.url) {
-        actionHtml = `<a href="${CGO.escapeHtml(attachment.url)}" target="_blank" rel="noopener noreferrer">
-      ${CGO.escapeHtml(CGO.t("attachment_open_link"))}
-    </a>`;
-      } else {
-        actionHtml = `<span>${CGO.escapeHtml(CGO.t("attachment_not_embedded_label"))}</span>`;
-      }
+      const actionHtml = attachment.isSandboxArtifact
+        ? `<span>${CGO.escapeHtml(CGO.t("attachment_sandbox_artifact_label"))}</span>`
+        : `<span>${CGO.escapeHtml(CGO.t("attachment_not_embedded_label"))}</span>`;
 
       return `<div class="cgo-attachment cgo-attachment-${CGO.escapeHtml(attachment.kind || "attachment")}">
         <div class="cgo-attachment-icon" aria-hidden="true">${CGO.escapeHtml(icon)}</div>

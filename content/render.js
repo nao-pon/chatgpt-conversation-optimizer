@@ -1950,18 +1950,6 @@
           3
         );
 
-        await CGO.resolveAttachmentUrlsWithDownloadApi(
-          messages,
-          conversationId,
-          authorization,
-          ({ done, total }) => {
-            if (total > 0) {
-              CGO.setToolbarButtonText(button, CGO.t("export_resolving_attachments_progress", [done, total]));
-            }
-          },
-          3
-        );
-
         // 画像埋め込み
         await CGO.embedImagesInMessages(
           messages,

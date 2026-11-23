@@ -53,6 +53,46 @@ function loadExportHelpers(overrides = {}) {
   return window.__CGO;
 }
 
+function installAttachmentRenderFixtures(CGO) {
+  const messages = {
+    attachment_kind_archive: "Archive",
+    attachment_not_embedded_label: "Not included in HTML",
+  };
+  CGO.t = (key) => messages[key] || key;
+  CGO.getAttachmentIcon = () => "attachment";
+  CGO.formatBytes = () => "";
+  CGO.escapeHtml = (value) => String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+test("HTML attachment rendering keeps metadata but never emits source links", () => {
+  const CGO = loadExportHelpers();
+  installAttachmentRenderFixtures(CGO);
+
+  for (const url of [
+    "/api/library/files/libfile_example/project-content?file_id=file_example&disposition=attachment",
+    "https://example.com/download/example.zip",
+    "file:///C:/api/library/files/libfile_example/project-content",
+    "javascript:alert(1)",
+    "/not-a-known-attachment-path",
+  ]) {
+    const html = CGO.renderAttachments([{
+      kind: "archive",
+      name: "example.zip",
+      url,
+    }]);
+    assert.doesNotMatch(html, /<a\b/);
+    assert.doesNotMatch(html, /href=/);
+    assert.match(html, /example\.zip/);
+    assert.match(html, /Archive/);
+    assert.match(html, /Not included in HTML/);
+  }
+});
+
 test("handoff files split at message boundaries and preserve oversized messages", () => {
   const CGO = loadExportHelpers();
   const messages = [

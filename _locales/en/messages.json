@@ -110,9 +110,6 @@
   "attachment_unknown_name": {
     "message": "Unnamed attachment"
   },
-  "attachment_open_link": {
-    "message": "Open source link"
-  },
   "attachment_open_local_link": {
     "message": "Open file in ZIP"
   },
