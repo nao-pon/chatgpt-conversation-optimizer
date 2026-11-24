@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Conversation Optimizer for ChatGPT",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "description": "__MSG_extensionDescription__",
   "minimum_chrome_version": "111",
   "permissions": [
